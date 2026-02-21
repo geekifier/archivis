@@ -40,6 +40,10 @@ deny:
 migrate:
     cargo sqlx migrate run --source crates/archivis-db/migrations
 
+# Prepare sqlx offline query data for CI
+sqlx-prepare:
+    cargo sqlx prepare --workspace -- --all-targets
+
 # Run the server
 run:
     cargo run --package archivis-server
