@@ -1,9 +1,7 @@
 use std::fmt::Write as _;
 use std::path::Path;
 
-use archivis_core::models::{
-    Book, BookFile, BookFormat, Identifier, MetadataSource, Series,
-};
+use archivis_core::models::{Book, BookFile, BookFormat, Identifier, MetadataSource, Series};
 use archivis_db::{
     AuthorRepository, BookFileRepository, BookRepository, DbPool, IdentifierRepository,
     SeriesRepository, TagRepository,
@@ -60,8 +58,10 @@ impl<S: StorageBackend> ImportService<S> {
         if let Some(dup) = self.check_isbn_duplicates(&embedded, format).await? {
             return Ok(ImportResult {
                 book_id: match &dup {
-                    DuplicateInfo::SameIsbn { existing_book_id, .. } |
-                    DuplicateInfo::ExactHash { existing_book_id } => *existing_book_id,
+                    DuplicateInfo::SameIsbn {
+                        existing_book_id, ..
+                    }
+                    | DuplicateInfo::ExactHash { existing_book_id } => *existing_book_id,
                 },
                 book_file_id: uuid::Uuid::nil(),
                 status: score.status,
@@ -80,14 +80,24 @@ impl<S: StorageBackend> ImportService<S> {
         // 7-8: Store file and handle covers
         let title = resolve_title(&embedded, &parsed, source_path);
         let author = resolve_author(&embedded, &parsed);
-        let (stored, cover_path) =
-            self.store_file_and_cover(&data, &title, &author, source_path, book_id, &embedded).await?;
+        let (stored, cover_path) = self
+            .store_file_and_cover(&data, &title, &author, source_path, book_id, &embedded)
+            .await?;
 
         // 9: Create DB records
-        let book_file = self.create_db_records(
-            book_id, is_new_book, format, &stored, cover_path,
-            &score, &embedded, &parsed, &title,
-        ).await?;
+        let book_file = self
+            .create_db_records(
+                book_id,
+                is_new_book,
+                format,
+                &stored,
+                cover_path,
+                &score,
+                &embedded,
+                &parsed,
+                &title,
+            )
+            .await?;
 
         info!(book_id = %book_id, format = %format, status = %score.status, "imported file");
 
@@ -163,7 +173,9 @@ impl<S: StorageBackend> ImportService<S> {
             format,
             &stored.path,
             #[allow(clippy::cast_possible_wrap)]
-            { stored.size as i64 },
+            {
+                stored.size as i64
+            },
             &stored.hash,
         );
         let book_file_id = book_file.id;
@@ -261,15 +273,15 @@ impl<S: StorageBackend> ImportService<S> {
 
         #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
         for (i, name) in authors.iter().enumerate() {
-            let author =
-                if let Some(existing) = AuthorRepository::find_by_name(&self.db_pool, name).await?
-                {
-                    existing
-                } else {
-                    let new_author = archivis_core::models::Author::new(name);
-                    AuthorRepository::create(&self.db_pool, &new_author).await?;
-                    new_author
-                };
+            let author = if let Some(existing) =
+                AuthorRepository::find_by_name(&self.db_pool, name).await?
+            {
+                existing
+            } else {
+                let new_author = archivis_core::models::Author::new(name);
+                AuthorRepository::create(&self.db_pool, &new_author).await?;
+                new_author
+            };
             BookRepository::add_author(&self.db_pool, book_id, author.id, "author", i as i32)
                 .await?;
         }
@@ -333,11 +345,12 @@ impl<S: StorageBackend> ImportService<S> {
 /// Extract metadata based on the detected format.
 fn extract_metadata(format: BookFormat, data: &[u8]) -> ExtractedMetadata {
     match format {
-        BookFormat::Epub => archivis_formats::epub::extract_epub_metadata(data)
-            .unwrap_or_else(|e| {
+        BookFormat::Epub => {
+            archivis_formats::epub::extract_epub_metadata(data).unwrap_or_else(|e| {
                 warn!("EPUB metadata extraction failed: {e}");
                 ExtractedMetadata::default()
-            }),
+            })
+        }
         BookFormat::Pdf => archivis_formats::pdf::extract_pdf_metadata(data).unwrap_or_else(|e| {
             warn!("PDF metadata extraction failed: {e}");
             ExtractedMetadata::default()

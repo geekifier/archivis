@@ -75,9 +75,7 @@ fn create_test_epub(title: &str, author: &str) -> Vec<u8> {
 }
 
 /// Set up a test environment with a temporary DB, storage, and import service.
-async fn setup_test_env(
-    tmp: &TempDir,
-) -> ImportService<LocalStorage> {
+async fn setup_test_env(tmp: &TempDir) -> ImportService<LocalStorage> {
     let db_path = tmp.path().join("test.db");
     let pool = archivis_db::create_pool(&db_path).await.unwrap();
     archivis_db::run_migrations(&pool).await.unwrap();
@@ -112,15 +110,22 @@ async fn import_valid_epub() {
     let result = service.import_file(&epub_path).await.unwrap();
 
     assert!(result.duplicate.is_none());
-    assert_eq!(result.status, archivis_core::models::MetadataStatus::NeedsReview);
+    assert_eq!(
+        result.status,
+        archivis_core::models::MetadataStatus::NeedsReview
+    );
     assert!(result.confidence > 0.0);
 
     // Verify DB records exist
     let pool = get_pool(&tmp).await;
-    let book = BookRepository::get_by_id(&pool, result.book_id).await.unwrap();
+    let book = BookRepository::get_by_id(&pool, result.book_id)
+        .await
+        .unwrap();
     assert_eq!(book.title, "Dune");
 
-    let files = BookFileRepository::get_by_book_id(&pool, result.book_id).await.unwrap();
+    let files = BookFileRepository::get_by_book_id(&pool, result.book_id)
+        .await
+        .unwrap();
     assert_eq!(files.len(), 1);
     assert_eq!(files[0].format, archivis_core::models::BookFormat::Epub);
 

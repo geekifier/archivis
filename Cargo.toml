@@ -70,8 +70,8 @@ argon2 = "0.5"
 # Cryptography
 sha2 = "0.10"
 
-# Image processing
-image = "0.25"
+# Image processing — only enable codecs we actually use (decode: jpeg/png/gif/webp, encode: webp)
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
 
 # Testing
 tempfile = "3"
