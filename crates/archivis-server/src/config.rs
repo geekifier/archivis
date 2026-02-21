@@ -35,6 +35,10 @@ pub struct Cli {
     #[arg(long)]
     pub book_storage_path: Option<PathBuf>,
 
+    /// Directory containing the built frontend assets to serve.
+    #[arg(long)]
+    pub frontend_dir: Option<PathBuf>,
+
     /// Log level filter (trace, debug, info, warn, error).
     #[arg(long)]
     pub log_level: Option<String>,
@@ -57,6 +61,11 @@ pub struct AppConfig {
     pub data_dir: PathBuf,
     /// Root directory for book file storage.
     pub book_storage_path: PathBuf,
+    /// Directory containing the built frontend assets to serve.
+    /// When set and the directory exists, the server serves static files
+    /// from this path and falls back to `index.html` for SPA routing.
+    #[serde(default)]
+    pub frontend_dir: Option<PathBuf>,
     /// Log level filter string (supports `tracing` directives).
     pub log_level: String,
 }
@@ -69,6 +78,7 @@ impl Default for AppConfig {
             data_dir: PathBuf::from("data"),
             // Empty sentinel — resolved to {data_dir}/books in resolve_derived_defaults
             book_storage_path: PathBuf::new(),
+            frontend_dir: None,
             log_level: "info".to_owned(),
         }
     }
@@ -86,6 +96,8 @@ struct CliOverrides {
     data_dir: Option<PathBuf>,
     #[serde(skip_serializing_if = "Option::is_none")]
     book_storage_path: Option<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    frontend_dir: Option<PathBuf>,
     #[serde(skip_serializing_if = "Option::is_none")]
     log_level: Option<String>,
 }
@@ -107,6 +119,7 @@ impl AppConfig {
             port: cli.port,
             data_dir: cli.data_dir.clone(),
             book_storage_path: cli.book_storage_path.clone(),
+            frontend_dir: cli.frontend_dir.clone(),
             log_level: cli.log_level.clone(),
         };
 
@@ -149,6 +162,7 @@ mod tests {
         assert_eq!(config.listen_address, "127.0.0.1");
         assert_eq!(config.port, 9514);
         assert_eq!(config.data_dir, PathBuf::from("data"));
+        assert!(config.frontend_dir.is_none());
         assert_eq!(config.log_level, "info");
     }
 
@@ -196,6 +210,7 @@ mod tests {
         assert_eq!(config.port, 9514);
         assert_eq!(config.data_dir, PathBuf::from("data"));
         assert_eq!(config.book_storage_path, PathBuf::from("data/books"));
+        assert!(config.frontend_dir.is_none());
         assert_eq!(config.log_level, "info");
     }
 
@@ -213,6 +228,8 @@ mod tests {
             "/tmp/archivis",
             "--book-storage-path",
             "/mnt/books",
+            "--frontend-dir",
+            "/srv/frontend/dist",
             "--log-level",
             "debug",
         ]);
@@ -221,6 +238,10 @@ mod tests {
         assert_eq!(config.port, 3000);
         assert_eq!(config.data_dir, PathBuf::from("/tmp/archivis"));
         assert_eq!(config.book_storage_path, PathBuf::from("/mnt/books"));
+        assert_eq!(
+            config.frontend_dir,
+            Some(PathBuf::from("/srv/frontend/dist"))
+        );
         assert_eq!(config.log_level, "debug");
     }
 
@@ -235,6 +256,7 @@ mod tests {
 listen_address = "0.0.0.0"
 port = 9090
 log_level = "debug"
+frontend_dir = "/opt/archivis/frontend"
 "#,
         )
         .unwrap();
@@ -244,6 +266,10 @@ log_level = "debug"
         assert_eq!(config.listen_address, "0.0.0.0");
         assert_eq!(config.port, 9090);
         assert_eq!(config.log_level, "debug");
+        assert_eq!(
+            config.frontend_dir,
+            Some(PathBuf::from("/opt/archivis/frontend"))
+        );
         // data_dir still default since not in TOML
         assert_eq!(config.data_dir, PathBuf::from("data"));
 

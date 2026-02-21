@@ -27,8 +27,11 @@ uuid.workspace = true
 validator.workspace = true
 
 [dev-dependencies]
+http = "1"
+serde_json.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt"] }
+tower = { version = "0.5", features = ["util"] }
 
 [lints]
 workspace = true

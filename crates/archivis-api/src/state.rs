@@ -11,6 +11,10 @@ use archivis_tasks::queue::TaskQueue;
 pub struct ApiConfig {
     /// Directory for application data (covers, cache, etc.).
     pub data_dir: PathBuf,
+    /// Directory containing the built frontend assets.
+    /// When `Some`, the router serves static files and falls back to
+    /// `index.html` for SPA client-side routing.
+    pub frontend_dir: Option<PathBuf>,
 }
 
 /// Shared application state passed to all API handlers.

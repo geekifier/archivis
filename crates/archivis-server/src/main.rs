@@ -28,10 +28,12 @@ async fn main() {
 
     telemetry::init_logging(&config.log_level);
 
+    let frontend_display = config.frontend_dir.as_deref().map(std::path::Path::display);
     tracing::info!(
         listen = %config.bind_address(),
         data_dir = %config.data_dir.display(),
         book_storage_path = %config.book_storage_path.display(),
+        frontend_dir = ?frontend_display,
         "Archivis starting"
     );
 
@@ -114,6 +116,7 @@ async fn main() {
     // 5. Build application state and router
     let api_config = ApiConfig {
         data_dir: config.data_dir.clone(),
+        frontend_dir: config.frontend_dir.clone(),
     };
     let state = AppState::new(db_pool, task_queue, auth_service, storage, api_config);
     let router = archivis_api::build_router(state);
