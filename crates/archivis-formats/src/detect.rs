@@ -74,9 +74,8 @@ pub fn detect(data: &[u8]) -> Result<BookFormat, FormatError> {
 /// Distinguish EPUB from CBZ inside a ZIP archive.
 fn detect_zip_format(data: &[u8]) -> Result<BookFormat, FormatError> {
     let cursor = Cursor::new(data);
-    let archive = zip::ZipArchive::new(cursor).map_err(|e| {
-        FormatError::Detection(format!("ZIP appears corrupt: {e}"))
-    })?;
+    let archive = zip::ZipArchive::new(cursor)
+        .map_err(|e| FormatError::Detection(format!("ZIP appears corrupt: {e}")))?;
 
     // EPUB: must contain a `mimetype` entry whose content is `application/epub+zip`
     if is_epub(&archive) {
@@ -231,9 +230,7 @@ mod tests {
     #[test]
     fn detect_fb2_with_bom() {
         let mut data = vec![0xEF, 0xBB, 0xBF]; // UTF-8 BOM
-        data.extend_from_slice(
-            b"<?xml version=\"1.0\"?>\n<FictionBook><body/></FictionBook>",
-        );
+        data.extend_from_slice(b"<?xml version=\"1.0\"?>\n<FictionBook><body/></FictionBook>");
         assert_eq!(detect(&data).unwrap(), BookFormat::Fb2);
     }
 }

@@ -329,11 +329,7 @@ fn process_meta_element(
 ///
 /// Uses the `opf:scheme` attribute hint when available, then falls back
 /// to pattern-matching the raw value for ISBN-10, ISBN-13, and ASIN.
-fn parse_identifier(
-    raw: &str,
-    scheme: Option<&str>,
-    meta: &mut ExtractedMetadata,
-) {
+fn parse_identifier(raw: &str, scheme: Option<&str>, meta: &mut ExtractedMetadata) {
     let normalized = raw.replace(['-', ' '], "");
 
     // If scheme explicitly says ISBN, try to classify.
@@ -426,9 +422,7 @@ fn extract_cover(
     let manifest_items = parse_manifest(opf_xml)?;
 
     let item = match &cover_ref {
-        CoverReference::MetaContentId(id) => {
-            manifest_items.iter().find(|item| item.id == *id)
-        }
+        CoverReference::MetaContentId(id) => manifest_items.iter().find(|item| item.id == *id),
         CoverReference::CoverImageProperty => manifest_items
             .iter()
             .find(|item| item.properties_has_cover_image),
@@ -628,10 +622,12 @@ fn read_zip_entry(
     })?;
 
     let mut buf = String::new();
-    entry.read_to_string(&mut buf).map_err(|e| FormatError::Parse {
-        format: "EPUB".into(),
-        message: format!("failed to read '{path}': {e}"),
-    })?;
+    entry
+        .read_to_string(&mut buf)
+        .map_err(|e| FormatError::Parse {
+            format: "EPUB".into(),
+            message: format!("failed to read '{path}': {e}"),
+        })?;
 
     Ok(buf)
 }
@@ -647,10 +643,12 @@ fn read_zip_entry_bytes(
     })?;
 
     let mut buf = Vec::new();
-    entry.read_to_end(&mut buf).map_err(|e| FormatError::Parse {
-        format: "EPUB".into(),
-        message: format!("failed to read '{path}': {e}"),
-    })?;
+    entry
+        .read_to_end(&mut buf)
+        .map_err(|e| FormatError::Parse {
+            format: "EPUB".into(),
+            message: format!("failed to read '{path}': {e}"),
+        })?;
 
     Ok(buf)
 }
@@ -669,8 +667,8 @@ mod tests {
         let cursor = Cursor::new(buf);
         let mut zip = zip::ZipWriter::new(cursor);
 
-        let stored =
-            zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        let stored = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
         let deflated = zip::write::SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Deflated);
 
@@ -696,7 +694,7 @@ mod tests {
 
         // Extra entries (e.g. cover images)
         for (path, data) in extras {
-            zip.start_file(path.to_string(), stored).unwrap();
+            zip.start_file((*path).to_string(), stored).unwrap();
             zip.write_all(data).unwrap();
         }
 
@@ -980,8 +978,8 @@ mod tests {
         let cursor = Cursor::new(buf);
         let mut zip = zip::ZipWriter::new(cursor);
 
-        let stored =
-            zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        let stored = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
         zip.start_file("mimetype", stored).unwrap();
         zip.write_all(b"application/epub+zip").unwrap();
 
