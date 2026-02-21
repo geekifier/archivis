@@ -1,1 +1,1102 @@
-// EPUB metadata extraction — to be implemented in task 5.2.
+use std::io::{Cursor, Read};
+
+use archivis_core::errors::FormatError;
+use archivis_core::models::{IdentifierType, MetadataSource};
+use quick_xml::events::Event;
+use quick_xml::Reader;
+use tracing::{debug, warn};
+
+use crate::{CoverData, ExtractedIdentifier, ExtractedMetadata};
+
+/// Extract metadata from an EPUB file provided as raw bytes.
+///
+/// Parses `META-INF/container.xml` to locate the OPF package document,
+/// then extracts Dublin Core metadata, Calibre/EPUB 3 series info,
+/// identifiers, and the cover image from the ZIP archive.
+///
+/// # Errors
+///
+/// Returns `FormatError::Parse` if the ZIP archive or XML is invalid,
+/// or if required entries like `container.xml` or the OPF are missing.
+pub fn extract_epub_metadata(data: &[u8]) -> Result<ExtractedMetadata, FormatError> {
+    let cursor = Cursor::new(data);
+    let mut archive = zip::ZipArchive::new(cursor).map_err(|e| FormatError::Parse {
+        format: "EPUB".into(),
+        message: format!("invalid ZIP archive: {e}"),
+    })?;
+
+    let opf_path = find_opf_path(&mut archive)?;
+    debug!(opf_path = %opf_path, "located OPF package document");
+
+    let opf_content = read_zip_entry(&mut archive, &opf_path)?;
+    let opf_dir = opf_directory(&opf_path);
+
+    let mut metadata = parse_opf(&opf_content)?;
+
+    // Attempt cover extraction; log a warning on failure but don't propagate.
+    match extract_cover(&opf_content, &opf_dir, &mut archive) {
+        Ok(Some(cover)) => {
+            debug!("extracted cover image");
+            metadata.cover_image = Some(cover);
+        }
+        Ok(None) => {
+            debug!("no cover image reference found in OPF");
+        }
+        Err(e) => {
+            warn!("cover extraction failed, continuing without cover: {e}");
+        }
+    }
+
+    metadata.source = MetadataSource::Embedded;
+    Ok(metadata)
+}
+
+// ── Container / OPF location ─────────────────────────────────────────
+
+/// Read `META-INF/container.xml` and return the `full-path` of the root OPF file.
+fn find_opf_path(archive: &mut zip::ZipArchive<Cursor<&[u8]>>) -> Result<String, FormatError> {
+    let xml = read_zip_entry(archive, "META-INF/container.xml")?;
+    let mut reader = Reader::from_str(&xml);
+
+    loop {
+        match reader.read_event() {
+            Ok(Event::Empty(ref e) | Event::Start(ref e))
+                if local_name(e.name().as_ref()) == b"rootfile" =>
+            {
+                for attr in e.attributes().flatten() {
+                    if local_name(attr.key.as_ref()) == b"full-path" {
+                        let path = String::from_utf8_lossy(&attr.value).into_owned();
+                        if path.is_empty() {
+                            return Err(FormatError::Parse {
+                                format: "EPUB".into(),
+                                message: "rootfile full-path is empty".into(),
+                            });
+                        }
+                        return Ok(path);
+                    }
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(e) => {
+                return Err(FormatError::Parse {
+                    format: "EPUB".into(),
+                    message: format!("malformed container.xml: {e}"),
+                });
+            }
+            _ => {}
+        }
+    }
+
+    Err(FormatError::Parse {
+        format: "EPUB".into(),
+        message: "no rootfile found in container.xml".into(),
+    })
+}
+
+/// Return the directory portion of the OPF path (for resolving relative references).
+fn opf_directory(opf_path: &str) -> String {
+    opf_path
+        .rfind('/')
+        .map_or_else(String::new, |pos| format!("{}/", &opf_path[..pos]))
+}
+
+// ── OPF parsing ──────────────────────────────────────────────────────
+
+/// Mutable state carried through the OPF parsing loop.
+struct OpfParseState {
+    current_element: Option<DcElement>,
+    in_metadata: bool,
+    current_opf_role: Option<String>,
+    current_opf_scheme: Option<String>,
+    meta_name: Option<String>,
+    meta_content: Option<String>,
+    meta_property: Option<String>,
+}
+
+/// Parse the OPF package document and extract metadata.
+fn parse_opf(opf_xml: &str) -> Result<ExtractedMetadata, FormatError> {
+    let mut meta = ExtractedMetadata::default();
+    let mut reader = Reader::from_str(opf_xml);
+    let mut state = OpfParseState {
+        current_element: None,
+        in_metadata: false,
+        current_opf_role: None,
+        current_opf_scheme: None,
+        meta_name: None,
+        meta_content: None,
+        meta_property: None,
+    };
+
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(ref e)) => handle_opf_start(e, &mut state),
+            Ok(Event::Empty(ref e)) if state.in_metadata => {
+                handle_opf_empty(e, &mut state, &mut meta);
+            }
+            Ok(Event::Text(ref t)) => {
+                handle_opf_text(t, &mut state, &mut meta);
+            }
+            Ok(Event::End(ref e)) => handle_opf_end(e, &mut state, &mut meta),
+            Ok(Event::Eof) => break,
+            Err(e) => {
+                return Err(FormatError::Parse {
+                    format: "EPUB".into(),
+                    message: format!("malformed OPF XML: {e}"),
+                });
+            }
+            _ => {}
+        }
+    }
+
+    Ok(meta)
+}
+
+fn handle_opf_start(e: &quick_xml::events::BytesStart<'_>, state: &mut OpfParseState) {
+    let qname = e.name();
+    let name = local_name(qname.as_ref());
+
+    if name == b"metadata" {
+        state.in_metadata = true;
+        return;
+    }
+
+    if !state.in_metadata {
+        return;
+    }
+
+    match name {
+        b"title" => state.current_element = Some(DcElement::Title),
+        b"creator" => {
+            state.current_element = Some(DcElement::Creator);
+            state.current_opf_role = find_attr(e, b"role");
+        }
+        b"language" => state.current_element = Some(DcElement::Language),
+        b"identifier" => {
+            state.current_element = Some(DcElement::Identifier);
+            state.current_opf_scheme = find_attr(e, b"scheme");
+        }
+        b"publisher" => state.current_element = Some(DcElement::Publisher),
+        b"date" => state.current_element = Some(DcElement::Date),
+        b"description" => state.current_element = Some(DcElement::Description),
+        b"subject" => state.current_element = Some(DcElement::Subject),
+        b"meta" => {
+            state.meta_name = find_attr(e, b"name");
+            state.meta_property = find_attr(e, b"property");
+            state.current_element = Some(DcElement::Meta);
+        }
+        _ => {}
+    }
+}
+
+fn handle_opf_empty(
+    e: &quick_xml::events::BytesStart<'_>,
+    _state: &mut OpfParseState,
+    meta: &mut ExtractedMetadata,
+) {
+    let qname = e.name();
+    let name = local_name(qname.as_ref());
+    if name == b"meta" {
+        let mn = find_attr(e, b"name");
+        let mc = find_attr(e, b"content");
+        process_meta_element(mn.as_deref(), mc.as_deref(), None, meta);
+    }
+}
+
+fn handle_opf_text(
+    t: &quick_xml::events::BytesText<'_>,
+    state: &mut OpfParseState,
+    meta: &mut ExtractedMetadata,
+) {
+    let Some(ref elem) = state.current_element else {
+        return;
+    };
+    let text = t.unescape().unwrap_or_default().trim().to_owned();
+    if text.is_empty() {
+        return;
+    }
+    match elem {
+        DcElement::Title => meta.title = Some(text),
+        DcElement::Creator => {
+            let dominated_by_role = state
+                .current_opf_role
+                .as_deref()
+                .is_some_and(|r| !r.eq_ignore_ascii_case("aut"));
+            if !dominated_by_role {
+                meta.authors.push(text);
+            }
+        }
+        DcElement::Language => meta.language = Some(text),
+        DcElement::Identifier => {
+            parse_identifier(&text, state.current_opf_scheme.as_deref(), meta);
+        }
+        DcElement::Publisher => meta.publisher = Some(text),
+        DcElement::Date => meta.publication_date = Some(text),
+        DcElement::Description => meta.description = Some(text),
+        DcElement::Subject => meta.subjects.push(text),
+        DcElement::Meta => {
+            state.meta_content = Some(text);
+        }
+    }
+}
+
+fn handle_opf_end(
+    e: &quick_xml::events::BytesEnd<'_>,
+    state: &mut OpfParseState,
+    meta: &mut ExtractedMetadata,
+) {
+    let qname = e.name();
+    let name = local_name(qname.as_ref());
+
+    if name == b"metadata" {
+        state.in_metadata = false;
+    }
+
+    if name == b"meta" && state.current_element == Some(DcElement::Meta) {
+        process_meta_element(
+            state.meta_name.as_deref(),
+            state.meta_content.as_deref(),
+            state.meta_property.as_deref(),
+            meta,
+        );
+        state.meta_name = None;
+        state.meta_property = None;
+        state.meta_content = None;
+    }
+
+    state.current_element = None;
+    state.current_opf_role = None;
+    state.current_opf_scheme = None;
+}
+
+/// Dublin Core elements we track while parsing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DcElement {
+    Title,
+    Creator,
+    Language,
+    Identifier,
+    Publisher,
+    Date,
+    Description,
+    Subject,
+    Meta,
+}
+
+/// Process a `<meta>` element from either EPUB 2 or EPUB 3 format.
+fn process_meta_element(
+    name: Option<&str>,
+    content: Option<&str>,
+    property: Option<&str>,
+    meta: &mut ExtractedMetadata,
+) {
+    // EPUB 2: <meta name="calibre:series" content="..."/>
+    if let (Some(n), Some(c)) = (name, content) {
+        match n {
+            "calibre:series" => meta.series = Some(c.to_owned()),
+            "calibre:series_index" => {
+                if let Ok(pos) = c.parse::<f32>() {
+                    meta.series_position = Some(pos);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // EPUB 3: <meta property="belongs-to-collection">...</meta>
+    //         <meta property="group-position">...</meta>
+    if let (Some(prop), Some(val)) = (property, content) {
+        match prop {
+            "belongs-to-collection" => {
+                if meta.series.is_none() {
+                    meta.series = Some(val.to_owned());
+                }
+            }
+            "group-position" => {
+                if meta.series_position.is_none() {
+                    if let Ok(pos) = val.parse::<f32>() {
+                        meta.series_position = Some(pos);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+// ── Identifier parsing ───────────────────────────────────────────────
+
+/// Parse an identifier value and add it to metadata.
+///
+/// Uses the `opf:scheme` attribute hint when available, then falls back
+/// to pattern-matching the raw value for ISBN-10, ISBN-13, and ASIN.
+fn parse_identifier(
+    raw: &str,
+    scheme: Option<&str>,
+    meta: &mut ExtractedMetadata,
+) {
+    let normalized = raw.replace(['-', ' '], "");
+
+    // If scheme explicitly says ISBN, try to classify.
+    if let Some(s) = scheme {
+        let s_upper = s.to_uppercase();
+        if s_upper.contains("ISBN") {
+            if let Some(id) = classify_isbn(&normalized) {
+                meta.identifiers.push(id);
+                return;
+            }
+        }
+        if s_upper == "ASIN" {
+            meta.identifiers.push(ExtractedIdentifier {
+                identifier_type: IdentifierType::Asin,
+                value: normalized,
+            });
+            return;
+        }
+    }
+
+    // Heuristic: try pattern-matching the value itself.
+    if let Some(id) = classify_isbn(&normalized) {
+        meta.identifiers.push(id);
+        return;
+    }
+
+    // Check for ASIN pattern (10 alphanumeric chars starting with 'B').
+    if normalized.len() == 10
+        && normalized.starts_with('B')
+        && normalized.chars().all(|c| c.is_ascii_alphanumeric())
+    {
+        meta.identifiers.push(ExtractedIdentifier {
+            identifier_type: IdentifierType::Asin,
+            value: normalized,
+        });
+        return;
+    }
+
+    // Unrecognised identifier; skip it.
+    debug!(value = %raw, "skipping unrecognised identifier");
+}
+
+/// Attempt to classify a normalised string as ISBN-13 or ISBN-10.
+fn classify_isbn(normalized: &str) -> Option<ExtractedIdentifier> {
+    // ISBN-13: exactly 13 digits, starts with 978 or 979.
+    if normalized.len() == 13
+        && normalized.chars().all(|c| c.is_ascii_digit())
+        && (normalized.starts_with("978") || normalized.starts_with("979"))
+    {
+        return Some(ExtractedIdentifier {
+            identifier_type: IdentifierType::Isbn13,
+            value: normalized.to_owned(),
+        });
+    }
+
+    // ISBN-10: exactly 10 characters, first 9 digits, last digit or 'X'.
+    if normalized.len() == 10 {
+        let (body, check) = normalized.split_at(9);
+        if body.chars().all(|c| c.is_ascii_digit())
+            && check
+                .chars()
+                .all(|c| c.is_ascii_digit() || c == 'X' || c == 'x')
+        {
+            return Some(ExtractedIdentifier {
+                identifier_type: IdentifierType::Isbn10,
+                value: normalized.to_uppercase(),
+            });
+        }
+    }
+
+    None
+}
+
+// ── Cover extraction ─────────────────────────────────────────────────
+
+/// Attempt to extract the cover image from the EPUB archive.
+///
+/// Searches the OPF manifest for a cover reference using both EPUB 2
+/// (`<meta name="cover" content="id"/>`) and EPUB 3
+/// (`<item properties="cover-image"/>`) conventions.
+fn extract_cover(
+    opf_xml: &str,
+    opf_dir: &str,
+    archive: &mut zip::ZipArchive<Cursor<&[u8]>>,
+) -> Result<Option<CoverData>, FormatError> {
+    let Some(cover_ref) = find_cover_reference(opf_xml)? else {
+        return Ok(None);
+    };
+
+    let manifest_items = parse_manifest(opf_xml)?;
+
+    let item = match &cover_ref {
+        CoverReference::MetaContentId(id) => {
+            manifest_items.iter().find(|item| item.id == *id)
+        }
+        CoverReference::CoverImageProperty => manifest_items
+            .iter()
+            .find(|item| item.properties_has_cover_image),
+    };
+
+    let Some(item) = item else {
+        debug!("cover reference found but no matching manifest item");
+        return Ok(None);
+    };
+
+    let cover_path = if item.href.starts_with('/') {
+        item.href[1..].to_owned()
+    } else {
+        format!("{opf_dir}{}", item.href)
+    };
+
+    let bytes = read_zip_entry_bytes(archive, &cover_path)?;
+
+    Ok(Some(CoverData {
+        bytes,
+        media_type: item.media_type.clone(),
+    }))
+}
+
+/// How the OPF references a cover image.
+enum CoverReference {
+    /// EPUB 2: `<meta name="cover" content="some-id"/>` — the id points to a manifest item.
+    MetaContentId(String),
+    /// EPUB 3: a manifest `<item>` with `properties="cover-image"`.
+    CoverImageProperty,
+}
+
+/// Scan the OPF for a cover reference.
+fn find_cover_reference(opf_xml: &str) -> Result<Option<CoverReference>, FormatError> {
+    let mut reader = Reader::from_str(opf_xml);
+    let mut in_metadata = false;
+    let mut found_epub3_cover = false;
+
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(ref e)) => {
+                let qname = e.name();
+                if local_name(qname.as_ref()) == b"metadata" {
+                    in_metadata = true;
+                }
+            }
+            Ok(Event::Empty(ref e)) => {
+                let qname = e.name();
+                let name = local_name(qname.as_ref());
+
+                // EPUB 2 meta
+                if in_metadata && name == b"meta" {
+                    let attr_name = find_attr(e, b"name");
+                    let attr_content = find_attr(e, b"content");
+                    if attr_name.as_deref() == Some("cover") {
+                        if let Some(id) = attr_content {
+                            return Ok(Some(CoverReference::MetaContentId(id)));
+                        }
+                    }
+                }
+
+                // EPUB 3 manifest item
+                if name == b"item" {
+                    if let Some(props) = find_attr(e, b"properties") {
+                        if props.split_whitespace().any(|p| p == "cover-image") {
+                            found_epub3_cover = true;
+                        }
+                    }
+                }
+            }
+            Ok(Event::End(ref e)) => {
+                let qname = e.name();
+                if local_name(qname.as_ref()) == b"metadata" {
+                    in_metadata = false;
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(e) => {
+                return Err(FormatError::Parse {
+                    format: "EPUB".into(),
+                    message: format!("error scanning OPF for cover: {e}"),
+                });
+            }
+            _ => {}
+        }
+    }
+
+    if found_epub3_cover {
+        return Ok(Some(CoverReference::CoverImageProperty));
+    }
+
+    Ok(None)
+}
+
+/// A parsed `<item>` from the OPF `<manifest>`.
+struct ManifestItem {
+    id: String,
+    href: String,
+    media_type: String,
+    properties_has_cover_image: bool,
+}
+
+/// Parse all `<item>` elements from the OPF `<manifest>` section.
+fn parse_manifest(opf_xml: &str) -> Result<Vec<ManifestItem>, FormatError> {
+    let mut reader = Reader::from_str(opf_xml);
+    let mut items = Vec::new();
+    let mut in_manifest = false;
+
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(ref e)) => {
+                let qname = e.name();
+                let name = local_name(qname.as_ref());
+
+                if name == b"manifest" {
+                    in_manifest = true;
+                }
+                // Some EPUBs use <item ...>...</item> instead of self-closing.
+                if in_manifest && name == b"item" {
+                    if let Some(item) = parse_manifest_item(e) {
+                        items.push(item);
+                    }
+                }
+            }
+            Ok(Event::Empty(ref e)) if in_manifest => {
+                let qname = e.name();
+                if local_name(qname.as_ref()) == b"item" {
+                    if let Some(item) = parse_manifest_item(e) {
+                        items.push(item);
+                    }
+                }
+            }
+            Ok(Event::End(ref e)) => {
+                let qname = e.name();
+                if local_name(qname.as_ref()) == b"manifest" {
+                    in_manifest = false;
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(e) => {
+                return Err(FormatError::Parse {
+                    format: "EPUB".into(),
+                    message: format!("error parsing manifest: {e}"),
+                });
+            }
+            _ => {}
+        }
+    }
+
+    Ok(items)
+}
+
+/// Extract a `ManifestItem` from a `<item>` element's attributes.
+fn parse_manifest_item(e: &quick_xml::events::BytesStart<'_>) -> Option<ManifestItem> {
+    let id = find_attr(e, b"id")?;
+    let href = find_attr(e, b"href")?;
+    let media_type = find_attr(e, b"media-type").unwrap_or_default();
+    let properties_has_cover_image = find_attr(e, b"properties")
+        .is_some_and(|p| p.split_whitespace().any(|v| v == "cover-image"));
+
+    Some(ManifestItem {
+        id,
+        href,
+        media_type,
+        properties_has_cover_image,
+    })
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────
+
+/// Return the local name of an XML element (strip namespace prefix).
+fn local_name(full: &[u8]) -> &[u8] {
+    full.iter()
+        .position(|&b| b == b':')
+        .map_or(full, |pos| &full[pos + 1..])
+}
+
+/// Find an attribute by local name on an XML element, returning its decoded value.
+fn find_attr(e: &quick_xml::events::BytesStart<'_>, key: &[u8]) -> Option<String> {
+    e.attributes().flatten().find_map(|attr| {
+        if local_name(attr.key.as_ref()) == key {
+            Some(String::from_utf8_lossy(&attr.value).into_owned())
+        } else {
+            None
+        }
+    })
+}
+
+/// Read a file from the ZIP archive as a UTF-8 string.
+fn read_zip_entry(
+    archive: &mut zip::ZipArchive<Cursor<&[u8]>>,
+    path: &str,
+) -> Result<String, FormatError> {
+    let mut entry = archive.by_name(path).map_err(|e| FormatError::Parse {
+        format: "EPUB".into(),
+        message: format!("missing entry '{path}': {e}"),
+    })?;
+
+    let mut buf = String::new();
+    entry.read_to_string(&mut buf).map_err(|e| FormatError::Parse {
+        format: "EPUB".into(),
+        message: format!("failed to read '{path}': {e}"),
+    })?;
+
+    Ok(buf)
+}
+
+/// Read a file from the ZIP archive as raw bytes.
+fn read_zip_entry_bytes(
+    archive: &mut zip::ZipArchive<Cursor<&[u8]>>,
+    path: &str,
+) -> Result<Vec<u8>, FormatError> {
+    let mut entry = archive.by_name(path).map_err(|e| FormatError::Parse {
+        format: "EPUB".into(),
+        message: format!("missing entry '{path}': {e}"),
+    })?;
+
+    let mut buf = Vec::new();
+    entry.read_to_end(&mut buf).map_err(|e| FormatError::Parse {
+        format: "EPUB".into(),
+        message: format!("failed to read '{path}': {e}"),
+    })?;
+
+    Ok(buf)
+}
+
+// ── Tests ────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use std::io::Write;
+
+    use super::*;
+
+    /// Helper: build a minimal EPUB ZIP archive from an OPF string and optional extra entries.
+    fn build_epub_with_opf(opf: &str, extras: &[(&str, &[u8])]) -> Vec<u8> {
+        let buf = Vec::new();
+        let cursor = Cursor::new(buf);
+        let mut zip = zip::ZipWriter::new(cursor);
+
+        let stored =
+            zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        let deflated = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+
+        // mimetype (must be first, stored)
+        zip.start_file("mimetype", stored).unwrap();
+        zip.write_all(b"application/epub+zip").unwrap();
+
+        // META-INF/container.xml
+        zip.start_file("META-INF/container.xml", deflated).unwrap();
+        zip.write_all(
+            br#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles>
+    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+  </rootfiles>
+</container>"#,
+        )
+        .unwrap();
+
+        // OPF
+        zip.start_file("OEBPS/content.opf", deflated).unwrap();
+        zip.write_all(opf.as_bytes()).unwrap();
+
+        // Extra entries (e.g. cover images)
+        for (path, data) in extras {
+            zip.start_file(path.to_string(), stored).unwrap();
+            zip.write_all(data).unwrap();
+        }
+
+        zip.finish().unwrap().into_inner()
+    }
+
+    fn basic_opf() -> String {
+        r#"<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0"
+         unique-identifier="uid">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/"
+            xmlns:opf="http://www.idpf.org/2007/opf">
+    <dc:title>The Rust Programming Language</dc:title>
+    <dc:creator opf:role="aut">Steve Klabnik</dc:creator>
+    <dc:language>en</dc:language>
+    <dc:identifier opf:scheme="ISBN">978-1-7185-0044-0</dc:identifier>
+    <dc:publisher>No Starch Press</dc:publisher>
+    <dc:date>2019-08-06</dc:date>
+    <dc:description>A comprehensive guide to Rust</dc:description>
+    <dc:subject>Programming</dc:subject>
+    <dc:subject>Systems</dc:subject>
+  </metadata>
+  <manifest/>
+  <spine/>
+</package>"#
+            .to_owned()
+    }
+
+    #[test]
+    fn extracts_basic_metadata() {
+        let data = build_epub_with_opf(&basic_opf(), &[]);
+        let meta = extract_epub_metadata(&data).unwrap();
+
+        assert_eq!(meta.title.as_deref(), Some("The Rust Programming Language"));
+        assert_eq!(meta.authors, vec!["Steve Klabnik"]);
+        assert_eq!(meta.language.as_deref(), Some("en"));
+        assert_eq!(meta.publisher.as_deref(), Some("No Starch Press"));
+        assert_eq!(meta.publication_date.as_deref(), Some("2019-08-06"));
+        assert_eq!(
+            meta.description.as_deref(),
+            Some("A comprehensive guide to Rust")
+        );
+        assert_eq!(meta.subjects, vec!["Programming", "Systems"]);
+        assert_eq!(meta.source, MetadataSource::Embedded);
+    }
+
+    #[test]
+    fn extracts_isbn13() {
+        let data = build_epub_with_opf(&basic_opf(), &[]);
+        let meta = extract_epub_metadata(&data).unwrap();
+
+        assert_eq!(meta.identifiers.len(), 1);
+        assert_eq!(meta.identifiers[0].identifier_type, IdentifierType::Isbn13);
+        assert_eq!(meta.identifiers[0].value, "9781718500440");
+    }
+
+    #[test]
+    fn extracts_isbn10() {
+        let opf = r#"<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/"
+            xmlns:opf="http://www.idpf.org/2007/opf">
+    <dc:title>Test Book</dc:title>
+    <dc:identifier opf:scheme="ISBN">0-596-51774-X</dc:identifier>
+  </metadata>
+  <manifest/>
+  <spine/>
+</package>"#;
+
+        let data = build_epub_with_opf(opf, &[]);
+        let meta = extract_epub_metadata(&data).unwrap();
+
+        assert_eq!(meta.identifiers.len(), 1);
+        assert_eq!(meta.identifiers[0].identifier_type, IdentifierType::Isbn10);
+        assert_eq!(meta.identifiers[0].value, "059651774X");
+    }
+
+    #[test]
+    fn extracts_multiple_authors() {
+        let opf = r#"<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/"
+            xmlns:opf="http://www.idpf.org/2007/opf">
+    <dc:title>Collaborative Work</dc:title>
+    <dc:creator opf:role="aut">Alice Smith</dc:creator>
+    <dc:creator opf:role="aut">Bob Jones</dc:creator>
+    <dc:creator opf:role="edt">Carol Editor</dc:creator>
+  </metadata>
+  <manifest/>
+  <spine/>
+</package>"#;
+
+        let data = build_epub_with_opf(opf, &[]);
+        let meta = extract_epub_metadata(&data).unwrap();
+
+        // Should include only authors, not the editor.
+        assert_eq!(meta.authors, vec!["Alice Smith", "Bob Jones"]);
+    }
+
+    #[test]
+    fn creators_without_role_are_treated_as_authors() {
+        let opf = r#"<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Simple Book</dc:title>
+    <dc:creator>Jane Doe</dc:creator>
+  </metadata>
+  <manifest/>
+  <spine/>
+</package>"#;
+
+        let data = build_epub_with_opf(opf, &[]);
+        let meta = extract_epub_metadata(&data).unwrap();
+        assert_eq!(meta.authors, vec!["Jane Doe"]);
+    }
+
+    #[test]
+    fn extracts_calibre_series() {
+        let opf = r#"<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Foundation</dc:title>
+    <dc:creator>Isaac Asimov</dc:creator>
+    <meta name="calibre:series" content="Foundation"/>
+    <meta name="calibre:series_index" content="1"/>
+  </metadata>
+  <manifest/>
+  <spine/>
+</package>"#;
+
+        let data = build_epub_with_opf(opf, &[]);
+        let meta = extract_epub_metadata(&data).unwrap();
+
+        assert_eq!(meta.series.as_deref(), Some("Foundation"));
+        assert_eq!(meta.series_position, Some(1.0));
+    }
+
+    #[test]
+    fn extracts_epub3_series() {
+        let opf = r#"<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Dune Messiah</dc:title>
+    <dc:creator>Frank Herbert</dc:creator>
+    <meta property="belongs-to-collection">Dune</meta>
+    <meta property="group-position">2</meta>
+  </metadata>
+  <manifest/>
+  <spine/>
+</package>"#;
+
+        let data = build_epub_with_opf(opf, &[]);
+        let meta = extract_epub_metadata(&data).unwrap();
+
+        assert_eq!(meta.series.as_deref(), Some("Dune"));
+        assert_eq!(meta.series_position, Some(2.0));
+    }
+
+    #[test]
+    fn calibre_series_takes_precedence_over_epub3() {
+        let opf = r#"<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Test</dc:title>
+    <meta name="calibre:series" content="Calibre Series"/>
+    <meta name="calibre:series_index" content="3"/>
+    <meta property="belongs-to-collection">EPUB3 Series</meta>
+    <meta property="group-position">5</meta>
+  </metadata>
+  <manifest/>
+  <spine/>
+</package>"#;
+
+        let data = build_epub_with_opf(opf, &[]);
+        let meta = extract_epub_metadata(&data).unwrap();
+
+        // Calibre metadata is processed first (before EPUB 3), so it wins.
+        assert_eq!(meta.series.as_deref(), Some("Calibre Series"));
+        assert_eq!(meta.series_position, Some(3.0));
+    }
+
+    #[test]
+    fn extracts_cover_epub2() {
+        let cover_bytes = b"fake-png-image-data";
+
+        let opf = r#"<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Book With Cover</dc:title>
+    <meta name="cover" content="cover-img"/>
+  </metadata>
+  <manifest>
+    <item id="cover-img" href="images/cover.png" media-type="image/png"/>
+  </manifest>
+  <spine/>
+</package>"#;
+
+        let data = build_epub_with_opf(opf, &[("OEBPS/images/cover.png", cover_bytes)]);
+        let meta = extract_epub_metadata(&data).unwrap();
+
+        let cover = meta.cover_image.unwrap();
+        assert_eq!(cover.bytes, cover_bytes);
+        assert_eq!(cover.media_type, "image/png");
+    }
+
+    #[test]
+    fn extracts_cover_epub3() {
+        let cover_bytes = b"fake-jpeg-cover";
+
+        let opf = r#"<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>EPUB3 Cover</dc:title>
+  </metadata>
+  <manifest>
+    <item id="cover" href="cover.jpg" media-type="image/jpeg" properties="cover-image"/>
+  </manifest>
+  <spine/>
+</package>"#;
+
+        let data = build_epub_with_opf(opf, &[("OEBPS/cover.jpg", cover_bytes)]);
+        let meta = extract_epub_metadata(&data).unwrap();
+
+        let cover = meta.cover_image.unwrap();
+        assert_eq!(cover.bytes, cover_bytes);
+        assert_eq!(cover.media_type, "image/jpeg");
+    }
+
+    #[test]
+    fn missing_cover_continues_gracefully() {
+        let opf = r#"<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>No Cover</dc:title>
+    <meta name="cover" content="missing-id"/>
+  </metadata>
+  <manifest>
+    <item id="missing-id" href="nonexistent.png" media-type="image/png"/>
+  </manifest>
+  <spine/>
+</package>"#;
+
+        let data = build_epub_with_opf(opf, &[]);
+        let meta = extract_epub_metadata(&data).unwrap();
+
+        // Cover extraction should fail gracefully.
+        assert!(meta.cover_image.is_none());
+    }
+
+    #[test]
+    fn isbn_heuristic_without_scheme() {
+        let opf = r#"<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Heuristic ISBN</dc:title>
+    <dc:identifier>978-3-16-148410-0</dc:identifier>
+    <dc:identifier>urn:uuid:12345678-1234-1234-1234-123456789012</dc:identifier>
+  </metadata>
+  <manifest/>
+  <spine/>
+</package>"#;
+
+        let data = build_epub_with_opf(opf, &[]);
+        let meta = extract_epub_metadata(&data).unwrap();
+
+        // Only the ISBN-13 should be extracted; the UUID is skipped.
+        assert_eq!(meta.identifiers.len(), 1);
+        assert_eq!(meta.identifiers[0].identifier_type, IdentifierType::Isbn13);
+        assert_eq!(meta.identifiers[0].value, "9783161484100");
+    }
+
+    #[test]
+    fn invalid_zip_returns_error() {
+        let result = extract_epub_metadata(b"not a zip file at all");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn no_container_xml_returns_error() {
+        let buf = Vec::new();
+        let cursor = Cursor::new(buf);
+        let mut zip = zip::ZipWriter::new(cursor);
+
+        let stored =
+            zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        zip.start_file("mimetype", stored).unwrap();
+        zip.write_all(b"application/epub+zip").unwrap();
+
+        let data = zip.finish().unwrap().into_inner();
+        let result = extract_epub_metadata(&data);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn empty_values_are_filtered() {
+        let opf = r#"<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>  Real Title  </dc:title>
+    <dc:creator>  </dc:creator>
+    <dc:subject>  </dc:subject>
+    <dc:subject>Valid Subject</dc:subject>
+  </metadata>
+  <manifest/>
+  <spine/>
+</package>"#;
+
+        let data = build_epub_with_opf(opf, &[]);
+        let meta = extract_epub_metadata(&data).unwrap();
+
+        assert_eq!(meta.title.as_deref(), Some("Real Title"));
+        assert!(meta.authors.is_empty());
+        assert_eq!(meta.subjects, vec!["Valid Subject"]);
+    }
+
+    #[test]
+    fn opf_in_subdirectory_resolves_cover_path() {
+        // The OPF is at OEBPS/content.opf, so cover href "img/cover.jpg"
+        // should resolve to "OEBPS/img/cover.jpg" in the ZIP.
+        let cover_bytes = b"cover-in-subdir";
+
+        let opf = r#"<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Subdir Cover</dc:title>
+    <meta name="cover" content="cvr"/>
+  </metadata>
+  <manifest>
+    <item id="cvr" href="img/cover.jpg" media-type="image/jpeg"/>
+  </manifest>
+  <spine/>
+</package>"#;
+
+        let data = build_epub_with_opf(opf, &[("OEBPS/img/cover.jpg", cover_bytes)]);
+        let meta = extract_epub_metadata(&data).unwrap();
+
+        let cover = meta.cover_image.unwrap();
+        assert_eq!(cover.bytes, cover_bytes);
+    }
+
+    #[test]
+    fn classify_isbn_unit_tests() {
+        // ISBN-13
+        let id = classify_isbn("9781718500440").unwrap();
+        assert_eq!(id.identifier_type, IdentifierType::Isbn13);
+        assert_eq!(id.value, "9781718500440");
+
+        // ISBN-10
+        let id = classify_isbn("059651774X").unwrap();
+        assert_eq!(id.identifier_type, IdentifierType::Isbn10);
+        assert_eq!(id.value, "059651774X");
+
+        // Not an ISBN
+        assert!(classify_isbn("12345").is_none());
+        assert!(classify_isbn("ABCDEFGHIJ").is_none());
+
+        // 13 digits but wrong prefix
+        assert!(classify_isbn("1234567890123").is_none());
+    }
+
+    #[test]
+    fn asin_identifier() {
+        let opf = r#"<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/"
+            xmlns:opf="http://www.idpf.org/2007/opf">
+    <dc:title>Kindle Book</dc:title>
+    <dc:identifier opf:scheme="ASIN">B08N5WRWNW</dc:identifier>
+  </metadata>
+  <manifest/>
+  <spine/>
+</package>"#;
+
+        let data = build_epub_with_opf(opf, &[]);
+        let meta = extract_epub_metadata(&data).unwrap();
+
+        assert_eq!(meta.identifiers.len(), 1);
+        assert_eq!(meta.identifiers[0].identifier_type, IdentifierType::Asin);
+        assert_eq!(meta.identifiers[0].value, "B08N5WRWNW");
+    }
+
+    #[test]
+    fn no_namespace_prefixes_still_works() {
+        // Some EPUBs omit namespace prefixes entirely.
+        let opf = r#"<?xml version="1.0"?>
+<package version="2.0">
+  <metadata>
+    <title>No Prefix</title>
+    <creator>Namespace Free</creator>
+    <language>fr</language>
+  </metadata>
+  <manifest/>
+  <spine/>
+</package>"#;
+
+        let data = build_epub_with_opf(opf, &[]);
+        let meta = extract_epub_metadata(&data).unwrap();
+
+        assert_eq!(meta.title.as_deref(), Some("No Prefix"));
+        assert_eq!(meta.authors, vec!["Namespace Free"]);
+        assert_eq!(meta.language.as_deref(), Some("fr"));
+    }
+}
