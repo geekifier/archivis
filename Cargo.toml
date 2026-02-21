@@ -66,6 +66,7 @@ utoipa = { version = "5", features = ["axum_extras"] }
 
 # Auth
 argon2 = "0.5"
+rand = "0.8"
 
 # Cryptography
 sha2 = "0.10"

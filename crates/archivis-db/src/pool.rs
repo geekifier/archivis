@@ -170,8 +170,10 @@ mod tests {
             "identifiers",
             "publishers",
             "series",
+            "sessions",
             "tags",
             "tasks",
+            "users",
         ];
 
         assert_eq!(tables, expected);

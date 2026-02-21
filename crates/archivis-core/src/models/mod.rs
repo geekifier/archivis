@@ -7,6 +7,7 @@ mod publisher;
 mod series;
 mod tag;
 mod task;
+mod user;
 
 pub use author::Author;
 pub use book::Book;
@@ -17,3 +18,4 @@ pub use publisher::Publisher;
 pub use series::Series;
 pub use tag::Tag;
 pub use task::{Task, TaskProgress, TaskStatus, TaskType};
+pub use user::{Session, User, UserRole};
