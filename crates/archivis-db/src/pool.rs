@@ -5,10 +5,10 @@ use archivis_core::errors::DbError;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use sqlx::SqlitePool;
 
-/// Type alias for the SQLite connection pool used throughout the application.
+/// Type alias for the `SQLite` connection pool used throughout the application.
 pub type DbPool = SqlitePool;
 
-/// Create a configured SQLite connection pool.
+/// Create a configured `SQLite` connection pool.
 ///
 /// Sets the following PRAGMAs on every connection:
 /// - `journal_mode=WAL` — write-ahead logging for concurrent reads
@@ -64,11 +64,10 @@ pub async fn run_migrations(pool: &DbPool) -> Result<(), DbError> {
 
 /// Verify that PRAGMAs are correctly applied.
 async fn verify_pragmas(pool: &DbPool) -> Result<(), DbError> {
-    let journal_mode: String =
-        sqlx::query_scalar("PRAGMA journal_mode")
-            .fetch_one(pool)
-            .await
-            .map_err(|e| DbError::Query(format!("failed to check journal_mode: {e}")))?;
+    let journal_mode: String = sqlx::query_scalar("PRAGMA journal_mode")
+        .fetch_one(pool)
+        .await
+        .map_err(|e| DbError::Query(format!("failed to check journal_mode: {e}")))?;
 
     if journal_mode.to_lowercase() != "wal" {
         return Err(DbError::Connection(format!(
@@ -76,11 +75,10 @@ async fn verify_pragmas(pool: &DbPool) -> Result<(), DbError> {
         )));
     }
 
-    let foreign_keys: i32 =
-        sqlx::query_scalar("PRAGMA foreign_keys")
-            .fetch_one(pool)
-            .await
-            .map_err(|e| DbError::Query(format!("failed to check foreign_keys: {e}")))?;
+    let foreign_keys: i32 = sqlx::query_scalar("PRAGMA foreign_keys")
+        .fetch_one(pool)
+        .await
+        .map_err(|e| DbError::Query(format!("failed to check foreign_keys: {e}")))?;
 
     if foreign_keys != 1 {
         return Err(DbError::Connection(
@@ -204,21 +202,19 @@ mod tests {
             .unwrap();
 
         // Search FTS
-        let results: Vec<String> = sqlx::query_scalar(
-            "SELECT title FROM books_fts WHERE books_fts MATCH 'dune'"
-        )
-        .fetch_all(&pool)
-        .await
-        .unwrap();
+        let results: Vec<String> =
+            sqlx::query_scalar("SELECT title FROM books_fts WHERE books_fts MATCH 'dune'")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
         assert_eq!(results, vec!["Dune"]);
 
         // Search by author
-        let results: Vec<String> = sqlx::query_scalar(
-            "SELECT title FROM books_fts WHERE books_fts MATCH 'herbert'"
-        )
-        .fetch_all(&pool)
-        .await
-        .unwrap();
+        let results: Vec<String> =
+            sqlx::query_scalar("SELECT title FROM books_fts WHERE books_fts MATCH 'herbert'")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
         assert_eq!(results, vec!["Dune"]);
 
         pool.close().await;
@@ -238,7 +234,10 @@ mod tests {
         .execute(&pool)
         .await;
 
-        assert!(result.is_err(), "foreign key constraint should prevent insert");
+        assert!(
+            result.is_err(),
+            "foreign key constraint should prevent insert"
+        );
 
         pool.close().await;
     }
