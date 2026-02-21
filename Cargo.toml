@@ -21,14 +21,14 @@ rust-version = "1.80"
 
 [workspace.dependencies]
 # Internal crates
-archivis-core = { path = "crates/archivis-core" }
-archivis-db = { path = "crates/archivis-db" }
-archivis-formats = { path = "crates/archivis-formats" }
-archivis-metadata = { path = "crates/archivis-metadata" }
-archivis-tasks = { path = "crates/archivis-tasks" }
-archivis-storage = { path = "crates/archivis-storage" }
-archivis-auth = { path = "crates/archivis-auth" }
-archivis-api = { path = "crates/archivis-api" }
+archivis-core = { path = "crates/archivis-core", version = "0.1.0" }
+archivis-db = { path = "crates/archivis-db", version = "0.1.0" }
+archivis-formats = { path = "crates/archivis-formats", version = "0.1.0" }
+archivis-metadata = { path = "crates/archivis-metadata", version = "0.1.0" }
+archivis-tasks = { path = "crates/archivis-tasks", version = "0.1.0" }
+archivis-storage = { path = "crates/archivis-storage", version = "0.1.0" }
+archivis-auth = { path = "crates/archivis-auth", version = "0.1.0" }
+archivis-api = { path = "crates/archivis-api", version = "0.1.0" }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
