@@ -171,6 +171,7 @@ mod tests {
             "publishers",
             "series",
             "tags",
+            "tasks",
         ];
 
         assert_eq!(tables, expected);
