@@ -43,3 +43,11 @@ migrate:
 # Run the server
 run:
     cargo run --package archivis-server
+
+# Run CI pipeline locally via act (requires Docker)
+ci-local *args:
+    act {{ args }}
+
+# Run a single CI job locally via act (e.g. just ci-job fmt)
+ci-job job:
+    act -j {{ job }}
