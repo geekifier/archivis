@@ -70,6 +70,7 @@ fn map_core_error(err: &ArchivisError) -> (StatusCode, String) {
         ArchivisError::Db(DbError::NotFound { entity, id }) => {
             (StatusCode::NOT_FOUND, format!("{entity} not found: {id}"))
         }
+        ArchivisError::Db(DbError::Constraint(msg)) => (StatusCode::CONFLICT, msg.clone()),
         ArchivisError::Db(db_err) => {
             tracing::error!(error = %db_err, "database error");
             (

@@ -1,7 +1,10 @@
 pub mod auth;
+pub mod authors;
 pub mod books;
 pub mod errors;
+pub mod series;
 pub mod state;
+pub mod tags;
 pub mod tasks;
 
 use axum::Router;
@@ -39,6 +42,24 @@ mod openapi {
             super::books::handlers::download_file,
             super::books::handlers::set_book_authors,
             super::books::handlers::set_book_tags,
+            super::authors::handlers::list_authors,
+            super::authors::handlers::create_author,
+            super::authors::handlers::get_author,
+            super::authors::handlers::update_author,
+            super::authors::handlers::delete_author,
+            super::authors::handlers::list_author_books,
+            super::series::handlers::list_series,
+            super::series::handlers::create_series,
+            super::series::handlers::get_series,
+            super::series::handlers::update_series,
+            super::series::handlers::delete_series,
+            super::series::handlers::list_series_books,
+            super::tags::handlers::list_tags,
+            super::tags::handlers::create_tag,
+            super::tags::handlers::get_tag,
+            super::tags::handlers::update_tag,
+            super::tags::handlers::delete_tag,
+            super::tags::handlers::list_tag_books,
         ),
         components(schemas(
             super::auth::types::SetupRequest,
@@ -59,6 +80,18 @@ mod openapi {
             super::books::types::FileEntry,
             super::books::types::IdentifierEntry,
             super::books::types::PaginatedBooks,
+            super::authors::types::CreateAuthorRequest,
+            super::authors::types::UpdateAuthorRequest,
+            super::authors::types::AuthorResponse,
+            super::authors::types::PaginatedAuthors,
+            super::series::types::CreateSeriesRequest,
+            super::series::types::UpdateSeriesRequest,
+            super::series::types::SeriesResponse,
+            super::series::types::PaginatedSeries,
+            super::tags::types::CreateTagRequest,
+            super::tags::types::UpdateTagRequest,
+            super::tags::types::TagResponse,
+            super::tags::types::PaginatedTags,
         )),
         tags(
             (name = "tasks", description = "Background task management"),
@@ -79,9 +112,9 @@ pub fn build_router(state: AppState) -> Router {
         .nest("/tasks", tasks::router())
         .nest("/auth", auth::router())
         .nest("/books", books::router())
-        .nest("/authors", stub_router())
-        .nest("/series", stub_router())
-        .nest("/tags", stub_router())
+        .nest("/authors", authors::router())
+        .nest("/series", series::router())
+        .nest("/tags", tags::router())
         .nest("/import", stub_router());
 
     Router::new()

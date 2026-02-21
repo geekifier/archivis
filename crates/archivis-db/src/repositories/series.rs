@@ -69,6 +69,43 @@ impl SeriesRepository {
         Ok(PaginatedResult::new(items, total as u32, params))
     }
 
+    /// Search series by name (case-insensitive substring match).
+    pub async fn search(
+        pool: &SqlitePool,
+        query: &str,
+        params: &PaginationParams,
+    ) -> Result<PaginatedResult<Series>, DbError> {
+        let sort_dir = params.sort_order.as_sql();
+        let limit = params.per_page;
+        let offset = params.offset();
+        let pattern = format!("%{query}%");
+
+        let total: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM series WHERE name LIKE ? COLLATE NOCASE")
+                .bind(&pattern)
+                .fetch_one(pool)
+                .await
+                .map_err(|e| DbError::Query(e.to_string()))?;
+
+        let sql = format!(
+            "SELECT id, name, description FROM series WHERE name LIKE ? COLLATE NOCASE ORDER BY name {sort_dir} LIMIT {limit} OFFSET {offset}"
+        );
+
+        let rows = sqlx::query_as::<_, SeriesRow>(&sql)
+            .bind(&pattern)
+            .fetch_all(pool)
+            .await
+            .map_err(|e| DbError::Query(e.to_string()))?;
+
+        let items = rows
+            .into_iter()
+            .map(SeriesRow::into_series)
+            .collect::<Result<Vec<_>, _>>()?;
+
+        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+        Ok(PaginatedResult::new(items, total as u32, params))
+    }
+
     pub async fn update(pool: &SqlitePool, series: &Series) -> Result<(), DbError> {
         let id = series.id.to_string();
         let result = sqlx::query("UPDATE series SET name = ?, description = ? WHERE id = ?")

@@ -110,6 +110,50 @@ impl AuthorRepository {
         Ok(())
     }
 
+    /// Search authors by name (case-insensitive substring match).
+    pub async fn search(
+        pool: &SqlitePool,
+        query: &str,
+        params: &PaginationParams,
+    ) -> Result<PaginatedResult<Author>, DbError> {
+        let sort_col = match params.sort_by.as_str() {
+            "name" => "name",
+            _ => "sort_name",
+        };
+        let sort_dir = params.sort_order.as_sql();
+        let limit = params.per_page;
+        let offset = params.offset();
+        let pattern = format!("%{query}%");
+
+        let total: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM authors WHERE name LIKE ? COLLATE NOCASE OR sort_name LIKE ? COLLATE NOCASE",
+        )
+        .bind(&pattern)
+        .bind(&pattern)
+        .fetch_one(pool)
+        .await
+        .map_err(|e| DbError::Query(e.to_string()))?;
+
+        let sql = format!(
+            "SELECT id, name, sort_name FROM authors WHERE name LIKE ? COLLATE NOCASE OR sort_name LIKE ? COLLATE NOCASE ORDER BY {sort_col} {sort_dir} LIMIT {limit} OFFSET {offset}"
+        );
+
+        let rows = sqlx::query_as::<_, AuthorRow>(&sql)
+            .bind(&pattern)
+            .bind(&pattern)
+            .fetch_all(pool)
+            .await
+            .map_err(|e| DbError::Query(e.to_string()))?;
+
+        let authors = rows
+            .into_iter()
+            .map(AuthorRow::into_author)
+            .collect::<Result<Vec<_>, _>>()?;
+
+        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+        Ok(PaginatedResult::new(authors, total as u32, params))
+    }
+
     pub async fn find_by_name(pool: &SqlitePool, name: &str) -> Result<Option<Author>, DbError> {
         let row = sqlx::query_as::<_, AuthorRow>(
             "SELECT id, name, sort_name FROM authors WHERE name = ? COLLATE NOCASE",
