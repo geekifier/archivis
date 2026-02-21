@@ -1,10 +1,11 @@
 pub mod bulk;
-mod cover;
+pub mod cover;
 pub mod progress;
 pub mod service;
 pub mod types;
 
 pub use bulk::{BulkImportService, FormatCount, ImportManifest, ManifestEntry};
+pub use cover::generate_thumbnail;
 pub use progress::{
     BulkImportResult, FailedFile, FileOutcome, ImportProgress, NoopProgress, SkipReason,
     SkippedFile,

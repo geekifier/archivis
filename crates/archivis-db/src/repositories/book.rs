@@ -377,6 +377,26 @@ impl BookRepository {
         })
     }
 
+    /// Remove all author links for a book.
+    pub async fn clear_authors(pool: &SqlitePool, book_id: Uuid) -> Result<(), DbError> {
+        sqlx::query("DELETE FROM book_authors WHERE book_id = ?")
+            .bind(book_id.to_string())
+            .execute(pool)
+            .await
+            .map_err(|e| DbError::Query(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Remove all tag links for a book.
+    pub async fn clear_tags(pool: &SqlitePool, book_id: Uuid) -> Result<(), DbError> {
+        sqlx::query("DELETE FROM book_tags WHERE book_id = ?")
+            .bind(book_id.to_string())
+            .execute(pool)
+            .await
+            .map_err(|e| DbError::Query(e.to_string()))?;
+        Ok(())
+    }
+
     /// Link a book to an author.
     pub async fn add_author(
         pool: &SqlitePool,

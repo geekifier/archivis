@@ -57,6 +57,40 @@ pub async fn generate_thumbnails(
     Ok(())
 }
 
+/// Generate a single WebP thumbnail at a given target height.
+///
+/// Reads the source image from `source_path`, resizes, and writes to
+/// `{cache_dir}/covers/{book_id}/{name}.webp`.
+pub async fn generate_thumbnail(
+    source_path: &Path,
+    book_id: Uuid,
+    cache_dir: &Path,
+    name: &str,
+    target_height: u32,
+) -> Result<std::path::PathBuf, String> {
+    let source_bytes = fs::read(source_path)
+        .await
+        .map_err(|e| format!("failed to read source image: {e}"))?;
+
+    let img = image::load_from_memory(&source_bytes)
+        .map_err(|e| format!("failed to decode source image: {e}"))?;
+
+    let resized = resize_to_height(&img, target_height);
+    let webp_bytes = encode_webp(&resized)?;
+
+    let covers_dir = cache_dir.join("covers").join(book_id.to_string());
+    fs::create_dir_all(&covers_dir)
+        .await
+        .map_err(|e| format!("failed to create thumbnail directory: {e}"))?;
+
+    let thumb_path = covers_dir.join(format!("{name}.webp"));
+    fs::write(&thumb_path, &webp_bytes)
+        .await
+        .map_err(|e| format!("failed to write thumbnail {name}: {e}"))?;
+
+    Ok(thumb_path)
+}
+
 /// Resize an image to fit a target height, preserving the aspect ratio.
 fn resize_to_height(img: &image::DynamicImage, target_height: u32) -> image::DynamicImage {
     let (w, h) = (img.width(), img.height());

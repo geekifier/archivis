@@ -40,6 +40,23 @@ impl BookFileRepository {
         Ok(())
     }
 
+    pub async fn get_by_id(pool: &SqlitePool, id: Uuid) -> Result<BookFile, DbError> {
+        let id_str = id.to_string();
+        let row = sqlx::query_as::<_, BookFileRow>(
+            "SELECT id, book_id, format, storage_path, file_size, hash, added_at FROM book_files WHERE id = ?",
+        )
+        .bind(&id_str)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| DbError::Query(e.to_string()))?
+        .ok_or(DbError::NotFound {
+            entity: "book_file",
+            id: id_str,
+        })?;
+
+        row.into_book_file()
+    }
+
     pub async fn get_by_book_id(
         pool: &SqlitePool,
         book_id: Uuid,

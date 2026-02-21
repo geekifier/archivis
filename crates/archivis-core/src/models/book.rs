@@ -28,6 +28,13 @@ pub struct Book {
 }
 
 impl Book {
+    /// Update the title, keeping `sort_title` in sync.
+    pub fn set_title(&mut self, title: impl Into<String>) {
+        let title = title.into();
+        self.sort_title = generate_sort_title(&title);
+        self.title = title;
+    }
+
     /// Create a new `Book` with required fields and sensible defaults.
     pub fn new(title: impl Into<String>) -> Self {
         let title = title.into();

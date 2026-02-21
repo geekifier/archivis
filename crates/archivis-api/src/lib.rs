@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod books;
 pub mod errors;
 pub mod state;
 pub mod tasks;
@@ -30,6 +31,14 @@ mod openapi {
             super::auth::handlers::auth_login,
             super::auth::handlers::auth_logout,
             super::auth::handlers::auth_me,
+            super::books::handlers::list_books,
+            super::books::handlers::get_book,
+            super::books::handlers::update_book,
+            super::books::handlers::delete_book,
+            super::books::handlers::get_cover,
+            super::books::handlers::download_file,
+            super::books::handlers::set_book_authors,
+            super::books::handlers::set_book_tags,
         ),
         components(schemas(
             super::auth::types::SetupRequest,
@@ -37,6 +46,19 @@ mod openapi {
             super::auth::types::AuthStatusResponse,
             super::auth::types::LoginResponse,
             super::auth::types::UserResponse,
+            super::books::types::UpdateBookRequest,
+            super::books::types::SetBookAuthorsRequest,
+            super::books::types::BookAuthorLink,
+            super::books::types::SetBookTagsRequest,
+            super::books::types::BookTagLink,
+            super::books::types::BookSummary,
+            super::books::types::BookDetail,
+            super::books::types::AuthorEntry,
+            super::books::types::SeriesEntry,
+            super::books::types::TagEntry,
+            super::books::types::FileEntry,
+            super::books::types::IdentifierEntry,
+            super::books::types::PaginatedBooks,
         )),
         tags(
             (name = "tasks", description = "Background task management"),
@@ -56,8 +78,7 @@ pub fn build_router(state: AppState) -> Router {
     let api_routes = Router::new()
         .nest("/tasks", tasks::router())
         .nest("/auth", auth::router())
-        // Stub route groups for endpoints implemented in later tasks
-        .nest("/books", stub_router())
+        .nest("/books", books::router())
         .nest("/authors", stub_router())
         .nest("/series", stub_router())
         .nest("/tags", stub_router())
