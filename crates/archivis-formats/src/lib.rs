@@ -1,1 +1,93 @@
+pub mod detect;
+pub mod epub;
+pub mod filename;
+pub mod pdf;
+pub mod scoring;
 
+use archivis_core::models::{IdentifierType, MetadataSource};
+
+/// Extracted metadata from an ebook file.
+///
+/// Shared across all format extractors. Fields are optional because
+/// not every format provides every piece of metadata.
+#[derive(Debug, Clone)]
+pub struct ExtractedMetadata {
+    pub title: Option<String>,
+    pub authors: Vec<String>,
+    pub description: Option<String>,
+    pub language: Option<String>,
+    pub publisher: Option<String>,
+    pub publication_date: Option<String>,
+    pub identifiers: Vec<ExtractedIdentifier>,
+    /// Tags or categories found in the file metadata.
+    pub subjects: Vec<String>,
+    pub series: Option<String>,
+    pub series_position: Option<f32>,
+    pub page_count: Option<i32>,
+    pub cover_image: Option<CoverData>,
+    pub source: MetadataSource,
+}
+
+impl Default for ExtractedMetadata {
+    fn default() -> Self {
+        Self {
+            title: None,
+            authors: Vec::new(),
+            description: None,
+            language: None,
+            publisher: None,
+            publication_date: None,
+            identifiers: Vec::new(),
+            subjects: Vec::new(),
+            series: None,
+            series_position: None,
+            page_count: None,
+            cover_image: None,
+            source: MetadataSource::Embedded,
+        }
+    }
+}
+
+/// An identifier extracted from file metadata (ISBN, ASIN, etc.).
+#[derive(Debug, Clone)]
+pub struct ExtractedIdentifier {
+    pub identifier_type: IdentifierType,
+    pub value: String,
+}
+
+/// Raw cover image data with its media type.
+#[derive(Debug, Clone)]
+pub struct CoverData {
+    pub bytes: Vec<u8>,
+    pub media_type: String,
+}
+
+/// Result from parsing a filename into likely metadata fields.
+#[derive(Debug, Clone, Default)]
+pub struct ParsedFilename {
+    pub title: Option<String>,
+    pub author: Option<String>,
+    pub series: Option<String>,
+    pub series_position: Option<f32>,
+    pub year: Option<u16>,
+}
+
+impl ParsedFilename {
+    /// Score the completeness of this parsed result (0.0 – 1.0).
+    pub fn completeness_score(&self) -> f32 {
+        let mut score = 0.0_f32;
+        if self.title.is_some() {
+            score += 0.4;
+        }
+        if self.author.is_some() {
+            score += 0.3;
+        }
+        if self.series.is_some() {
+            score += 0.15;
+        }
+        if self.year.is_some() {
+            score += 0.15;
+        }
+        score
+    }
+}

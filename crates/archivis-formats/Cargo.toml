@@ -5,5 +5,18 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+[dependencies]
+archivis-core.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+serde.workspace = true
+zip = { version = "2", default-features = false, features = ["deflate"] }
+quick-xml = "0.37"
+lopdf = "0.34"
+regex = "1"
+
+[dev-dependencies]
+tempfile.workspace = true
+
 [lints]
 workspace = true
