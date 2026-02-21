@@ -1,0 +1,455 @@
+use std::fmt::Write as _;
+use std::path::Path;
+
+use archivis_core::models::{
+    Book, BookFile, BookFormat, Identifier, MetadataSource, Series,
+};
+use archivis_db::{
+    AuthorRepository, BookFileRepository, BookRepository, DbPool, IdentifierRepository,
+    SeriesRepository, TagRepository,
+};
+use archivis_formats::{ExtractedMetadata, ParsedFilename};
+use archivis_storage::StorageBackend;
+use sha2::{Digest, Sha256};
+use tracing::{info, warn};
+
+use super::cover;
+use super::types::{DuplicateInfo, ImportConfig, ImportError, ImportResult};
+
+/// Orchestrates the import of a single ebook file into the library.
+pub struct ImportService<S: StorageBackend> {
+    db_pool: DbPool,
+    storage: S,
+    config: ImportConfig,
+}
+
+impl<S: StorageBackend> ImportService<S> {
+    pub fn new(db_pool: DbPool, storage: S, config: ImportConfig) -> Self {
+        Self {
+            db_pool,
+            storage,
+            config,
+        }
+    }
+
+    /// Import a single file from `source_path` into the library.
+    ///
+    /// Returns an [`ImportResult`] on success, describing the created or matched
+    /// book and file records.
+    pub async fn import_file(&self, source_path: &Path) -> Result<ImportResult, ImportError> {
+        // 1-5: Read, detect, extract, parse, score
+        let data = tokio::fs::read(source_path).await?;
+        let format = archivis_formats::detect::detect(&data)?;
+        if format == BookFormat::Unknown {
+            return Err(ImportError::InvalidFile(
+                "unsupported or unrecognised file format".into(),
+            ));
+        }
+        let embedded = extract_metadata(format, &data);
+        let parsed = archivis_formats::filename::parse_path(source_path);
+        let score = archivis_formats::scoring::score_metadata(&embedded, Some(&parsed));
+
+        // 6: Hash check and ISBN duplicate check
+        let hash = compute_sha256(&data);
+        if let Some(existing) = BookFileRepository::get_by_hash(&self.db_pool, &hash).await? {
+            return Err(ImportError::DuplicateFile {
+                existing_book_id: existing.book_id,
+                hash,
+            });
+        }
+        if let Some(dup) = self.check_isbn_duplicates(&embedded, format).await? {
+            return Ok(ImportResult {
+                book_id: match &dup {
+                    DuplicateInfo::SameIsbn { existing_book_id, .. } |
+                    DuplicateInfo::ExactHash { existing_book_id } => *existing_book_id,
+                },
+                book_file_id: uuid::Uuid::nil(),
+                status: score.status,
+                confidence: score.confidence,
+                duplicate: Some(dup),
+                cover_extracted: false,
+            });
+        }
+
+        // Determine target book: existing (different format, same ISBN) or new
+        let (book_id, is_new_book) = self
+            .find_isbn_book_different_format(&embedded, format)
+            .await?
+            .map_or_else(|| (uuid::Uuid::new_v4(), true), |id| (id, false));
+
+        // 7-8: Store file and handle covers
+        let title = resolve_title(&embedded, &parsed, source_path);
+        let author = resolve_author(&embedded, &parsed);
+        let (stored, cover_path) =
+            self.store_file_and_cover(&data, &title, &author, source_path, book_id, &embedded).await?;
+
+        // 9: Create DB records
+        let book_file = self.create_db_records(
+            book_id, is_new_book, format, &stored, cover_path,
+            &score, &embedded, &parsed, &title,
+        ).await?;
+
+        info!(book_id = %book_id, format = %format, status = %score.status, "imported file");
+
+        Ok(ImportResult {
+            book_id,
+            book_file_id: book_file,
+            status: score.status,
+            confidence: score.confidence,
+            duplicate: None,
+            cover_extracted: embedded.cover_image.is_some(),
+        })
+    }
+
+    /// Store the book file and its cover image (if present) in the storage backend.
+    async fn store_file_and_cover(
+        &self,
+        data: &[u8],
+        title: &str,
+        author: &str,
+        source_path: &Path,
+        book_id: uuid::Uuid,
+        embedded: &ExtractedMetadata,
+    ) -> Result<(archivis_storage::StoredFile, Option<String>), ImportError> {
+        let filename = source_path
+            .file_name()
+            .map_or_else(|| "book".to_string(), |n| n.to_string_lossy().into_owned());
+        let storage_path = archivis_storage::path::generate_book_path(author, title, &filename);
+        let stored = self.storage.store(&storage_path, data).await?;
+
+        let mut cover_path = None;
+        if let Some(ref cover_data) = embedded.cover_image {
+            let book_dir = storage_path
+                .rsplit_once('/')
+                .map_or(&*storage_path, |(dir, _)| dir);
+
+            match cover::store_cover(&self.storage, book_dir, cover_data).await {
+                Ok(path) => cover_path = Some(path),
+                Err(e) => warn!("cover storage failed, continuing without cover: {e}"),
+            }
+
+            let cache_dir = self.config.data_dir.join("cache");
+            if let Err(e) = cover::generate_thumbnails(
+                cover_data,
+                book_id,
+                &cache_dir,
+                &self.config.thumbnail_sizes,
+            )
+            .await
+            {
+                warn!("thumbnail generation failed: {e}");
+            }
+        }
+
+        Ok((stored, cover_path))
+    }
+
+    /// Create all database records for an imported book file.
+    #[allow(clippy::too_many_arguments)]
+    async fn create_db_records(
+        &self,
+        book_id: uuid::Uuid,
+        is_new_book: bool,
+        format: BookFormat,
+        stored: &archivis_storage::StoredFile,
+        cover_path: Option<String>,
+        score: &archivis_formats::scoring::MetadataScore,
+        embedded: &ExtractedMetadata,
+        parsed: &ParsedFilename,
+        title: &str,
+    ) -> Result<uuid::Uuid, ImportError> {
+        let book_file = BookFile::new(
+            book_id,
+            format,
+            &stored.path,
+            #[allow(clippy::cast_possible_wrap)]
+            { stored.size as i64 },
+            &stored.hash,
+        );
+        let book_file_id = book_file.id;
+
+        if is_new_book {
+            let mut book = Book::new(title);
+            book.id = book_id;
+            book.description.clone_from(&embedded.description);
+            book.language.clone_from(&embedded.language);
+            book.page_count = embedded.page_count;
+            book.metadata_status = score.status;
+            book.metadata_confidence = score.confidence;
+            book.cover_path = cover_path;
+
+            BookRepository::create(&self.db_pool, &book).await?;
+            BookFileRepository::create(&self.db_pool, &book_file).await?;
+            self.create_authors(book_id, embedded, parsed).await?;
+            self.create_identifiers(book_id, embedded).await?;
+            self.create_tags(book_id, embedded).await?;
+            self.create_series(book_id, embedded, parsed).await?;
+        } else {
+            BookFileRepository::create(&self.db_pool, &book_file).await?;
+        }
+
+        Ok(book_file_id)
+    }
+
+    /// Check if any extracted ISBN matches an existing book that already has the same format.
+    async fn check_isbn_duplicates(
+        &self,
+        embedded: &ExtractedMetadata,
+        format: BookFormat,
+    ) -> Result<Option<DuplicateInfo>, ImportError> {
+        for ident in &embedded.identifiers {
+            let type_str = identifier_type_to_db_str(ident.identifier_type);
+            let matches =
+                IdentifierRepository::find_by_value(&self.db_pool, type_str, &ident.value).await?;
+
+            for matched in &matches {
+                let files =
+                    BookFileRepository::get_by_book_id(&self.db_pool, matched.book_id).await?;
+                if files.iter().any(|f| f.format == format) {
+                    return Ok(Some(DuplicateInfo::SameIsbn {
+                        existing_book_id: matched.book_id,
+                        isbn: ident.value.clone(),
+                    }));
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    /// Find an existing book (via ISBN match) that does NOT have the given format yet.
+    async fn find_isbn_book_different_format(
+        &self,
+        embedded: &ExtractedMetadata,
+        format: BookFormat,
+    ) -> Result<Option<uuid::Uuid>, ImportError> {
+        for ident in &embedded.identifiers {
+            let type_str = identifier_type_to_db_str(ident.identifier_type);
+            let matches =
+                IdentifierRepository::find_by_value(&self.db_pool, type_str, &ident.value).await?;
+
+            for matched in &matches {
+                let files =
+                    BookFileRepository::get_by_book_id(&self.db_pool, matched.book_id).await?;
+                if !files.iter().any(|f| f.format == format) {
+                    info!(
+                        book_id = %matched.book_id,
+                        isbn = %ident.value,
+                        "linking as additional format to existing book"
+                    );
+                    return Ok(Some(matched.book_id));
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    async fn create_authors(
+        &self,
+        book_id: uuid::Uuid,
+        embedded: &ExtractedMetadata,
+        parsed: &ParsedFilename,
+    ) -> Result<(), ImportError> {
+        let mut authors: Vec<String> = embedded.authors.clone();
+        if authors.is_empty() {
+            if let Some(ref author_name) = parsed.author {
+                authors.push(author_name.clone());
+            }
+        }
+        if authors.is_empty() {
+            authors.push("Unknown Author".into());
+        }
+
+        #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+        for (i, name) in authors.iter().enumerate() {
+            let author =
+                if let Some(existing) = AuthorRepository::find_by_name(&self.db_pool, name).await?
+                {
+                    existing
+                } else {
+                    let new_author = archivis_core::models::Author::new(name);
+                    AuthorRepository::create(&self.db_pool, &new_author).await?;
+                    new_author
+                };
+            BookRepository::add_author(&self.db_pool, book_id, author.id, "author", i as i32)
+                .await?;
+        }
+        Ok(())
+    }
+
+    async fn create_identifiers(
+        &self,
+        book_id: uuid::Uuid,
+        embedded: &ExtractedMetadata,
+    ) -> Result<(), ImportError> {
+        for ident in &embedded.identifiers {
+            let identifier = Identifier::new(
+                book_id,
+                ident.identifier_type,
+                &ident.value,
+                MetadataSource::Embedded,
+                0.9,
+            );
+            IdentifierRepository::create(&self.db_pool, &identifier).await?;
+        }
+        Ok(())
+    }
+
+    async fn create_tags(
+        &self,
+        book_id: uuid::Uuid,
+        embedded: &ExtractedMetadata,
+    ) -> Result<(), ImportError> {
+        for subject in &embedded.subjects {
+            let tag =
+                TagRepository::find_or_create(&self.db_pool, subject, Some("subject")).await?;
+            BookRepository::add_tag(&self.db_pool, book_id, tag.id).await?;
+        }
+        Ok(())
+    }
+
+    async fn create_series(
+        &self,
+        book_id: uuid::Uuid,
+        embedded: &ExtractedMetadata,
+        parsed: &ParsedFilename,
+    ) -> Result<(), ImportError> {
+        let series_name = embedded.series.as_deref().or(parsed.series.as_deref());
+
+        if let Some(name) = series_name {
+            let series = Series::new(name);
+            SeriesRepository::create(&self.db_pool, &series).await?;
+
+            let position = embedded
+                .series_position
+                .or(parsed.series_position)
+                .map(f64::from);
+
+            BookRepository::add_series(&self.db_pool, book_id, series.id, position).await?;
+        }
+        Ok(())
+    }
+}
+
+/// Extract metadata based on the detected format.
+fn extract_metadata(format: BookFormat, data: &[u8]) -> ExtractedMetadata {
+    match format {
+        BookFormat::Epub => archivis_formats::epub::extract_epub_metadata(data)
+            .unwrap_or_else(|e| {
+                warn!("EPUB metadata extraction failed: {e}");
+                ExtractedMetadata::default()
+            }),
+        BookFormat::Pdf => archivis_formats::pdf::extract_pdf_metadata(data).unwrap_or_else(|e| {
+            warn!("PDF metadata extraction failed: {e}");
+            ExtractedMetadata::default()
+        }),
+        _ => ExtractedMetadata::default(),
+    }
+}
+
+/// Determine the best title from available metadata, falling back to the filename.
+fn resolve_title(embedded: &ExtractedMetadata, parsed: &ParsedFilename, path: &Path) -> String {
+    if let Some(ref title) = embedded.title {
+        return title.clone();
+    }
+    if let Some(ref title) = parsed.title {
+        return title.clone();
+    }
+    path.file_stem()
+        .map_or_else(|| "Unknown".into(), |s| s.to_string_lossy().into_owned())
+}
+
+/// Determine the best author name from available metadata.
+fn resolve_author(embedded: &ExtractedMetadata, parsed: &ParsedFilename) -> String {
+    embedded
+        .authors
+        .first()
+        .map(String::as_str)
+        .or(parsed.author.as_deref())
+        .unwrap_or("Unknown Author")
+        .to_string()
+}
+
+/// Compute the SHA-256 hash of data, returning a hex-encoded string.
+fn compute_sha256(data: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(data);
+    let result = hasher.finalize();
+    let mut hex = String::with_capacity(64);
+    for byte in result {
+        let _ = write!(hex, "{byte:02x}");
+    }
+    hex
+}
+
+/// Convert an `IdentifierType` to the string representation used in the database.
+fn identifier_type_to_db_str(id_type: archivis_core::models::IdentifierType) -> &'static str {
+    use archivis_core::models::IdentifierType;
+    match id_type {
+        IdentifierType::Isbn13 => "isbn13",
+        IdentifierType::Isbn10 => "isbn10",
+        IdentifierType::Asin => "asin",
+        IdentifierType::GoogleBooks => "google_books",
+        IdentifierType::OpenLibrary => "open_library",
+        IdentifierType::Hardcover => "hardcover",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sha256_known_value() {
+        let hash = compute_sha256(b"");
+        assert_eq!(
+            hash,
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+    }
+
+    #[test]
+    fn resolve_title_prefers_embedded() {
+        let embedded = ExtractedMetadata {
+            title: Some("Dune".into()),
+            ..ExtractedMetadata::default()
+        };
+        let parsed = ParsedFilename {
+            title: Some("dune_book".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            resolve_title(&embedded, &parsed, Path::new("file.epub")),
+            "Dune"
+        );
+    }
+
+    #[test]
+    fn resolve_title_falls_back_to_filename() {
+        let embedded = ExtractedMetadata::default();
+        let parsed = ParsedFilename::default();
+        assert_eq!(
+            resolve_title(&embedded, &parsed, Path::new("/books/my_book.epub")),
+            "my_book"
+        );
+    }
+
+    #[test]
+    fn resolve_author_prefers_embedded() {
+        let embedded = ExtractedMetadata {
+            authors: vec!["Frank Herbert".into()],
+            ..ExtractedMetadata::default()
+        };
+        let parsed = ParsedFilename {
+            author: Some("Herbert".into()),
+            ..Default::default()
+        };
+        assert_eq!(resolve_author(&embedded, &parsed), "Frank Herbert");
+    }
+
+    #[test]
+    fn resolve_author_falls_back_to_unknown() {
+        let embedded = ExtractedMetadata::default();
+        let parsed = ParsedFilename::default();
+        assert_eq!(resolve_author(&embedded, &parsed), "Unknown Author");
+    }
+}
