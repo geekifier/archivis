@@ -1,7 +1,7 @@
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 
-use archivis_core::errors::{ArchivisError, AuthError, DbError, StorageError};
+use archivis_core::errors::{ArchivisError, AuthError, DbError, StorageError, TaskError};
 
 /// API-layer error type that maps domain errors to HTTP responses.
 ///
@@ -128,6 +128,12 @@ impl From<AuthError> for ApiError {
 
 impl From<StorageError> for ApiError {
     fn from(err: StorageError) -> Self {
+        Self::Core(ArchivisError::from(err))
+    }
+}
+
+impl From<TaskError> for ApiError {
+    fn from(err: TaskError) -> Self {
         Self::Core(ArchivisError::from(err))
     }
 }

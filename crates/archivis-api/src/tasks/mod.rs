@@ -1,5 +1,5 @@
-mod handlers;
-mod sse;
+pub mod handlers;
+pub mod sse;
 pub mod types;
 
 use axum::{routing::get, Router};

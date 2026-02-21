@@ -31,6 +31,18 @@ fn progress_to_event(status: TaskStatus, data: serde_json::Value) -> Option<Even
 /// final event is sent and the stream ends.  Otherwise, the stream subscribes
 /// to progress updates and forwards events until the task reaches a terminal
 /// state.
+#[utoipa::path(
+    get,
+    path = "/api/tasks/{id}/progress",
+    tag = "tasks",
+    params(
+        ("id" = uuid::Uuid, Path, description = "Task ID"),
+    ),
+    responses(
+        (status = 200, description = "SSE stream of task progress events"),
+        (status = 404, description = "Task not found"),
+    )
+)]
 pub async fn task_progress_sse(
     State(state): State<AppState>,
     Path(task_id): Path<Uuid>,
@@ -91,6 +103,14 @@ pub async fn task_progress_sse(
 ///
 /// Broadcasts every progress / completion / failure event from the task queue.
 /// The stream stays open indefinitely until the client disconnects.
+#[utoipa::path(
+    get,
+    path = "/api/tasks/active",
+    tag = "tasks",
+    responses(
+        (status = 200, description = "SSE stream of all active task events"),
+    )
+)]
 pub async fn active_tasks_sse(
     State(state): State<AppState>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {

@@ -2,6 +2,7 @@ pub mod auth;
 pub mod authors;
 pub mod books;
 pub mod errors;
+pub mod import;
 pub mod series;
 pub mod state;
 pub mod tags;
@@ -29,11 +30,13 @@ mod openapi {
             license(name = "AGPL-3.0-or-later"),
         ),
         paths(
+            // Auth
             super::auth::handlers::auth_status,
             super::auth::handlers::auth_setup,
             super::auth::handlers::auth_login,
             super::auth::handlers::auth_logout,
             super::auth::handlers::auth_me,
+            // Books
             super::books::handlers::list_books,
             super::books::handlers::get_book,
             super::books::handlers::update_book,
@@ -42,31 +45,45 @@ mod openapi {
             super::books::handlers::download_file,
             super::books::handlers::set_book_authors,
             super::books::handlers::set_book_tags,
+            // Authors
             super::authors::handlers::list_authors,
             super::authors::handlers::create_author,
             super::authors::handlers::get_author,
             super::authors::handlers::update_author,
             super::authors::handlers::delete_author,
             super::authors::handlers::list_author_books,
+            // Series
             super::series::handlers::list_series,
             super::series::handlers::create_series,
             super::series::handlers::get_series,
             super::series::handlers::update_series,
             super::series::handlers::delete_series,
             super::series::handlers::list_series_books,
+            // Tags
             super::tags::handlers::list_tags,
             super::tags::handlers::create_tag,
             super::tags::handlers::get_tag,
             super::tags::handlers::update_tag,
             super::tags::handlers::delete_tag,
             super::tags::handlers::list_tag_books,
+            // Import
+            super::import::handlers::upload_files,
+            super::import::handlers::scan_directory,
+            super::import::handlers::start_import,
+            // Tasks
+            super::tasks::handlers::list_tasks,
+            super::tasks::handlers::get_task,
+            super::tasks::sse::task_progress_sse,
+            super::tasks::sse::active_tasks_sse,
         ),
         components(schemas(
+            // Auth
             super::auth::types::SetupRequest,
             super::auth::types::LoginRequest,
             super::auth::types::AuthStatusResponse,
             super::auth::types::LoginResponse,
             super::auth::types::UserResponse,
+            // Books
             super::books::types::UpdateBookRequest,
             super::books::types::SetBookAuthorsRequest,
             super::books::types::BookAuthorLink,
@@ -80,27 +97,39 @@ mod openapi {
             super::books::types::FileEntry,
             super::books::types::IdentifierEntry,
             super::books::types::PaginatedBooks,
+            // Authors
             super::authors::types::CreateAuthorRequest,
             super::authors::types::UpdateAuthorRequest,
             super::authors::types::AuthorResponse,
             super::authors::types::PaginatedAuthors,
+            // Series
             super::series::types::CreateSeriesRequest,
             super::series::types::UpdateSeriesRequest,
             super::series::types::SeriesResponse,
             super::series::types::PaginatedSeries,
+            // Tags
             super::tags::types::CreateTagRequest,
             super::tags::types::UpdateTagRequest,
             super::tags::types::TagResponse,
             super::tags::types::PaginatedTags,
+            // Import
+            super::import::types::ScanDirectoryRequest,
+            super::import::types::StartImportRequest,
+            super::import::types::ScanManifestResponse,
+            super::import::types::FormatSummary,
+            super::import::types::TaskCreatedResponse,
+            super::import::types::UploadResponse,
+            // Tasks
+            super::tasks::types::TaskResponse,
         )),
         tags(
-            (name = "tasks", description = "Background task management"),
             (name = "auth", description = "Authentication and user management"),
             (name = "books", description = "Book CRUD operations"),
             (name = "authors", description = "Author management"),
             (name = "series", description = "Series management"),
             (name = "tags", description = "Tag management"),
             (name = "import", description = "File and directory import"),
+            (name = "tasks", description = "Background task management"),
         )
     )]
     pub struct ApiDoc;
@@ -115,7 +144,7 @@ pub fn build_router(state: AppState) -> Router {
         .nest("/authors", authors::router())
         .nest("/series", series::router())
         .nest("/tags", tags::router())
-        .nest("/import", stub_router());
+        .nest("/import", import::router());
 
     Router::new()
         .merge(SwaggerUi::new("/api/docs").url("/api/openapi.json", openapi::ApiDoc::openapi()))
@@ -123,11 +152,6 @@ pub fn build_router(state: AppState) -> Router {
         .layer(TraceLayer::new_for_http())
         .layer(CorsLayer::permissive())
         .with_state(state)
-}
-
-/// Placeholder router for route groups that will be implemented in later tasks.
-fn stub_router() -> Router<AppState> {
-    Router::new()
 }
 
 #[cfg(test)]
