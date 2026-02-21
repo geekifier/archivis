@@ -1,0 +1,86 @@
+[workspace]
+members = [
+    "crates/archivis-core",
+    "crates/archivis-db",
+    "crates/archivis-formats",
+    "crates/archivis-metadata",
+    "crates/archivis-tasks",
+    "crates/archivis-storage",
+    "crates/archivis-auth",
+    "crates/archivis-api",
+    "crates/archivis-server",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/archivis/archivis"
+rust-version = "1.80"
+
+[workspace.dependencies]
+# Internal crates
+archivis-core = { path = "crates/archivis-core" }
+archivis-db = { path = "crates/archivis-db" }
+archivis-formats = { path = "crates/archivis-formats" }
+archivis-metadata = { path = "crates/archivis-metadata" }
+archivis-tasks = { path = "crates/archivis-tasks" }
+archivis-storage = { path = "crates/archivis-storage" }
+archivis-auth = { path = "crates/archivis-auth" }
+archivis-api = { path = "crates/archivis-api" }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Web framework
+axum = "0.8"
+tower-http = { version = "0.6", features = ["cors", "trace", "fs"] }
+
+# Database
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"] }
+
+# Error handling
+thiserror = "2"
+
+# Identifiers
+uuid = { version = "1", features = ["v4", "serde"] }
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Time
+chrono = { version = "0.4", default-features = false, features = ["serde", "clock"] }
+
+# CLI and config
+clap = { version = "4", features = ["derive"] }
+figment = { version = "0.10", features = ["toml", "env"] }
+
+# OpenAPI
+utoipa = { version = "5", features = ["axum_extras"] }
+
+# Auth
+argon2 = "0.5"
+
+# Image processing
+image = "0.25"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+unused_must_use = "deny"
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+# Pedantic overrides — these are too noisy for real code
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+missing_const_for_fn = "allow"
