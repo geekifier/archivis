@@ -24,12 +24,16 @@ Verify compatibility with AGPLv3 license of this project
 
 - Design doc: `../_docs/2_.Design01.md`
 - Task plan: `../_docs/3_.MVP_Tasks.md`
-- Progress: `.docs/PROGRESS.md` — update after completing tasks
+- Progress: `.docs/PROGRESS.md` — update after completing tasks, be succinct and token efficient while preserving important info for next agent.
 
 ## Project Structure
 
 Cargo workspace with 9 crates under `crates/`:
 `archivis-core` (domain models), `archivis-db` (SQLite/sqlx), `archivis-formats` (ebook parsing), `archivis-metadata` (stub), `archivis-tasks` (background jobs), `archivis-storage` (file storage), `archivis-auth`, `archivis-api` (Axum handlers), `archivis-server` (binary entrypoint)
+
+## Configuration
+
+Default port is **9514**. Config layering: compiled defaults → TOML file → `ARCHIVIS_*` env vars → CLI flags.
 
 ## Development Commands
 
@@ -45,8 +49,7 @@ Cargo workspace with 9 crates under `crates/`:
 
 ## Development Flow
 
-### Git
-
+- use `gh` to interact with github.com
 - Use conventional commits
 - Sign commits with `-s`
 - After implementing each task block and validation, commit
