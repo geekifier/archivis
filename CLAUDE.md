@@ -30,6 +30,10 @@ Verify compatibility with AGPLv3 license of this project
 
 Cargo workspace with 9 crates under `crates/`:
 `archivis-core` (domain models), `archivis-db` (SQLite/sqlx), `archivis-formats` (ebook parsing), `archivis-metadata` (stub), `archivis-tasks` (background jobs), `archivis-storage` (file storage), `archivis-auth`, `archivis-api` (Axum handlers), `archivis-server` (binary entrypoint)
+Local testing and temp directories are in `.local/` (gitignored).
+.local/test-existing - exiting (non-archivis) ebook collection that user may have
+.local/test-ingestion - for testing "watched" folder ingestion and processing
+.local/test-library - target for final library storage (after ingestion and processing)
 
 ## Configuration
 
@@ -56,3 +60,9 @@ Default port is **9514**. Config layering: compiled defaults → TOML file → `
 - Create feature branches for new implementation work
 - Squash/amend commits within the feature branch when it makes sense based on scope and goals
 - When merging into `master`, DO NOT USE MERGE COMMITS, instead do a "rebase merge"
+- NEVER commit git ignored files without explicit user instruction.
+
+## Important Rules
+
+- Do not adjust linter rules, security audit configuration or other "guardrails" without explicit instructions or providing the user with an explanation and having the user acknowledge the changes.
+- Run `cargo sqlx prepare` after any query changes and commit `.sqlx/`.
