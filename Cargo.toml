@@ -62,11 +62,15 @@ clap = { version = "4", features = ["derive", "env"] }
 figment = { version = "0.10", features = ["toml", "env"] }
 
 # OpenAPI
-utoipa = { version = "5", features = ["axum_extras"] }
+utoipa = { version = "5", features = ["axum_extras", "chrono", "uuid"] }
+utoipa-swagger-ui = { version = "9", features = ["axum"] }
 
 # Auth
 argon2 = "0.5"
 rand = "0.8"
+
+# Validation
+validator = { version = "0.20", features = ["derive"] }
 
 # Cryptography
 sha2 = "0.10"

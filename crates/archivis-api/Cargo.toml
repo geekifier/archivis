@@ -9,6 +9,7 @@ rust-version.workspace = true
 archivis-auth.workspace = true
 archivis-core.workspace = true
 archivis-db.workspace = true
+archivis-storage.workspace = true
 archivis-tasks.workspace = true
 axum.workspace = true
 chrono.workspace = true
@@ -17,10 +18,15 @@ serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tokio-stream = { version = "0.1", features = ["sync"] }
+tower-http.workspace = true
 tracing.workspace = true
+utoipa.workspace = true
+utoipa-swagger-ui.workspace = true
 uuid.workspace = true
+validator.workspace = true
 
 [dev-dependencies]
+tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt"] }
 
 [lints]

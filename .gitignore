@@ -1,6 +1,9 @@
 # General
 .docs/
 .local/
+# Runtime data
+/data/
+
 # Rust
 /target/
 **/*.rs.bk

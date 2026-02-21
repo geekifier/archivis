@@ -125,6 +125,12 @@ impl From<AuthError> for ApiError {
     }
 }
 
+impl From<validator::ValidationErrors> for ApiError {
+    fn from(err: validator::ValidationErrors) -> Self {
+        Self::Validation(err.to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use axum::body::to_bytes;

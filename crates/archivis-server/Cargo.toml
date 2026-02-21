@@ -13,9 +13,17 @@ name = "archivis"
 path = "src/main.rs"
 
 [dependencies]
+archivis-api.workspace = true
+archivis-auth.workspace = true
+archivis-core.workspace = true
+archivis-db.workspace = true
+archivis-storage.workspace = true
+archivis-tasks.workspace = true
+axum.workspace = true
 clap = { workspace = true }
 figment = { workspace = true }
 serde = { workspace = true }
+serde_json.workspace = true
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
