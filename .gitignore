@@ -1,3 +1,6 @@
+# General
+.docs/
+.local/
 # Rust
 /target/
 **/*.rs.bk
