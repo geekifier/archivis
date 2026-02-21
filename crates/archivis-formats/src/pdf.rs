@@ -89,7 +89,11 @@ fn pdf_dict_string(dict: &lopdf::Dictionary, key: &[u8]) -> Option<String> {
     let bytes = obj.as_str().ok()?;
     let decoded = decode_pdf_bytes(bytes);
     let trimmed = decoded.trim().to_owned();
-    if trimmed.is_empty() { None } else { Some(trimmed) }
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed)
+    }
 }
 
 /// Decode raw PDF string bytes into a Rust `String`.
@@ -212,7 +216,11 @@ fn xmp_alt_value(xml: &str, tag: &str) -> Option<String> {
 fn xmp_bag_values(xml: &str, tag: &str) -> Option<Vec<String>> {
     let block = extract_tag_content(xml, tag)?;
     let items = extract_all_rdf_li(&block);
-    if items.is_empty() { None } else { Some(items) }
+    if items.is_empty() {
+        None
+    } else {
+        Some(items)
+    }
 }
 
 /// Extract the first value from a Bag/Seq/Alt, or the plain element text.
@@ -222,7 +230,11 @@ fn xmp_bag_first(xml: &str, tag: &str) -> Option<String> {
         return Some(first);
     }
     let trimmed = block.trim().to_owned();
-    if trimmed.is_empty() { None } else { Some(trimmed) }
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed)
+    }
 }
 
 /// Extract direct element text for `<tag>text</tag>`.
@@ -233,7 +245,11 @@ fn xmp_simple_element(xml: &str, tag: &str) -> Option<String> {
         return None;
     }
     let trimmed = content.trim().to_owned();
-    if trimmed.is_empty() { None } else { Some(trimmed) }
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed)
+    }
 }
 
 /// Low-level: extract text between `<tag...>` and `</tag>`.
@@ -336,8 +352,12 @@ fn parse_pdf_date(raw: &str) -> Option<String> {
     }
 
     let year = &s[..4];
-    let month = s.get(4..6).filter(|m| m.chars().all(|c| c.is_ascii_digit()));
-    let day = s.get(6..8).filter(|d| d.chars().all(|c| c.is_ascii_digit()));
+    let month = s
+        .get(4..6)
+        .filter(|m| m.chars().all(|c| c.is_ascii_digit()));
+    let day = s
+        .get(6..8)
+        .filter(|d| d.chars().all(|c| c.is_ascii_digit()));
 
     match (month, day) {
         (Some(m), Some(d)) => Some(format!("{year}-{m}-{d}")),
@@ -440,6 +460,7 @@ fn extract_isbn_from_text(text: &str, out: &mut Vec<ExtractedIdentifier>) {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(clippy::similar_names)]
 mod tests {
     use super::*;
     use lopdf::{dictionary, Object, Stream};
@@ -525,8 +546,14 @@ mod tests {
     #[test]
     fn extract_title_and_author() {
         let data = build_test_pdf(vec![
-            ("Title", Object::string_literal("The Rust Programming Language")),
-            ("Author", Object::string_literal("Steve Klabnik; Carol Nichols")),
+            (
+                "Title",
+                Object::string_literal("The Rust Programming Language"),
+            ),
+            (
+                "Author",
+                Object::string_literal("Steve Klabnik; Carol Nichols"),
+            ),
         ]);
         let meta = extract_pdf_metadata(&data).unwrap();
 
@@ -537,9 +564,10 @@ mod tests {
 
     #[test]
     fn extract_keywords_as_subjects() {
-        let data = build_test_pdf(vec![
-            ("Keywords", Object::string_literal("Rust; Programming; Systems")),
-        ]);
+        let data = build_test_pdf(vec![(
+            "Keywords",
+            Object::string_literal("Rust; Programming; Systems"),
+        )]);
         let meta = extract_pdf_metadata(&data).unwrap();
 
         assert_eq!(meta.subjects, vec!["Rust", "Programming", "Systems"]);
@@ -578,9 +606,10 @@ mod tests {
 
     #[test]
     fn creation_date_extracted() {
-        let data = build_test_pdf(vec![
-            ("CreationDate", Object::string_literal("D:20220601093000Z")),
-        ]);
+        let data = build_test_pdf(vec![(
+            "CreationDate",
+            Object::string_literal("D:20220601093000Z"),
+        )]);
         let meta = extract_pdf_metadata(&data).unwrap();
 
         assert_eq!(meta.publication_date.as_deref(), Some("2022-06-01"));
@@ -598,10 +627,7 @@ mod tests {
 
     #[test]
     fn author_split_on_and() {
-        assert_eq!(
-            split_authors("Alice and Bob"),
-            vec!["Alice", "Bob"],
-        );
+        assert_eq!(split_authors("Alice and Bob"), vec!["Alice", "Bob"],);
     }
 
     #[test]
@@ -801,13 +827,13 @@ mod tests {
 
     #[test]
     fn extract_rdf_li_values() {
-        let fragment = r#"
+        let fragment = r"
             <rdf:Seq>
                 <rdf:li>First</rdf:li>
                 <rdf:li>Second</rdf:li>
                 <rdf:li>Third</rdf:li>
             </rdf:Seq>
-        "#;
+        ";
         let items = extract_all_rdf_li(fragment);
         assert_eq!(items, vec!["First", "Second", "Third"]);
     }

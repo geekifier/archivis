@@ -22,9 +22,8 @@ const MAX_YEAR: u16 = 2100;
 // ---------------------------------------------------------------------------
 
 /// `Author - Title (Year)`
-static RE_AUTHOR_TITLE_YEAR: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^(.+?)\s+-\s+(.+?)\s*\((\d{4})\)\s*$").expect("valid regex")
-});
+static RE_AUTHOR_TITLE_YEAR: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^(.+?)\s+-\s+(.+?)\s*\((\d{4})\)\s*$").expect("valid regex"));
 
 /// `Author - Title [Series #N]`
 static RE_AUTHOR_TITLE_SERIES: LazyLock<Regex> = LazyLock::new(|| {
@@ -33,9 +32,8 @@ static RE_AUTHOR_TITLE_SERIES: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 /// `Author - Title`
-static RE_AUTHOR_TITLE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^(.+?)\s+-\s+(.+?)\s*$").expect("valid regex")
-});
+static RE_AUTHOR_TITLE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^(.+?)\s+-\s+(.+?)\s*$").expect("valid regex"));
 
 /// `Title [Series #N]`
 static RE_TITLE_SERIES: LazyLock<Regex> = LazyLock::new(|| {
@@ -43,9 +41,8 @@ static RE_TITLE_SERIES: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 /// `Title (Year)`
-static RE_TITLE_YEAR: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^(.+?)\s*\((\d{4})\)\s*$").expect("valid regex")
-});
+static RE_TITLE_YEAR: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^(.+?)\s*\((\d{4})\)\s*$").expect("valid regex"));
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -92,9 +89,8 @@ pub fn parse_path(path: &Path) -> ParsedFilename {
     // Whether the filename parse produced only a bare title (no structured
     // metadata). In that case, the parent directory name is a better title
     // candidate than the raw file stem.
-    let filename_is_title_only = result.author.is_none()
-        && result.series.is_none()
-        && result.year.is_none();
+    let filename_is_title_only =
+        result.author.is_none() && result.series.is_none() && result.year.is_none();
 
     // Attempt to fill gaps from the directory hierarchy.
     let components: Vec<&str> = path
@@ -268,11 +264,7 @@ mod tests {
     use super::*;
 
     /// Helper to compare a `ParsedFilename` against expected values.
-    fn assert_parsed(
-        input: &str,
-        result: &ParsedFilename,
-        expected: &ParsedFilename,
-    ) {
+    fn assert_parsed(input: &str, result: &ParsedFilename, expected: &ParsedFilename) {
         assert_eq!(result.title, expected.title, "title mismatch for '{input}'");
         assert_eq!(
             result.author, expected.author,
@@ -290,6 +282,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn filename_parsing_table() {
         let cases: Vec<(&str, ParsedFilename)> = vec![
             // Pattern 1: Author - Title (Year)
@@ -469,8 +462,7 @@ mod tests {
 
     #[test]
     fn path_directory_does_not_override_filename_info() {
-        let path =
-            PathBuf::from("Some Author/Some Title/Isaac Asimov - Foundation (1951).epub");
+        let path = PathBuf::from("Some Author/Some Title/Isaac Asimov - Foundation (1951).epub");
         let result = parse_path(&path);
         // Filename takes priority: author and title come from the filename.
         assert_eq!(result.author, Some("Isaac Asimov".into()));
@@ -499,7 +491,10 @@ mod tests {
         };
         // 0.4 (title) + 0.3 (author) + 0.15 (series) + 0.15 (year) = 1.0
         let score = parsed.completeness_score();
-        assert!((score - 1.0).abs() < f32::EPSILON, "expected 1.0, got {score}");
+        assert!(
+            (score - 1.0).abs() < f32::EPSILON,
+            "expected 1.0, got {score}"
+        );
     }
 
     #[test]
@@ -509,7 +504,10 @@ mod tests {
             ..Default::default()
         };
         let score = parsed.completeness_score();
-        assert!((score - 0.4).abs() < f32::EPSILON, "expected 0.4, got {score}");
+        assert!(
+            (score - 0.4).abs() < f32::EPSILON,
+            "expected 0.4, got {score}"
+        );
     }
 
     #[test]
@@ -520,7 +518,9 @@ mod tests {
 
     #[test]
     fn strip_various_extensions() {
-        for ext in &[".epub", ".pdf", ".mobi", ".azw3", ".cbz", ".fb2", ".txt", ".djvu"] {
+        for ext in &[
+            ".epub", ".pdf", ".mobi", ".azw3", ".cbz", ".fb2", ".txt", ".djvu",
+        ] {
             let filename = format!("MyBook{ext}");
             let result = parse_filename(&filename);
             assert_eq!(

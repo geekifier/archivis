@@ -86,10 +86,7 @@ pub fn score_metadata(
 ) -> MetadataScore {
     let mut confidence = 0.0_f32;
 
-    let has_valid_isbn = embedded
-        .identifiers
-        .iter()
-        .any(is_valid_identifier);
+    let has_valid_isbn = embedded.identifiers.iter().any(is_valid_identifier);
 
     if has_valid_isbn {
         confidence += ISBN_BONUS;
@@ -99,10 +96,7 @@ pub fn score_metadata(
         .title
         .as_deref()
         .is_some_and(|t| !is_garbage_title(t));
-    let has_author = embedded
-        .authors
-        .iter()
-        .any(|a| !is_garbage_author(a));
+    let has_author = embedded.authors.iter().any(|a| !is_garbage_author(a));
 
     if has_title && has_author {
         confidence += TITLE_AUTHOR_BONUS;
@@ -519,7 +513,10 @@ mod tests {
     #[test]
     fn title_match_is_case_insensitive() {
         assert!(titles_match("DUNE", "dune"));
-        assert!(titles_match("The Rust Programming Language", "the rust programming language"));
+        assert!(titles_match(
+            "The Rust Programming Language",
+            "the rust programming language"
+        ));
     }
 
     #[test]

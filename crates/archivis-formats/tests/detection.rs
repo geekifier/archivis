@@ -10,8 +10,8 @@ fn build_epub() -> Vec<u8> {
     let mut zip = zip::ZipWriter::new(cursor);
 
     // The mimetype entry must be stored (not compressed) and be the first entry.
-    let options = zip::write::SimpleFileOptions::default()
-        .compression_method(zip::CompressionMethod::Stored);
+    let options =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
     zip.start_file("mimetype", options).unwrap();
     zip.write_all(b"application/epub+zip").unwrap();
 
@@ -52,8 +52,8 @@ fn build_cbz() -> Vec<u8> {
     let cursor = std::io::Cursor::new(buf);
     let mut zip = zip::ZipWriter::new(cursor);
 
-    let options = zip::write::SimpleFileOptions::default()
-        .compression_method(zip::CompressionMethod::Stored);
+    let options =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
 
     // A tiny 1x1 PNG (valid header, not a real image but has the extension)
     zip.start_file("page001.png", options).unwrap();
@@ -206,9 +206,7 @@ fn fb2_with_xml_declaration() {
 #[test]
 fn fb2_with_bom() {
     let mut data = vec![0xEF, 0xBB, 0xBF]; // UTF-8 BOM
-    data.extend_from_slice(
-        b"<?xml version=\"1.0\"?>\n<FictionBook><body/></FictionBook>",
-    );
+    data.extend_from_slice(b"<?xml version=\"1.0\"?>\n<FictionBook><body/></FictionBook>");
     assert_eq!(detect::detect(&data).unwrap(), BookFormat::Fb2);
 }
 
@@ -218,8 +216,8 @@ fn zip_without_epub_or_images_is_unknown() {
     let cursor = std::io::Cursor::new(buf);
     let mut zip = zip::ZipWriter::new(cursor);
 
-    let options = zip::write::SimpleFileOptions::default()
-        .compression_method(zip::CompressionMethod::Stored);
+    let options =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
     zip.start_file("readme.txt", options).unwrap();
     zip.write_all(b"just a text file in a zip").unwrap();
 
