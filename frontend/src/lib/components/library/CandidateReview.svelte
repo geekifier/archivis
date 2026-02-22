@@ -8,17 +8,20 @@
 		candidates: CandidateResponse[];
 		onapply: (updated: BookDetail) => void;
 		onreject: (candidateId: string) => void;
+		onundo: (updated: BookDetail) => void;
 	}
 
-	let { book, candidates, onapply, onreject }: Props = $props();
+	let { book, candidates, onapply, onreject, onundo }: Props = $props();
 
 	let applyingId = $state<string | null>(null);
 	let rejectingId = $state<string | null>(null);
+	let undoingId = $state<string | null>(null);
 	let actionError = $state<string | null>(null);
 
 	const pendingCandidates = $derived(candidates.filter((c) => c.status === 'pending'));
 	const rejectedCandidates = $derived(candidates.filter((c) => c.status === 'rejected'));
 	const appliedCandidates = $derived(candidates.filter((c) => c.status === 'applied'));
+	const hasAppliedCandidate = $derived(appliedCandidates.length > 0);
 
 	async function handleApply(candidateId: string) {
 		applyingId = candidateId;
@@ -53,6 +56,24 @@
 						: 'Failed to reject candidate';
 		} finally {
 			rejectingId = null;
+		}
+	}
+
+	async function handleUndo(candidateId: string) {
+		undoingId = candidateId;
+		actionError = null;
+		try {
+			const updated = await api.identify.undoCandidate(book.id, candidateId);
+			onundo(updated);
+		} catch (err) {
+			actionError =
+				err instanceof ApiError
+					? err.userMessage
+					: err instanceof Error
+						? err.message
+						: 'Failed to undo candidate';
+		} finally {
+			undoingId = null;
 		}
 	}
 
@@ -108,7 +129,7 @@
 	{:else}
 		<!-- Pending candidates -->
 		{#each pendingCandidates as candidate (candidate.id)}
-			<div class="rounded-lg border border-border bg-card shadow-sm">
+			<div class="rounded-lg border border-border bg-card shadow-sm {hasAppliedCandidate ? 'opacity-50' : ''}">
 				<!-- Candidate header -->
 				<div class="flex items-center justify-between border-b border-border px-4 py-3">
 					<div class="flex items-center gap-2">
@@ -131,31 +152,35 @@
 						</div>
 					</div>
 					<div class="flex items-center gap-2">
-						<Button
-							size="sm"
-							variant="outline"
-							class="h-7 px-2 text-xs"
-							disabled={rejectingId === candidate.id || applyingId !== null}
-							onclick={() => handleReject(candidate.id)}
-						>
-							{#if rejectingId === candidate.id}
-								Rejecting...
-							{:else}
-								Reject
-							{/if}
-						</Button>
-						<Button
-							size="sm"
-							class="h-7 px-2 text-xs"
-							disabled={applyingId === candidate.id || rejectingId !== null}
-							onclick={() => handleApply(candidate.id)}
-						>
-							{#if applyingId === candidate.id}
-								Applying...
-							{:else}
-								Apply
-							{/if}
-						</Button>
+						{#if hasAppliedCandidate}
+							<span class="text-xs text-muted-foreground italic">Another candidate was applied</span>
+						{:else}
+							<Button
+								size="sm"
+								variant="outline"
+								class="h-7 px-2 text-xs"
+								disabled={rejectingId === candidate.id || applyingId !== null}
+								onclick={() => handleReject(candidate.id)}
+							>
+								{#if rejectingId === candidate.id}
+									Rejecting...
+								{:else}
+									Reject
+								{/if}
+							</Button>
+							<Button
+								size="sm"
+								class="h-7 px-2 text-xs"
+								disabled={applyingId === candidate.id || rejectingId !== null}
+								onclick={() => handleApply(candidate.id)}
+							>
+								{#if applyingId === candidate.id}
+									Applying...
+								{:else}
+									Apply
+								{/if}
+							</Button>
+						{/if}
 					</div>
 				</div>
 
@@ -304,18 +329,33 @@
 				<h4 class="text-xs font-medium text-muted-foreground">Applied</h4>
 				{#each appliedCandidates as candidate (candidate.id)}
 					<div class="rounded-lg border border-green-200 bg-green-50/50 px-4 py-2.5 dark:border-green-900/30 dark:bg-green-900/10">
-						<div class="flex items-center gap-2">
-							<span
-								class="inline-flex rounded-full px-2 py-0.5 text-xs font-medium {providerColorClass(candidate.provider_name)}"
+						<div class="flex items-center justify-between">
+							<div class="flex items-center gap-2">
+								<span
+									class="inline-flex rounded-full px-2 py-0.5 text-xs font-medium {providerColorClass(candidate.provider_name)}"
+								>
+									{candidate.provider_name}
+								</span>
+								<span class="text-xs text-muted-foreground">
+									{formatScore(candidate.score)} confidence
+								</span>
+								<span class="inline-flex rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-800 dark:bg-green-900/30 dark:text-green-400">
+									Applied
+								</span>
+							</div>
+							<Button
+								size="sm"
+								variant="outline"
+								class="h-7 px-2 text-xs"
+								disabled={undoingId === candidate.id}
+								onclick={() => handleUndo(candidate.id)}
 							>
-								{candidate.provider_name}
-							</span>
-							<span class="text-xs text-muted-foreground">
-								{formatScore(candidate.score)} confidence
-							</span>
-							<span class="inline-flex rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-800 dark:bg-green-900/30 dark:text-green-400">
-								Applied
-							</span>
+								{#if undoingId === candidate.id}
+									Undoing...
+								{:else}
+									Undo
+								{/if}
+							</Button>
 						</div>
 					</div>
 				{/each}

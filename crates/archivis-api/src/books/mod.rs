@@ -36,4 +36,8 @@ pub fn router() -> Router<AppState> {
             "/{id}/candidates/{candidate_id}/reject",
             post(identify_handlers::reject_candidate),
         )
+        .route(
+            "/{id}/candidates/{candidate_id}/undo",
+            post(identify_handlers::undo_candidate),
+        )
 }

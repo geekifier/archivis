@@ -229,6 +229,11 @@
 		);
 	}
 
+	function handleCandidateUndone(updated: BookDetail) {
+		book = updated;
+		loadCandidates();
+	}
+
 	// Load candidates when book loads (for books that were already identified)
 	$effect(() => {
 		if (book && !loading) {
@@ -643,6 +648,7 @@
 							{candidates}
 							onapply={handleCandidateApplied}
 							onreject={handleCandidateRejected}
+							onundo={handleCandidateUndone}
 						/>
 					{/if}
 

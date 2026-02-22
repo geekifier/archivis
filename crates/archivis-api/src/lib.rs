@@ -92,6 +92,7 @@ mod openapi {
             super::identify::handlers::list_candidates,
             super::identify::handlers::apply_candidate,
             super::identify::handlers::reject_candidate,
+            super::identify::handlers::undo_candidate,
             super::identify::handlers::batch_identify,
             super::identify::handlers::identify_all,
         ),

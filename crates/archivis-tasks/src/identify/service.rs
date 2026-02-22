@@ -167,6 +167,20 @@ impl<S: StorageBackend> IdentificationService<S> {
         book_id: Uuid,
         candidate_id: Uuid,
     ) -> Result<Book, TaskError> {
+        // Guard: check if another candidate is already applied for this book
+        let existing_candidates = CandidateRepository::list_by_book(&self.db_pool, book_id)
+            .await
+            .map_err(|e| TaskError::Failed(format!("failed to list candidates: {e}")))?;
+
+        if existing_candidates
+            .iter()
+            .any(|c| c.status == CandidateStatus::Applied && c.id != candidate_id)
+        {
+            return Err(TaskError::Failed(
+                "another candidate is already applied for this book".into(),
+            ));
+        }
+
         // 1. Load candidate from DB
         let candidate = CandidateRepository::get_by_id(&self.db_pool, candidate_id)
             .await
@@ -249,6 +263,23 @@ impl<S: StorageBackend> IdentificationService<S> {
             .await
             .map_err(|e| TaskError::Failed(format!("failed to update candidate status: {e}")))?;
 
+        // 7. Auto-reject all other pending candidates for this book
+        let all_candidates = CandidateRepository::list_by_book(&self.db_pool, book_id)
+            .await
+            .map_err(|e| TaskError::Failed(format!("failed to list candidates: {e}")))?;
+
+        for other in &all_candidates {
+            if other.id != candidate_id && other.status == CandidateStatus::Pending {
+                CandidateRepository::update_status(
+                    &self.db_pool,
+                    other.id,
+                    CandidateStatus::Rejected,
+                )
+                .await
+                .map_err(|e| TaskError::Failed(format!("failed to reject other candidate: {e}")))?;
+            }
+        }
+
         info!(
             book_id = %book_id,
             candidate_id = %candidate_id,
@@ -260,6 +291,99 @@ impl<S: StorageBackend> IdentificationService<S> {
         BookRepository::get_by_id(&self.db_pool, book_id)
             .await
             .map_err(|e| TaskError::Failed(format!("failed to reload book: {e}")))
+    }
+
+    /// Undo a previously applied candidate.
+    ///
+    /// Removes identifiers that were added by the candidate's provider,
+    /// resets the candidate back to `Pending`, restores all other `Rejected`
+    /// candidates to `Pending`, and sets `metadata_status` to `NeedsReview`.
+    ///
+    /// Does **not** revert title/author/description changes (too complex
+    /// and potentially destructive if the user has since edited them).
+    pub async fn undo_candidate(
+        &self,
+        book_id: Uuid,
+        candidate_id: Uuid,
+    ) -> Result<Book, TaskError> {
+        // 1. Load candidate and verify it's Applied
+        let candidate = CandidateRepository::get_by_id(&self.db_pool, candidate_id)
+            .await
+            .map_err(|e| TaskError::Failed(format!("failed to load candidate: {e}")))?
+            .ok_or_else(|| TaskError::Failed(format!("candidate not found: {candidate_id}")))?;
+
+        if candidate.book_id != book_id {
+            return Err(TaskError::Failed(
+                "candidate does not belong to the specified book".into(),
+            ));
+        }
+
+        if candidate.status != CandidateStatus::Applied {
+            return Err(TaskError::Failed(format!(
+                "candidate is {}, can only undo applied candidates",
+                candidate.status
+            )));
+        }
+
+        // 2. Remove identifiers added by this provider
+        let removed = IdentifierRepository::delete_by_provider(
+            &self.db_pool,
+            book_id,
+            &candidate.provider_name,
+        )
+        .await
+        .map_err(|e| TaskError::Failed(format!("failed to remove provider identifiers: {e}")))?;
+
+        debug!(
+            book_id = %book_id,
+            provider = %candidate.provider_name,
+            removed = removed,
+            "removed provider identifiers"
+        );
+
+        // 3. Set this candidate back to Pending
+        CandidateRepository::update_status(&self.db_pool, candidate_id, CandidateStatus::Pending)
+            .await
+            .map_err(|e| TaskError::Failed(format!("failed to reset candidate status: {e}")))?;
+
+        // 4. Restore all other Rejected candidates for this book to Pending
+        let all_candidates = CandidateRepository::list_by_book(&self.db_pool, book_id)
+            .await
+            .map_err(|e| TaskError::Failed(format!("failed to list candidates: {e}")))?;
+
+        for other in &all_candidates {
+            if other.id != candidate_id && other.status == CandidateStatus::Rejected {
+                CandidateRepository::update_status(
+                    &self.db_pool,
+                    other.id,
+                    CandidateStatus::Pending,
+                )
+                .await
+                .map_err(|e| {
+                    TaskError::Failed(format!("failed to restore candidate status: {e}"))
+                })?;
+            }
+        }
+
+        // 5. Update book metadata_status back to NeedsReview
+        let mut book = BookRepository::get_by_id(&self.db_pool, book_id)
+            .await
+            .map_err(|e| TaskError::Failed(format!("failed to load book: {e}")))?;
+
+        book.metadata_status = MetadataStatus::NeedsReview;
+
+        BookRepository::update(&self.db_pool, &book)
+            .await
+            .map_err(|e| TaskError::Failed(format!("failed to update book status: {e}")))?;
+
+        info!(
+            book_id = %book_id,
+            candidate_id = %candidate_id,
+            provider = %candidate.provider_name,
+            "candidate application undone"
+        );
+
+        Ok(book)
     }
 
     /// Add new identifiers from the provider metadata.

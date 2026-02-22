@@ -59,6 +59,25 @@ impl IdentifierRepository {
             .collect()
     }
 
+    /// Delete all identifiers for a book that came from a specific provider.
+    pub async fn delete_by_provider(
+        pool: &SqlitePool,
+        book_id: Uuid,
+        provider_name: &str,
+    ) -> Result<u64, DbError> {
+        let book_id_str = book_id.to_string();
+        let result = sqlx::query!(
+            "DELETE FROM identifiers WHERE book_id = ? AND source_type = 'provider' AND source_name = ?",
+            book_id_str,
+            provider_name,
+        )
+        .execute(pool)
+        .await
+        .map_err(|e| DbError::Query(e.to_string()))?;
+
+        Ok(result.rows_affected())
+    }
+
     pub async fn find_by_value(
         pool: &SqlitePool,
         identifier_type: &str,

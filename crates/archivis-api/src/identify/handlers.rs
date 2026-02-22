@@ -134,7 +134,16 @@ pub async fn apply_candidate(
         .identify_service()
         .apply_candidate(book_id, candidate_id)
         .await
-        .map_err(|e| ApiError::Internal(format!("failed to apply candidate: {e}")))?;
+        .map_err(|e| {
+            let msg = e.to_string();
+            if msg.contains("another candidate is already applied") {
+                ApiError::Core(archivis_core::errors::ArchivisError::Db(
+                    archivis_core::errors::DbError::Constraint(msg),
+                ))
+            } else {
+                ApiError::Internal(format!("failed to apply candidate: {e}"))
+            }
+        })?;
 
     let bwr = BookRepository::get_with_relations(pool, book_id).await?;
     Ok(Json(bwr.into()))
@@ -190,6 +199,64 @@ pub async fn reject_candidate(
     CandidateRepository::update_status(pool, candidate_id, CandidateStatus::Rejected).await?;
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// `POST /api/books/{id}/candidates/{candidate_id}/undo` -- undo an applied candidate.
+#[utoipa::path(
+    post,
+    path = "/api/books/{id}/candidates/{candidate_id}/undo",
+    tag = "identify",
+    params(
+        ("id" = Uuid, Path, description = "Book ID"),
+        ("candidate_id" = Uuid, Path, description = "Candidate ID"),
+    ),
+    responses(
+        (status = 200, description = "Candidate application undone, book updated", body = BookDetail),
+        (status = 404, description = "Book or candidate not found"),
+        (status = 409, description = "Candidate is not in applied state"),
+        (status = 401, description = "Not authenticated"),
+    ),
+    security(("bearer" = []))
+)]
+pub async fn undo_candidate(
+    State(state): State<AppState>,
+    AuthUser(_user): AuthUser,
+    Path((book_id, candidate_id)): Path<(Uuid, Uuid)>,
+) -> Result<Json<BookDetail>, ApiError> {
+    let pool = state.db_pool();
+
+    // Verify book exists
+    BookRepository::get_by_id(pool, book_id).await?;
+
+    // Check candidate exists and belongs to this book
+    let candidate = CandidateRepository::get_by_id(pool, candidate_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("candidate not found: {candidate_id}")))?;
+
+    if candidate.book_id != book_id {
+        return Err(ApiError::NotFound(format!(
+            "candidate {candidate_id} does not belong to book {book_id}"
+        )));
+    }
+
+    if candidate.status != CandidateStatus::Applied {
+        return Err(ApiError::Core(archivis_core::errors::ArchivisError::Db(
+            archivis_core::errors::DbError::Constraint(format!(
+                "candidate is {}, can only undo applied candidates",
+                candidate.status
+            )),
+        )));
+    }
+
+    // Undo the candidate via the identification service
+    state
+        .identify_service()
+        .undo_candidate(book_id, candidate_id)
+        .await
+        .map_err(|e| ApiError::Internal(format!("failed to undo candidate: {e}")))?;
+
+    let bwr = BookRepository::get_with_relations(pool, book_id).await?;
+    Ok(Json(bwr.into()))
 }
 
 /// POST /api/identify/batch -- trigger identification for multiple books.

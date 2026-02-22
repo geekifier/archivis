@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM identifiers WHERE book_id = ? AND source_type = 'provider' AND source_name = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "15c4caf5d9694271b68be4fc910a453f2f2c31bd29d9ff26b0bd5ddc436501bb"
+}

@@ -397,6 +397,14 @@ export const api = {
 			);
 		},
 
+		/** Undo an applied candidate, restoring all candidates to pending. */
+		undoCandidate(bookId: string, candidateId: string): Promise<BookDetail> {
+			return request<BookDetail>(
+				'POST',
+				`/books/${encodeURIComponent(bookId)}/candidates/${encodeURIComponent(candidateId)}/undo`
+			);
+		},
+
 		/** Trigger identification for multiple books. */
 		batch(bookIds: string[]): Promise<IdentifyResponse[]> {
 			return request<IdentifyResponse[]>('POST', '/identify/batch', { book_ids: bookIds });
