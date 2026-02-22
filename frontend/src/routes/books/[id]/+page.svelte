@@ -37,11 +37,6 @@
 	const authors = $derived(book?.authors ?? []);
 	const primaryAuthors = $derived(authors.filter((a) => a.role === 'author'));
 	const otherContributors = $derived(authors.filter((a) => a.role !== 'author'));
-	const authorDisplay = $derived(
-		primaryAuthors.length > 0
-			? primaryAuthors.map((a) => a.name).join(', ')
-			: authors.map((a) => a.name).join(', ')
-	);
 
 	function fetchBook() {
 		loading = true;
@@ -179,16 +174,6 @@
 
 	function formatFormatBadge(format: string): string {
 		return format.toUpperCase();
-	}
-
-	function seriesDisplay(series: { name: string; position: number | null }): string {
-		if (series.position != null) {
-			const pos = Number.isInteger(series.position)
-				? series.position.toString()
-				: series.position.toFixed(1);
-			return `Book ${pos} in ${series.name}`;
-		}
-		return series.name;
 	}
 </script>
 
@@ -437,8 +422,20 @@
 								</Button>
 							</div>
 						</div>
-						{#if authorDisplay}
-							<p class="mt-1 text-lg text-muted-foreground">{authorDisplay}</p>
+						{#if primaryAuthors.length > 0}
+							<p class="mt-1 text-lg text-muted-foreground">
+								{#each primaryAuthors as a, i (a.id)}<a
+										href="/authors/{a.id}"
+										class="transition-colors hover:text-foreground hover:underline"
+									>{a.name}</a>{#if i < primaryAuthors.length - 1},&nbsp;{/if}{/each}
+							</p>
+						{:else if authors.length > 0}
+							<p class="mt-1 text-lg text-muted-foreground">
+								{#each authors as a, i (a.id)}<a
+										href="/authors/{a.id}"
+										class="transition-colors hover:text-foreground hover:underline"
+									>{a.name}</a>{#if i < authors.length - 1},&nbsp;{/if}{/each}
+							</p>
 						{/if}
 						<div class="mt-3 flex flex-wrap items-center gap-3">
 							<span
@@ -465,7 +462,10 @@
 							<div class="mt-1 space-y-0.5">
 								{#each otherContributors as contributor (contributor.id)}
 									<p class="text-sm">
-										{contributor.name}
+										<a
+											href="/authors/{contributor.id}"
+											class="transition-colors hover:text-primary hover:underline"
+										>{contributor.name}</a>
 										<span class="text-muted-foreground">({contributor.role})</span>
 									</p>
 								{/each}
@@ -530,7 +530,15 @@
 							<h3 class="text-sm font-semibold text-muted-foreground">Series</h3>
 							<div class="mt-1 space-y-1">
 								{#each book.series as s (s.id)}
-									<p class="text-sm font-medium">{seriesDisplay(s)}</p>
+									<p class="text-sm font-medium">
+										{#if s.position != null}
+											Book {Number.isInteger(s.position) ? s.position.toString() : s.position.toFixed(1)} in
+										{/if}
+										<a
+											href="/series/{s.id}"
+											class="transition-colors hover:text-primary hover:underline"
+										>{s.name}</a>
+									</p>
 								{/each}
 							</div>
 						</div>

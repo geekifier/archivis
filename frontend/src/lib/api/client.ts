@@ -1,6 +1,7 @@
 import { goto } from '$app/navigation';
 import { parseApiError } from './errors.js';
 import type {
+	AuthorResponse,
 	AuthStatusResponse,
 	BookDetail,
 	BookListParams,
@@ -14,6 +15,7 @@ import type {
 	PaginatedTags,
 	PublisherResponse,
 	ScanManifestResponse,
+	SeriesResponse,
 	SetBookAuthorsRequest,
 	SetBookSeriesRequest,
 	SetBookTagsRequest,
@@ -219,10 +221,32 @@ export const api = {
 	},
 
 	authors: {
+		/** Fetch author detail by ID. */
+		get(id: string): Promise<AuthorResponse> {
+			return request<AuthorResponse>('GET', `/authors/${encodeURIComponent(id)}`);
+		},
+
 		/** Search authors by query string. */
 		search(q: string): Promise<PaginatedAuthors> {
 			const params = new URLSearchParams({ q, per_page: '10' });
 			return request<PaginatedAuthors>('GET', `/authors?${params.toString()}`);
+		},
+
+		/** List books by a specific author. */
+		listBooks(id: string, params?: BookListParams): Promise<PaginatedBooks> {
+			const searchParams = new URLSearchParams();
+			if (params) {
+				for (const [key, value] of Object.entries(params)) {
+					if (value !== undefined && value !== null && value !== '') {
+						searchParams.set(key, String(value));
+					}
+				}
+			}
+			const qs = searchParams.toString();
+			return request<PaginatedBooks>(
+				'GET',
+				`/authors/${encodeURIComponent(id)}/books${qs ? `?${qs}` : ''}`
+			);
 		}
 	},
 
@@ -248,10 +272,32 @@ export const api = {
 	},
 
 	series: {
+		/** Fetch series detail by ID. */
+		get(id: string): Promise<SeriesResponse> {
+			return request<SeriesResponse>('GET', `/series/${encodeURIComponent(id)}`);
+		},
+
 		/** Search series by query string. */
 		search(q: string): Promise<PaginatedSeries> {
 			const params = new URLSearchParams({ q, per_page: '10' });
 			return request<PaginatedSeries>('GET', `/series?${params.toString()}`);
+		},
+
+		/** List books in a specific series. */
+		listBooks(id: string, params?: BookListParams): Promise<PaginatedBooks> {
+			const searchParams = new URLSearchParams();
+			if (params) {
+				for (const [key, value] of Object.entries(params)) {
+					if (value !== undefined && value !== null && value !== '') {
+						searchParams.set(key, String(value));
+					}
+				}
+			}
+			const qs = searchParams.toString();
+			return request<PaginatedBooks>(
+				'GET',
+				`/series/${encodeURIComponent(id)}/books${qs ? `?${qs}` : ''}`
+			);
 		}
 	},
 
