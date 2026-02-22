@@ -48,6 +48,22 @@ sqlx-prepare:
 run:
     cargo run --package archivis-server
 
+# Run backend + frontend dev server together
+dev:
+    #!/usr/bin/env bash
+    trap 'kill 0' EXIT
+    cargo run --package archivis-server &
+    cd frontend && npm run dev &
+    wait
+
+# Run frontend dev server only (expects backend on :9514)
+dev-frontend:
+    cd frontend && npm run dev
+
+# Run frontend checks (build + lint + typecheck)
+check-frontend:
+    cd frontend && npm run build && npm run lint && npm run check
+
 # Run CI pipeline locally via act (requires Docker)
 ci-local *args:
     act {{ args }}
