@@ -1,6 +1,7 @@
 # General
 .docs/
 .local/
+.env
 # Runtime data
 /data/
 

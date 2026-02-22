@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE tasks SET status = 'pending', started_at = NULL, progress = 0, message = 'recovered after restart' WHERE status = 'running'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": []
+  },
+  "hash": "422acccb50f2eca11df643ac4bb7f91b3793637bdc485cf39df4d8696bc33e3b"
+}

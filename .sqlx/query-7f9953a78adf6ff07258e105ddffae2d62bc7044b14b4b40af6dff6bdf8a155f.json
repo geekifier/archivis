@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO tasks (id, task_type, payload, status, progress, message, result, created_at, started_at, completed_at, error_message)\n             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 11
+    },
+    "nullable": []
+  },
+  "hash": "7f9953a78adf6ff07258e105ddffae2d62bc7044b14b4b40af6dff6bdf8a155f"
+}

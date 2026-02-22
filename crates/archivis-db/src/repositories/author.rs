@@ -3,36 +3,50 @@ use archivis_core::models::Author;
 use sqlx::SqlitePool;
 use uuid::Uuid;
 
-use super::types::{PaginatedResult, PaginationParams};
+use super::types::{PaginatedResult, PaginationParams, SortOrder};
 
 pub struct AuthorRepository;
+
+/// Helper to fetch a page of author rows with a given ORDER BY clause.
+macro_rules! fetch_author_rows {
+    ($sql:literal, $pool:expr $(, $bind:expr)*) => {
+        sqlx::query_as!(AuthorRow, $sql $(, $bind)*)
+            .fetch_all($pool)
+            .await
+            .map_err(|e| DbError::Query(e.to_string()))?
+    };
+}
 
 impl AuthorRepository {
     pub async fn create(pool: &SqlitePool, author: &Author) -> Result<(), DbError> {
         let id = author.id.to_string();
-        sqlx::query("INSERT INTO authors (id, name, sort_name) VALUES (?, ?, ?)")
-            .bind(&id)
-            .bind(&author.name)
-            .bind(&author.sort_name)
-            .execute(pool)
-            .await
-            .map_err(|e| DbError::Query(e.to_string()))?;
+        sqlx::query!(
+            "INSERT INTO authors (id, name, sort_name) VALUES (?, ?, ?)",
+            id,
+            author.name,
+            author.sort_name,
+        )
+        .execute(pool)
+        .await
+        .map_err(|e| DbError::Query(e.to_string()))?;
 
         Ok(())
     }
 
     pub async fn get_by_id(pool: &SqlitePool, id: Uuid) -> Result<Author, DbError> {
         let id_str = id.to_string();
-        let row =
-            sqlx::query_as::<_, AuthorRow>("SELECT id, name, sort_name FROM authors WHERE id = ?")
-                .bind(&id_str)
-                .fetch_optional(pool)
-                .await
-                .map_err(|e| DbError::Query(e.to_string()))?
-                .ok_or(DbError::NotFound {
-                    entity: "author",
-                    id: id_str,
-                })?;
+        let row = sqlx::query_as!(
+            AuthorRow,
+            "SELECT id, name, sort_name FROM authors WHERE id = ?",
+            id_str,
+        )
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| DbError::Query(e.to_string()))?
+        .ok_or(DbError::NotFound {
+            entity: "author",
+            id: id_str,
+        })?;
 
         row.into_author()
     }
@@ -41,27 +55,38 @@ impl AuthorRepository {
         pool: &SqlitePool,
         params: &PaginationParams,
     ) -> Result<PaginatedResult<Author>, DbError> {
-        let sort_col = match params.sort_by.as_str() {
-            "name" => "name",
-            _ => "sort_name",
-        };
-        let sort_dir = params.sort_order.as_sql();
         let limit = params.per_page;
         let offset = params.offset();
 
-        let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM authors")
+        let total = sqlx::query_scalar!("SELECT COUNT(*) FROM authors")
             .fetch_one(pool)
             .await
             .map_err(|e| DbError::Query(e.to_string()))?;
 
-        let sql = format!(
-            "SELECT id, name, sort_name FROM authors ORDER BY {sort_col} {sort_dir} LIMIT {limit} OFFSET {offset}"
-        );
-
-        let rows = sqlx::query_as::<_, AuthorRow>(&sql)
-            .fetch_all(pool)
-            .await
-            .map_err(|e| DbError::Query(e.to_string()))?;
+        let rows =
+            match (params.sort_by.as_str(), params.sort_order) {
+                ("name", SortOrder::Asc) => {
+                    fetch_author_rows!(
+                "SELECT id, name, sort_name FROM authors ORDER BY name ASC LIMIT ? OFFSET ?",
+                pool, limit, offset
+            )
+                }
+                ("name", SortOrder::Desc) => {
+                    fetch_author_rows!(
+                "SELECT id, name, sort_name FROM authors ORDER BY name DESC LIMIT ? OFFSET ?",
+                pool, limit, offset
+            )
+                }
+                (_, SortOrder::Desc) => fetch_author_rows!(
+                "SELECT id, name, sort_name FROM authors ORDER BY sort_name DESC LIMIT ? OFFSET ?",
+                pool, limit, offset
+            ),
+                // Default: sort_name ASC
+                _ => fetch_author_rows!(
+                "SELECT id, name, sort_name FROM authors ORDER BY sort_name ASC LIMIT ? OFFSET ?",
+                pool, limit, offset
+            ),
+            };
 
         let authors = rows
             .into_iter()
@@ -74,13 +99,15 @@ impl AuthorRepository {
 
     pub async fn update(pool: &SqlitePool, author: &Author) -> Result<(), DbError> {
         let id = author.id.to_string();
-        let result = sqlx::query("UPDATE authors SET name = ?, sort_name = ? WHERE id = ?")
-            .bind(&author.name)
-            .bind(&author.sort_name)
-            .bind(&id)
-            .execute(pool)
-            .await
-            .map_err(|e| DbError::Query(e.to_string()))?;
+        let result = sqlx::query!(
+            "UPDATE authors SET name = ?, sort_name = ? WHERE id = ?",
+            author.name,
+            author.sort_name,
+            id,
+        )
+        .execute(pool)
+        .await
+        .map_err(|e| DbError::Query(e.to_string()))?;
 
         if result.rows_affected() == 0 {
             return Err(DbError::NotFound {
@@ -94,8 +121,7 @@ impl AuthorRepository {
 
     pub async fn delete(pool: &SqlitePool, id: Uuid) -> Result<(), DbError> {
         let id_str = id.to_string();
-        let result = sqlx::query("DELETE FROM authors WHERE id = ?")
-            .bind(&id_str)
+        let result = sqlx::query!("DELETE FROM authors WHERE id = ?", id_str)
             .execute(pool)
             .await
             .map_err(|e| DbError::Query(e.to_string()))?;
@@ -116,34 +142,37 @@ impl AuthorRepository {
         query: &str,
         params: &PaginationParams,
     ) -> Result<PaginatedResult<Author>, DbError> {
-        let sort_col = match params.sort_by.as_str() {
-            "name" => "name",
-            _ => "sort_name",
-        };
-        let sort_dir = params.sort_order.as_sql();
         let limit = params.per_page;
         let offset = params.offset();
         let pattern = format!("%{query}%");
 
-        let total: i64 = sqlx::query_scalar(
+        let total = sqlx::query_scalar!(
             "SELECT COUNT(*) FROM authors WHERE name LIKE ? COLLATE NOCASE OR sort_name LIKE ? COLLATE NOCASE",
+            pattern,
+            pattern,
         )
-        .bind(&pattern)
-        .bind(&pattern)
         .fetch_one(pool)
         .await
         .map_err(|e| DbError::Query(e.to_string()))?;
 
-        let sql = format!(
-            "SELECT id, name, sort_name FROM authors WHERE name LIKE ? COLLATE NOCASE OR sort_name LIKE ? COLLATE NOCASE ORDER BY {sort_col} {sort_dir} LIMIT {limit} OFFSET {offset}"
-        );
-
-        let rows = sqlx::query_as::<_, AuthorRow>(&sql)
-            .bind(&pattern)
-            .bind(&pattern)
-            .fetch_all(pool)
-            .await
-            .map_err(|e| DbError::Query(e.to_string()))?;
+        let rows = match (params.sort_by.as_str(), params.sort_order) {
+            ("name", SortOrder::Asc) => fetch_author_rows!(
+                "SELECT id, name, sort_name FROM authors WHERE name LIKE ? COLLATE NOCASE OR sort_name LIKE ? COLLATE NOCASE ORDER BY name ASC LIMIT ? OFFSET ?",
+                pool, pattern, pattern, limit, offset
+            ),
+            ("name", SortOrder::Desc) => fetch_author_rows!(
+                "SELECT id, name, sort_name FROM authors WHERE name LIKE ? COLLATE NOCASE OR sort_name LIKE ? COLLATE NOCASE ORDER BY name DESC LIMIT ? OFFSET ?",
+                pool, pattern, pattern, limit, offset
+            ),
+            (_, SortOrder::Desc) => fetch_author_rows!(
+                "SELECT id, name, sort_name FROM authors WHERE name LIKE ? COLLATE NOCASE OR sort_name LIKE ? COLLATE NOCASE ORDER BY sort_name DESC LIMIT ? OFFSET ?",
+                pool, pattern, pattern, limit, offset
+            ),
+            _ => fetch_author_rows!(
+                "SELECT id, name, sort_name FROM authors WHERE name LIKE ? COLLATE NOCASE OR sort_name LIKE ? COLLATE NOCASE ORDER BY sort_name ASC LIMIT ? OFFSET ?",
+                pool, pattern, pattern, limit, offset
+            ),
+        };
 
         let authors = rows
             .into_iter()
@@ -155,10 +184,11 @@ impl AuthorRepository {
     }
 
     pub async fn find_by_name(pool: &SqlitePool, name: &str) -> Result<Option<Author>, DbError> {
-        let row = sqlx::query_as::<_, AuthorRow>(
+        let row = sqlx::query_as!(
+            AuthorRow,
             "SELECT id, name, sort_name FROM authors WHERE name = ? COLLATE NOCASE",
+            name,
         )
-        .bind(name)
         .fetch_optional(pool)
         .await
         .map_err(|e| DbError::Query(e.to_string()))?;

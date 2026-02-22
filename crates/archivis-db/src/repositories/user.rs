@@ -13,16 +13,16 @@ impl UserRepository {
         let created_at = user.created_at.to_rfc3339();
         let is_active = i64::from(user.is_active);
 
-        sqlx::query(
+        sqlx::query!(
             "INSERT INTO users (id, username, email, password_hash, role, created_at, is_active) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            id,
+            user.username,
+            user.email,
+            user.password_hash,
+            role,
+            created_at,
+            is_active,
         )
-        .bind(&id)
-        .bind(&user.username)
-        .bind(&user.email)
-        .bind(&user.password_hash)
-        .bind(&role)
-        .bind(&created_at)
-        .bind(is_active)
         .execute(pool)
         .await
         .map_err(|e| DbError::Query(e.to_string()))?;
@@ -32,10 +32,11 @@ impl UserRepository {
 
     pub async fn get_by_id(pool: &SqlitePool, id: Uuid) -> Result<User, DbError> {
         let id_str = id.to_string();
-        let row = sqlx::query_as::<_, UserRow>(
+        let row = sqlx::query_as!(
+            UserRow,
             "SELECT id, username, email, password_hash, role, created_at, is_active FROM users WHERE id = ?",
+            id_str,
         )
-        .bind(&id_str)
         .fetch_optional(pool)
         .await
         .map_err(|e| DbError::Query(e.to_string()))?
@@ -48,10 +49,11 @@ impl UserRepository {
     }
 
     pub async fn get_by_username(pool: &SqlitePool, username: &str) -> Result<User, DbError> {
-        let row = sqlx::query_as::<_, UserRow>(
+        let row = sqlx::query_as!(
+            UserRow,
             "SELECT id, username, email, password_hash, role, created_at, is_active FROM users WHERE username = ?",
+            username,
         )
-        .bind(username)
         .fetch_optional(pool)
         .await
         .map_err(|e| DbError::Query(e.to_string()))?
@@ -68,14 +70,14 @@ impl UserRepository {
         let role = user.role.to_string();
         let is_active = i64::from(user.is_active);
 
-        let result = sqlx::query(
+        let result = sqlx::query!(
             "UPDATE users SET username = ?, email = ?, role = ?, is_active = ? WHERE id = ?",
+            user.username,
+            user.email,
+            role,
+            is_active,
+            id,
         )
-        .bind(&user.username)
-        .bind(&user.email)
-        .bind(&role)
-        .bind(is_active)
-        .bind(&id)
         .execute(pool)
         .await
         .map_err(|e| DbError::Query(e.to_string()))?;
@@ -93,12 +95,14 @@ impl UserRepository {
         password_hash: &str,
     ) -> Result<(), DbError> {
         let id_str = id.to_string();
-        let result = sqlx::query("UPDATE users SET password_hash = ? WHERE id = ?")
-            .bind(password_hash)
-            .bind(&id_str)
-            .execute(pool)
-            .await
-            .map_err(|e| DbError::Query(e.to_string()))?;
+        let result = sqlx::query!(
+            "UPDATE users SET password_hash = ? WHERE id = ?",
+            password_hash,
+            id_str,
+        )
+        .execute(pool)
+        .await
+        .map_err(|e| DbError::Query(e.to_string()))?;
 
         if result.rows_affected() == 0 {
             return Err(DbError::NotFound {
@@ -111,7 +115,8 @@ impl UserRepository {
     }
 
     pub async fn list(pool: &SqlitePool) -> Result<Vec<User>, DbError> {
-        let rows = sqlx::query_as::<_, UserRow>(
+        let rows = sqlx::query_as!(
+            UserRow,
             "SELECT id, username, email, password_hash, role, created_at, is_active FROM users ORDER BY username ASC",
         )
         .fetch_all(pool)
@@ -122,7 +127,7 @@ impl UserRepository {
     }
 
     pub async fn count(pool: &SqlitePool) -> Result<i64, DbError> {
-        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
+        let count = sqlx::query_scalar!("SELECT COUNT(*) FROM users")
             .fetch_one(pool)
             .await
             .map_err(|e| DbError::Query(e.to_string()))?;

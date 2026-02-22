@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO identifiers (id, book_id, identifier_type, value, source_type, source_name, confidence) VALUES (?, ?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": []
+  },
+  "hash": "6e6217f82262227ddb2e182ede20a77c98fefcbd934291c526d188a3288ce32f"
+}

@@ -13,14 +13,14 @@ impl SessionRepository {
         let expires_at = session.expires_at.to_rfc3339();
         let created_at = session.created_at.to_rfc3339();
 
-        sqlx::query(
+        sqlx::query!(
             "INSERT INTO sessions (id, user_id, token_hash, expires_at, created_at) VALUES (?, ?, ?, ?, ?)",
+            id,
+            user_id,
+            session.token_hash,
+            expires_at,
+            created_at,
         )
-        .bind(&id)
-        .bind(&user_id)
-        .bind(&session.token_hash)
-        .bind(&expires_at)
-        .bind(&created_at)
         .execute(pool)
         .await
         .map_err(|e| DbError::Query(e.to_string()))?;
@@ -32,10 +32,11 @@ impl SessionRepository {
         pool: &SqlitePool,
         token_hash: &str,
     ) -> Result<Session, DbError> {
-        let row = sqlx::query_as::<_, SessionRow>(
+        let row = sqlx::query_as!(
+            SessionRow,
             "SELECT id, user_id, token_hash, expires_at, created_at FROM sessions WHERE token_hash = ?",
+            token_hash,
         )
-        .bind(token_hash)
         .fetch_optional(pool)
         .await
         .map_err(|e| DbError::Query(e.to_string()))?
@@ -49,8 +50,7 @@ impl SessionRepository {
 
     pub async fn delete(pool: &SqlitePool, id: Uuid) -> Result<(), DbError> {
         let id_str = id.to_string();
-        let result = sqlx::query("DELETE FROM sessions WHERE id = ?")
-            .bind(&id_str)
+        let result = sqlx::query!("DELETE FROM sessions WHERE id = ?", id_str)
             .execute(pool)
             .await
             .map_err(|e| DbError::Query(e.to_string()))?;
@@ -67,8 +67,7 @@ impl SessionRepository {
 
     pub async fn delete_by_user(pool: &SqlitePool, user_id: Uuid) -> Result<(), DbError> {
         let user_id_str = user_id.to_string();
-        sqlx::query("DELETE FROM sessions WHERE user_id = ?")
-            .bind(&user_id_str)
+        sqlx::query!("DELETE FROM sessions WHERE user_id = ?", user_id_str)
             .execute(pool)
             .await
             .map_err(|e| DbError::Query(e.to_string()))?;
@@ -78,8 +77,7 @@ impl SessionRepository {
 
     pub async fn delete_expired(pool: &SqlitePool) -> Result<u64, DbError> {
         let now = Utc::now().to_rfc3339();
-        let result = sqlx::query("DELETE FROM sessions WHERE expires_at < ?")
-            .bind(&now)
+        let result = sqlx::query!("DELETE FROM sessions WHERE expires_at < ?", now)
             .execute(pool)
             .await
             .map_err(|e| DbError::Query(e.to_string()))?;

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE authors SET name = ?, sort_name = ? WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "1de3a8b991630a7e0071b2cb692ef7c3e27205b775bcfa39e67ad473af80d2b6"
+}

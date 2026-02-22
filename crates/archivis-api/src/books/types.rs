@@ -268,13 +268,14 @@ impl From<Book> for BookSummary {
 }
 
 impl From<BookAuthorEntry> for AuthorEntry {
+    #[allow(clippy::cast_possible_truncation)]
     fn from(entry: BookAuthorEntry) -> Self {
         Self {
             id: entry.author.id,
             name: entry.author.name,
             sort_name: entry.author.sort_name,
             role: entry.role,
-            position: entry.position,
+            position: entry.position as i32,
         }
     }
 }

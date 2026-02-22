@@ -23,16 +23,16 @@ impl IdentifierRepository {
             MetadataSource::Provider(name) => ("provider", Some(name.as_str())),
         };
 
-        sqlx::query(
+        sqlx::query!(
             "INSERT INTO identifiers (id, book_id, identifier_type, value, source_type, source_name, confidence) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            id,
+            book_id,
+            identifier_type,
+            identifier.value,
+            source_type,
+            source_name,
+            identifier.confidence,
         )
-        .bind(&id)
-        .bind(&book_id)
-        .bind(&identifier_type)
-        .bind(&identifier.value)
-        .bind(source_type)
-        .bind(source_name)
-        .bind(identifier.confidence)
         .execute(pool)
         .await
         .map_err(|e| DbError::Query(e.to_string()))?;
@@ -45,10 +45,11 @@ impl IdentifierRepository {
         book_id: Uuid,
     ) -> Result<Vec<Identifier>, DbError> {
         let id_str = book_id.to_string();
-        let rows = sqlx::query_as::<_, IdentifierRow>(
+        let rows = sqlx::query_as!(
+            IdentifierRow,
             "SELECT id, book_id, identifier_type, value, source_type, source_name, confidence FROM identifiers WHERE book_id = ?",
+            id_str,
         )
-        .bind(&id_str)
         .fetch_all(pool)
         .await
         .map_err(|e| DbError::Query(e.to_string()))?;
@@ -63,11 +64,12 @@ impl IdentifierRepository {
         identifier_type: &str,
         value: &str,
     ) -> Result<Vec<Identifier>, DbError> {
-        let rows = sqlx::query_as::<_, IdentifierRow>(
+        let rows = sqlx::query_as!(
+            IdentifierRow,
             "SELECT id, book_id, identifier_type, value, source_type, source_name, confidence FROM identifiers WHERE identifier_type = ? AND value = ?",
+            identifier_type,
+            value,
         )
-        .bind(identifier_type)
-        .bind(value)
         .fetch_all(pool)
         .await
         .map_err(|e| DbError::Query(e.to_string()))?;

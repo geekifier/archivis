@@ -4,7 +4,7 @@ use chrono::{DateTime, NaiveDate, Utc};
 use sqlx::SqlitePool;
 use uuid::Uuid;
 
-use super::types::{BookFilter, PaginatedResult, PaginationParams};
+use super::types::{BookFilter, PaginatedResult, PaginationParams, SortOrder};
 
 /// A book with all its related entities loaded.
 #[derive(Debug, Clone)]
@@ -23,7 +23,7 @@ pub struct BookWithRelations {
 pub struct BookAuthorEntry {
     pub author: Author,
     pub role: String,
-    pub position: i32,
+    pub position: i64,
 }
 
 /// A series entry with position.
@@ -34,6 +34,51 @@ pub struct BookSeriesEntry {
 }
 
 pub struct BookRepository;
+
+// ── Book list helper macros ────────────────────────────────────
+//
+// Each sort variant needs its own `query_as!()` invocation because
+// the macro requires a string literal for the SQL. The helper macros
+// reduce boilerplate: one for queries without FTS, one with FTS JOIN.
+
+/// Fetch book rows WITHOUT full-text search.
+macro_rules! fetch_books {
+    ($sql:literal, $pool:expr, $fmt:expr, $status:expr, $author:expr, $series:expr, $tags:expr, $limit:expr, $offset:expr) => {
+        sqlx::query_as!(
+            BookRow, $sql, $fmt, $fmt, $status, $status, $author, $author, $series, $series, $tags,
+            $tags, $limit, $offset,
+        )
+        .fetch_all($pool)
+        .await
+        .map_err(|e| DbError::Query(e.to_string()))?
+    };
+}
+
+/// Fetch book rows WITH full-text search JOIN.
+macro_rules! fetch_books_fts {
+    ($sql:literal, $pool:expr, $fts:expr, $fmt:expr, $status:expr, $author:expr, $series:expr, $tags:expr, $limit:expr, $offset:expr) => {
+        sqlx::query_as!(
+            BookRow, $sql, $fts, $fmt, $fmt, $status, $status, $author, $author, $series, $series,
+            $tags, $tags, $limit, $offset,
+        )
+        .fetch_all($pool)
+        .await
+        .map_err(|e| DbError::Query(e.to_string()))?
+    };
+}
+
+// ── SQL fragments (as constants for documentation; actual SQL is in macro call sites) ──
+//
+// Non-FTS WHERE clause (each filter is opt-in via IS NULL OR):
+//   WHERE (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?))
+//   AND (? IS NULL OR b.metadata_status = ?)
+//   AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?))
+//   AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?))
+//   AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?))))
+//
+// FTS variant prepends:
+//   JOIN books_fts ON books_fts.book_id = b.id WHERE books_fts MATCH ?
+//   AND (... same filters ...)
 
 impl BookRepository {
     pub async fn create(pool: &SqlitePool, book: &Book) -> Result<(), DbError> {
@@ -47,24 +92,24 @@ impl BookRepository {
             .and_then(|v| v.as_str().map(String::from))
             .unwrap_or_else(|| "unidentified".into());
 
-        sqlx::query(
+        sqlx::query!(
             "INSERT INTO books (id, title, sort_title, description, language, publication_date, publisher_id, added_at, updated_at, rating, page_count, metadata_status, metadata_confidence, cover_path)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            id,
+            book.title,
+            book.sort_title,
+            book.description,
+            book.language,
+            pub_date,
+            publisher_id,
+            added_at,
+            updated_at,
+            book.rating,
+            book.page_count,
+            status,
+            book.metadata_confidence,
+            book.cover_path,
         )
-        .bind(&id)
-        .bind(&book.title)
-        .bind(&book.sort_title)
-        .bind(&book.description)
-        .bind(&book.language)
-        .bind(&pub_date)
-        .bind(&publisher_id)
-        .bind(&added_at)
-        .bind(&updated_at)
-        .bind(book.rating)
-        .bind(book.page_count)
-        .bind(&status)
-        .bind(book.metadata_confidence)
-        .bind(&book.cover_path)
         .execute(pool)
         .await
         .map_err(|e| DbError::Query(e.to_string()))?;
@@ -74,10 +119,11 @@ impl BookRepository {
 
     pub async fn get_by_id(pool: &SqlitePool, id: Uuid) -> Result<Book, DbError> {
         let id_str = id.to_string();
-        let row = sqlx::query_as::<_, BookRow>(
+        let row = sqlx::query_as!(
+            BookRow,
             "SELECT id, title, sort_title, description, language, publication_date, publisher_id, added_at, updated_at, rating, page_count, metadata_status, metadata_confidence, cover_path FROM books WHERE id = ?",
+            id_str,
         )
-        .bind(&id_str)
         .fetch_optional(pool)
         .await
         .map_err(|e| DbError::Query(e.to_string()))?
@@ -89,97 +135,165 @@ impl BookRepository {
         row.into_book()
     }
 
+    #[allow(clippy::too_many_lines)] // 20 sort-variant match arms required by compile-time checked macros
     pub async fn list(
         pool: &SqlitePool,
         params: &PaginationParams,
         filter: &BookFilter,
     ) -> Result<PaginatedResult<Book>, DbError> {
-        let mut where_clauses = Vec::new();
-        let mut fts_join = String::new();
-
-        if let Some(ref query) = filter.query {
-            if !query.is_empty() {
-                fts_join = " JOIN books_fts ON books_fts.book_id = b.id".into();
-                // Escape FTS special chars to prevent injection
-                let escaped = query.replace('"', "\"\"");
-                where_clauses.push(format!("books_fts MATCH '\"{escaped}\"'"));
-            }
-        }
-
-        if let Some(ref format) = filter.format {
-            let fmt_str = serde_json::to_value(format)
+        // Prepare filter binds — None disables the filter via `IS NULL OR` short-circuit.
+        let fmt_filter = filter.format.as_ref().map(|f| {
+            serde_json::to_value(f)
                 .ok()
                 .and_then(|v| v.as_str().map(String::from))
-                .unwrap_or_default();
-            where_clauses.push(format!(
-                "b.id IN (SELECT book_id FROM book_files WHERE format = '{fmt_str}')"
-            ));
-        }
-
-        if let Some(ref status) = filter.status {
-            let status_str = serde_json::to_value(status)
+                .unwrap_or_default()
+        });
+        let status_filter = filter.status.as_ref().map(|s| {
+            serde_json::to_value(s)
                 .ok()
                 .and_then(|v| v.as_str().map(String::from))
-                .unwrap_or_default();
-            where_clauses.push(format!("b.metadata_status = '{status_str}'"));
-        }
+                .unwrap_or_default()
+        });
+        let author_filter = filter.author_id.clone();
+        let series_filter = filter.series_id.clone();
 
-        if let Some(ref author_id) = filter.author_id {
-            where_clauses.push(format!(
-                "b.id IN (SELECT book_id FROM book_authors WHERE author_id = '{author_id}')"
-            ));
-        }
+        // Tags: convert Vec<String> to a JSON array string for json_each()
+        let tags_json = filter
+            .tags
+            .as_ref()
+            .filter(|t| !t.is_empty())
+            .map(|t| serde_json::to_string(t).unwrap_or_default());
 
-        if let Some(ref series_id) = filter.series_id {
-            where_clauses.push(format!(
-                "b.id IN (SELECT book_id FROM book_series WHERE series_id = '{series_id}')"
-            ));
-        }
+        let limit = params.per_page;
+        let offset = params.offset();
 
-        if let Some(ref tags) = filter.tags {
-            if !tags.is_empty() {
-                let placeholders: Vec<String> = tags.iter().map(|t| format!("'{t}'")).collect();
-                where_clauses.push(format!(
-                    "b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN ({}))",
-                    placeholders.join(", ")
-                ));
-            }
-        }
+        // FTS query: wrap in double quotes for phrase matching, escape internal quotes
+        let fts_query = filter
+            .query
+            .as_ref()
+            .filter(|q| !q.is_empty())
+            .map(|q| format!("\"{}\"", q.replace('"', "\"\"")));
 
-        let where_clause = if where_clauses.is_empty() {
-            String::new()
-        } else {
-            format!(" WHERE {}", where_clauses.join(" AND "))
-        };
-
-        // Validate sort_by against allowed columns
-        let sort_col = match params.sort_by.as_str() {
-            "title" | "sort_title" => "b.sort_title",
-            "updated_at" => "b.updated_at",
-            "rating" => "b.rating",
-            "metadata_status" => "b.metadata_status",
-            _ => "b.added_at",
-        };
-        let sort_dir = params.sort_order.as_sql();
-
-        // Count query
-        let count_sql = format!("SELECT COUNT(*) FROM books b{fts_join}{where_clause}");
-        let total: i64 = sqlx::query_scalar(&count_sql)
+        let (total, rows) = if let Some(ref fts_q) = fts_query {
+            // ── FTS path: JOIN books_fts ────────────────────────────
+            let total = sqlx::query_scalar!(
+                "SELECT COUNT(*) FROM books b JOIN books_fts ON books_fts.book_id = b.id WHERE books_fts MATCH ? AND (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?))))",
+                fts_q,
+                fmt_filter, fmt_filter,
+                status_filter, status_filter,
+                author_filter, author_filter,
+                series_filter, series_filter,
+                tags_json, tags_json,
+            )
             .fetch_one(pool)
             .await
             .map_err(|e| DbError::Query(e.to_string()))?;
 
-        // Data query
-        let limit = params.per_page;
-        let offset = params.offset();
-        let data_sql = format!(
-            "SELECT b.id, b.title, b.sort_title, b.description, b.language, b.publication_date, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.metadata_confidence, b.cover_path FROM books b{fts_join}{where_clause} ORDER BY {sort_col} {sort_dir} LIMIT {limit} OFFSET {offset}",
-        );
+            let rows = match (params.sort_by.as_str(), params.sort_order) {
+                ("title" | "sort_title", SortOrder::Asc) => fetch_books_fts!(
+                    "SELECT b.id, b.title, b.sort_title, b.description, b.language, b.publication_date, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.metadata_confidence, b.cover_path FROM books b JOIN books_fts ON books_fts.book_id = b.id WHERE books_fts MATCH ? AND (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) ORDER BY b.sort_title ASC LIMIT ? OFFSET ?",
+                    pool, fts_q, fmt_filter, status_filter, author_filter, series_filter, tags_json, limit, offset
+                ),
+                ("title" | "sort_title", SortOrder::Desc) => fetch_books_fts!(
+                    "SELECT b.id, b.title, b.sort_title, b.description, b.language, b.publication_date, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.metadata_confidence, b.cover_path FROM books b JOIN books_fts ON books_fts.book_id = b.id WHERE books_fts MATCH ? AND (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) ORDER BY b.sort_title DESC LIMIT ? OFFSET ?",
+                    pool, fts_q, fmt_filter, status_filter, author_filter, series_filter, tags_json, limit, offset
+                ),
+                ("updated_at", SortOrder::Asc) => fetch_books_fts!(
+                    "SELECT b.id, b.title, b.sort_title, b.description, b.language, b.publication_date, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.metadata_confidence, b.cover_path FROM books b JOIN books_fts ON books_fts.book_id = b.id WHERE books_fts MATCH ? AND (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) ORDER BY b.updated_at ASC LIMIT ? OFFSET ?",
+                    pool, fts_q, fmt_filter, status_filter, author_filter, series_filter, tags_json, limit, offset
+                ),
+                ("updated_at", SortOrder::Desc) => fetch_books_fts!(
+                    "SELECT b.id, b.title, b.sort_title, b.description, b.language, b.publication_date, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.metadata_confidence, b.cover_path FROM books b JOIN books_fts ON books_fts.book_id = b.id WHERE books_fts MATCH ? AND (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) ORDER BY b.updated_at DESC LIMIT ? OFFSET ?",
+                    pool, fts_q, fmt_filter, status_filter, author_filter, series_filter, tags_json, limit, offset
+                ),
+                ("rating", SortOrder::Asc) => fetch_books_fts!(
+                    "SELECT b.id, b.title, b.sort_title, b.description, b.language, b.publication_date, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.metadata_confidence, b.cover_path FROM books b JOIN books_fts ON books_fts.book_id = b.id WHERE books_fts MATCH ? AND (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) ORDER BY b.rating ASC LIMIT ? OFFSET ?",
+                    pool, fts_q, fmt_filter, status_filter, author_filter, series_filter, tags_json, limit, offset
+                ),
+                ("rating", SortOrder::Desc) => fetch_books_fts!(
+                    "SELECT b.id, b.title, b.sort_title, b.description, b.language, b.publication_date, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.metadata_confidence, b.cover_path FROM books b JOIN books_fts ON books_fts.book_id = b.id WHERE books_fts MATCH ? AND (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) ORDER BY b.rating DESC LIMIT ? OFFSET ?",
+                    pool, fts_q, fmt_filter, status_filter, author_filter, series_filter, tags_json, limit, offset
+                ),
+                ("metadata_status", SortOrder::Asc) => fetch_books_fts!(
+                    "SELECT b.id, b.title, b.sort_title, b.description, b.language, b.publication_date, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.metadata_confidence, b.cover_path FROM books b JOIN books_fts ON books_fts.book_id = b.id WHERE books_fts MATCH ? AND (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) ORDER BY b.metadata_status ASC LIMIT ? OFFSET ?",
+                    pool, fts_q, fmt_filter, status_filter, author_filter, series_filter, tags_json, limit, offset
+                ),
+                ("metadata_status", SortOrder::Desc) => fetch_books_fts!(
+                    "SELECT b.id, b.title, b.sort_title, b.description, b.language, b.publication_date, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.metadata_confidence, b.cover_path FROM books b JOIN books_fts ON books_fts.book_id = b.id WHERE books_fts MATCH ? AND (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) ORDER BY b.metadata_status DESC LIMIT ? OFFSET ?",
+                    pool, fts_q, fmt_filter, status_filter, author_filter, series_filter, tags_json, limit, offset
+                ),
+                (_, SortOrder::Desc) => fetch_books_fts!(
+                    "SELECT b.id, b.title, b.sort_title, b.description, b.language, b.publication_date, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.metadata_confidence, b.cover_path FROM books b JOIN books_fts ON books_fts.book_id = b.id WHERE books_fts MATCH ? AND (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) ORDER BY b.added_at DESC LIMIT ? OFFSET ?",
+                    pool, fts_q, fmt_filter, status_filter, author_filter, series_filter, tags_json, limit, offset
+                ),
+                // Default: added_at ASC
+                _ => fetch_books_fts!(
+                    "SELECT b.id, b.title, b.sort_title, b.description, b.language, b.publication_date, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.metadata_confidence, b.cover_path FROM books b JOIN books_fts ON books_fts.book_id = b.id WHERE books_fts MATCH ? AND (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) ORDER BY b.added_at ASC LIMIT ? OFFSET ?",
+                    pool, fts_q, fmt_filter, status_filter, author_filter, series_filter, tags_json, limit, offset
+                ),
+            };
 
-        let rows = sqlx::query_as::<_, BookRow>(&data_sql)
-            .fetch_all(pool)
+            (total, rows)
+        } else {
+            // ── Non-FTS path ───────────────────────────────────────
+            let total = sqlx::query_scalar!(
+                "SELECT COUNT(*) FROM books b WHERE (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?))))",
+                fmt_filter, fmt_filter,
+                status_filter, status_filter,
+                author_filter, author_filter,
+                series_filter, series_filter,
+                tags_json, tags_json,
+            )
+            .fetch_one(pool)
             .await
             .map_err(|e| DbError::Query(e.to_string()))?;
+
+            let rows = match (params.sort_by.as_str(), params.sort_order) {
+                ("title" | "sort_title", SortOrder::Asc) => fetch_books!(
+                    "SELECT b.id, b.title, b.sort_title, b.description, b.language, b.publication_date, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.metadata_confidence, b.cover_path FROM books b WHERE (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) ORDER BY b.sort_title ASC LIMIT ? OFFSET ?",
+                    pool, fmt_filter, status_filter, author_filter, series_filter, tags_json, limit, offset
+                ),
+                ("title" | "sort_title", SortOrder::Desc) => fetch_books!(
+                    "SELECT b.id, b.title, b.sort_title, b.description, b.language, b.publication_date, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.metadata_confidence, b.cover_path FROM books b WHERE (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) ORDER BY b.sort_title DESC LIMIT ? OFFSET ?",
+                    pool, fmt_filter, status_filter, author_filter, series_filter, tags_json, limit, offset
+                ),
+                ("updated_at", SortOrder::Asc) => fetch_books!(
+                    "SELECT b.id, b.title, b.sort_title, b.description, b.language, b.publication_date, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.metadata_confidence, b.cover_path FROM books b WHERE (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) ORDER BY b.updated_at ASC LIMIT ? OFFSET ?",
+                    pool, fmt_filter, status_filter, author_filter, series_filter, tags_json, limit, offset
+                ),
+                ("updated_at", SortOrder::Desc) => fetch_books!(
+                    "SELECT b.id, b.title, b.sort_title, b.description, b.language, b.publication_date, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.metadata_confidence, b.cover_path FROM books b WHERE (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) ORDER BY b.updated_at DESC LIMIT ? OFFSET ?",
+                    pool, fmt_filter, status_filter, author_filter, series_filter, tags_json, limit, offset
+                ),
+                ("rating", SortOrder::Asc) => fetch_books!(
+                    "SELECT b.id, b.title, b.sort_title, b.description, b.language, b.publication_date, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.metadata_confidence, b.cover_path FROM books b WHERE (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) ORDER BY b.rating ASC LIMIT ? OFFSET ?",
+                    pool, fmt_filter, status_filter, author_filter, series_filter, tags_json, limit, offset
+                ),
+                ("rating", SortOrder::Desc) => fetch_books!(
+                    "SELECT b.id, b.title, b.sort_title, b.description, b.language, b.publication_date, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.metadata_confidence, b.cover_path FROM books b WHERE (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) ORDER BY b.rating DESC LIMIT ? OFFSET ?",
+                    pool, fmt_filter, status_filter, author_filter, series_filter, tags_json, limit, offset
+                ),
+                ("metadata_status", SortOrder::Asc) => fetch_books!(
+                    "SELECT b.id, b.title, b.sort_title, b.description, b.language, b.publication_date, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.metadata_confidence, b.cover_path FROM books b WHERE (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) ORDER BY b.metadata_status ASC LIMIT ? OFFSET ?",
+                    pool, fmt_filter, status_filter, author_filter, series_filter, tags_json, limit, offset
+                ),
+                ("metadata_status", SortOrder::Desc) => fetch_books!(
+                    "SELECT b.id, b.title, b.sort_title, b.description, b.language, b.publication_date, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.metadata_confidence, b.cover_path FROM books b WHERE (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) ORDER BY b.metadata_status DESC LIMIT ? OFFSET ?",
+                    pool, fmt_filter, status_filter, author_filter, series_filter, tags_json, limit, offset
+                ),
+                (_, SortOrder::Desc) => fetch_books!(
+                    "SELECT b.id, b.title, b.sort_title, b.description, b.language, b.publication_date, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.metadata_confidence, b.cover_path FROM books b WHERE (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) ORDER BY b.added_at DESC LIMIT ? OFFSET ?",
+                    pool, fmt_filter, status_filter, author_filter, series_filter, tags_json, limit, offset
+                ),
+                // Default: added_at ASC
+                _ => fetch_books!(
+                    "SELECT b.id, b.title, b.sort_title, b.description, b.language, b.publication_date, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.metadata_confidence, b.cover_path FROM books b WHERE (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) ORDER BY b.added_at ASC LIMIT ? OFFSET ?",
+                    pool, fmt_filter, status_filter, author_filter, series_filter, tags_json, limit, offset
+                ),
+            };
+
+            (total, rows)
+        };
 
         let books = rows
             .into_iter()
@@ -200,22 +314,22 @@ impl BookRepository {
             .and_then(|v| v.as_str().map(String::from))
             .unwrap_or_else(|| "unidentified".into());
 
-        let result = sqlx::query(
+        let result = sqlx::query!(
             "UPDATE books SET title = ?, sort_title = ?, description = ?, language = ?, publication_date = ?, publisher_id = ?, updated_at = ?, rating = ?, page_count = ?, metadata_status = ?, metadata_confidence = ?, cover_path = ? WHERE id = ?",
+            book.title,
+            book.sort_title,
+            book.description,
+            book.language,
+            pub_date,
+            publisher_id,
+            updated_at,
+            book.rating,
+            book.page_count,
+            status,
+            book.metadata_confidence,
+            book.cover_path,
+            id,
         )
-        .bind(&book.title)
-        .bind(&book.sort_title)
-        .bind(&book.description)
-        .bind(&book.language)
-        .bind(&pub_date)
-        .bind(&publisher_id)
-        .bind(&updated_at)
-        .bind(book.rating)
-        .bind(book.page_count)
-        .bind(&status)
-        .bind(book.metadata_confidence)
-        .bind(&book.cover_path)
-        .bind(&id)
         .execute(pool)
         .await
         .map_err(|e| DbError::Query(e.to_string()))?;
@@ -229,8 +343,7 @@ impl BookRepository {
 
     pub async fn delete(pool: &SqlitePool, id: Uuid) -> Result<(), DbError> {
         let id_str = id.to_string();
-        let result = sqlx::query("DELETE FROM books WHERE id = ?")
-            .bind(&id_str)
+        let result = sqlx::query!("DELETE FROM books WHERE id = ?", id_str)
             .execute(pool)
             .await
             .map_err(|e| DbError::Query(e.to_string()))?;
@@ -257,6 +370,7 @@ impl BookRepository {
         Self::list(pool, params, &filter).await
     }
 
+    #[allow(clippy::too_many_lines)] // multiple sub-queries for related entities
     pub async fn get_with_relations(
         pool: &SqlitePool,
         id: Uuid,
@@ -265,10 +379,11 @@ impl BookRepository {
         let id_str = id.to_string();
 
         // Fetch authors
-        let author_rows = sqlx::query_as::<_, BookAuthorRow>(
+        let author_rows = sqlx::query_as!(
+            BookAuthorRow,
             "SELECT a.id, a.name, a.sort_name, ba.role, ba.position FROM authors a JOIN book_authors ba ON ba.author_id = a.id WHERE ba.book_id = ? ORDER BY ba.position",
+            id_str,
         )
-        .bind(&id_str)
         .fetch_all(pool)
         .await
         .map_err(|e| DbError::Query(e.to_string()))?;
@@ -290,10 +405,11 @@ impl BookRepository {
             .collect::<Result<Vec<_>, DbError>>()?;
 
         // Fetch series
-        let series_rows = sqlx::query_as::<_, BookSeriesRow>(
+        let series_rows = sqlx::query_as!(
+            BookSeriesRow,
             "SELECT s.id, s.name, s.description, bs.position FROM series s JOIN book_series bs ON bs.series_id = s.id WHERE bs.book_id = ? ORDER BY bs.position",
+            id_str,
         )
-        .bind(&id_str)
         .fetch_all(pool)
         .await
         .map_err(|e| DbError::Query(e.to_string()))?;
@@ -314,10 +430,11 @@ impl BookRepository {
             .collect::<Result<Vec<_>, DbError>>()?;
 
         // Fetch files
-        let file_rows = sqlx::query_as::<_, BookFileRow>(
+        let file_rows = sqlx::query_as!(
+            BookFileRow,
             "SELECT id, book_id, format, storage_path, file_size, hash, added_at FROM book_files WHERE book_id = ?",
+            id_str,
         )
-        .bind(&id_str)
         .fetch_all(pool)
         .await
         .map_err(|e| DbError::Query(e.to_string()))?;
@@ -328,10 +445,11 @@ impl BookRepository {
             .collect::<Result<Vec<_>, _>>()?;
 
         // Fetch identifiers
-        let ident_rows = sqlx::query_as::<_, IdentifierRow>(
+        let ident_rows = sqlx::query_as!(
+            IdentifierRow,
             "SELECT id, book_id, identifier_type, value, source_type, source_name, confidence FROM identifiers WHERE book_id = ?",
+            id_str,
         )
-        .bind(&id_str)
         .fetch_all(pool)
         .await
         .map_err(|e| DbError::Query(e.to_string()))?;
@@ -342,10 +460,11 @@ impl BookRepository {
             .collect::<Result<Vec<_>, _>>()?;
 
         // Fetch tags
-        let tag_rows = sqlx::query_as::<_, TagRow>(
+        let tag_rows = sqlx::query_as!(
+            TagRow,
             "SELECT t.id, t.name, t.category FROM tags t JOIN book_tags bt ON bt.tag_id = t.id WHERE bt.book_id = ?",
+            id_str,
         )
-        .bind(&id_str)
         .fetch_all(pool)
         .await
         .map_err(|e| DbError::Query(e.to_string()))?;
@@ -357,8 +476,8 @@ impl BookRepository {
 
         // Fetch publisher name
         let publisher_name: Option<String> = if let Some(pid) = book.publisher_id {
-            sqlx::query_scalar("SELECT name FROM publishers WHERE id = ?")
-                .bind(pid.to_string())
+            let pid_str = pid.to_string();
+            sqlx::query_scalar!("SELECT name FROM publishers WHERE id = ?", pid_str)
                 .fetch_optional(pool)
                 .await
                 .map_err(|e| DbError::Query(e.to_string()))?
@@ -379,8 +498,8 @@ impl BookRepository {
 
     /// Remove all author links for a book.
     pub async fn clear_authors(pool: &SqlitePool, book_id: Uuid) -> Result<(), DbError> {
-        sqlx::query("DELETE FROM book_authors WHERE book_id = ?")
-            .bind(book_id.to_string())
+        let id_str = book_id.to_string();
+        sqlx::query!("DELETE FROM book_authors WHERE book_id = ?", id_str)
             .execute(pool)
             .await
             .map_err(|e| DbError::Query(e.to_string()))?;
@@ -389,8 +508,8 @@ impl BookRepository {
 
     /// Remove all tag links for a book.
     pub async fn clear_tags(pool: &SqlitePool, book_id: Uuid) -> Result<(), DbError> {
-        sqlx::query("DELETE FROM book_tags WHERE book_id = ?")
-            .bind(book_id.to_string())
+        let id_str = book_id.to_string();
+        sqlx::query!("DELETE FROM book_tags WHERE book_id = ?", id_str)
             .execute(pool)
             .await
             .map_err(|e| DbError::Query(e.to_string()))?;
@@ -405,13 +524,15 @@ impl BookRepository {
         role: &str,
         position: i32,
     ) -> Result<(), DbError> {
-        sqlx::query(
+        let book_id_str = book_id.to_string();
+        let author_id_str = author_id.to_string();
+        sqlx::query!(
             "INSERT OR IGNORE INTO book_authors (book_id, author_id, role, position) VALUES (?, ?, ?, ?)",
+            book_id_str,
+            author_id_str,
+            role,
+            position,
         )
-        .bind(book_id.to_string())
-        .bind(author_id.to_string())
-        .bind(role)
-        .bind(position)
         .execute(pool)
         .await
         .map_err(|e| DbError::Query(e.to_string()))?;
@@ -426,12 +547,14 @@ impl BookRepository {
         series_id: Uuid,
         position: Option<f64>,
     ) -> Result<(), DbError> {
-        sqlx::query(
+        let book_id_str = book_id.to_string();
+        let series_id_str = series_id.to_string();
+        sqlx::query!(
             "INSERT OR IGNORE INTO book_series (book_id, series_id, position) VALUES (?, ?, ?)",
+            book_id_str,
+            series_id_str,
+            position,
         )
-        .bind(book_id.to_string())
-        .bind(series_id.to_string())
-        .bind(position)
         .execute(pool)
         .await
         .map_err(|e| DbError::Query(e.to_string()))?;
@@ -441,12 +564,16 @@ impl BookRepository {
 
     /// Link a book to a tag.
     pub async fn add_tag(pool: &SqlitePool, book_id: Uuid, tag_id: Uuid) -> Result<(), DbError> {
-        sqlx::query("INSERT OR IGNORE INTO book_tags (book_id, tag_id) VALUES (?, ?)")
-            .bind(book_id.to_string())
-            .bind(tag_id.to_string())
-            .execute(pool)
-            .await
-            .map_err(|e| DbError::Query(e.to_string()))?;
+        let book_id_str = book_id.to_string();
+        let tag_id_str = tag_id.to_string();
+        sqlx::query!(
+            "INSERT OR IGNORE INTO book_tags (book_id, tag_id) VALUES (?, ?)",
+            book_id_str,
+            tag_id_str,
+        )
+        .execute(pool)
+        .await
+        .map_err(|e| DbError::Query(e.to_string()))?;
 
         Ok(())
     }
@@ -466,7 +593,7 @@ struct BookRow {
     added_at: String,
     updated_at: String,
     rating: Option<f64>,
-    page_count: Option<i32>,
+    page_count: Option<i64>,
     metadata_status: String,
     metadata_confidence: f64,
     cover_path: Option<String>,
@@ -509,7 +636,7 @@ impl BookRow {
             added_at,
             updated_at,
             rating: self.rating.map(|r| r as f32),
-            page_count: self.page_count,
+            page_count: self.page_count.map(|p| p as i32),
             metadata_status,
             metadata_confidence: self.metadata_confidence as f32,
             cover_path: self.cover_path,
@@ -523,7 +650,7 @@ struct BookAuthorRow {
     name: String,
     sort_name: String,
     role: String,
-    position: i32,
+    position: i64,
 }
 
 #[derive(sqlx::FromRow)]

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE tasks SET progress = ?, message = COALESCE(?, message) WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "bad6a45cc1045aa11f8f5657b42555a3469c6e86668117bee34fed9cc79128e1"
+}

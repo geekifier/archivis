@@ -17,16 +17,16 @@ impl BookFileRepository {
             .unwrap_or_else(|| "unknown".into());
         let added_at = file.added_at.to_rfc3339();
 
-        sqlx::query(
+        sqlx::query!(
             "INSERT INTO book_files (id, book_id, format, storage_path, file_size, hash, added_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            id,
+            book_id,
+            format,
+            file.storage_path,
+            file.file_size,
+            file.hash,
+            added_at,
         )
-        .bind(&id)
-        .bind(&book_id)
-        .bind(&format)
-        .bind(&file.storage_path)
-        .bind(file.file_size)
-        .bind(&file.hash)
-        .bind(&added_at)
         .execute(pool)
         .await
         .map_err(|e| {
@@ -42,10 +42,11 @@ impl BookFileRepository {
 
     pub async fn get_by_id(pool: &SqlitePool, id: Uuid) -> Result<BookFile, DbError> {
         let id_str = id.to_string();
-        let row = sqlx::query_as::<_, BookFileRow>(
+        let row = sqlx::query_as!(
+            BookFileRow,
             "SELECT id, book_id, format, storage_path, file_size, hash, added_at FROM book_files WHERE id = ?",
+            id_str,
         )
-        .bind(&id_str)
         .fetch_optional(pool)
         .await
         .map_err(|e| DbError::Query(e.to_string()))?
@@ -62,10 +63,11 @@ impl BookFileRepository {
         book_id: Uuid,
     ) -> Result<Vec<BookFile>, DbError> {
         let id_str = book_id.to_string();
-        let rows = sqlx::query_as::<_, BookFileRow>(
+        let rows = sqlx::query_as!(
+            BookFileRow,
             "SELECT id, book_id, format, storage_path, file_size, hash, added_at FROM book_files WHERE book_id = ?",
+            id_str,
         )
-        .bind(&id_str)
         .fetch_all(pool)
         .await
         .map_err(|e| DbError::Query(e.to_string()))?;
@@ -74,10 +76,11 @@ impl BookFileRepository {
     }
 
     pub async fn get_by_hash(pool: &SqlitePool, hash: &str) -> Result<Option<BookFile>, DbError> {
-        let row = sqlx::query_as::<_, BookFileRow>(
+        let row = sqlx::query_as!(
+            BookFileRow,
             "SELECT id, book_id, format, storage_path, file_size, hash, added_at FROM book_files WHERE hash = ?",
+            hash,
         )
-        .bind(hash)
         .fetch_optional(pool)
         .await
         .map_err(|e| DbError::Query(e.to_string()))?;
@@ -87,8 +90,7 @@ impl BookFileRepository {
 
     pub async fn delete(pool: &SqlitePool, id: Uuid) -> Result<(), DbError> {
         let id_str = id.to_string();
-        let result = sqlx::query("DELETE FROM book_files WHERE id = ?")
-            .bind(&id_str)
+        let result = sqlx::query!("DELETE FROM book_files WHERE id = ?", id_str)
             .execute(pool)
             .await
             .map_err(|e| DbError::Query(e.to_string()))?;

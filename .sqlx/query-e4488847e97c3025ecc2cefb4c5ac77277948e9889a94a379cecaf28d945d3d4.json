@@ -1,0 +1,56 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id, book_id, identifier_type, value, source_type, source_name, confidence FROM identifiers WHERE identifier_type = ? AND value = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "book_id",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "identifier_type",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "value",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "source_type",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "source_name",
+        "ordinal": 5,
+        "type_info": "Text"
+      },
+      {
+        "name": "confidence",
+        "ordinal": 6,
+        "type_info": "Float"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "e4488847e97c3025ecc2cefb4c5ac77277948e9889a94a379cecaf28d945d3d4"
+}

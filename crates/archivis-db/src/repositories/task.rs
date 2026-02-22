@@ -18,21 +18,21 @@ impl TaskRepository {
         let completed_at = task.completed_at.map(|t| t.to_rfc3339());
         let result = task.result.as_ref().map(ToString::to_string);
 
-        sqlx::query(
+        sqlx::query!(
             "INSERT INTO tasks (id, task_type, payload, status, progress, message, result, created_at, started_at, completed_at, error_message)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            id,
+            task_type,
+            payload,
+            status,
+            progress,
+            task.message,
+            result,
+            created_at,
+            started_at,
+            completed_at,
+            task.error_message,
         )
-        .bind(&id)
-        .bind(&task_type)
-        .bind(&payload)
-        .bind(&status)
-        .bind(progress)
-        .bind(&task.message)
-        .bind(&result)
-        .bind(&created_at)
-        .bind(&started_at)
-        .bind(&completed_at)
-        .bind(&task.error_message)
         .execute(pool)
         .await
         .map_err(|e| DbError::Query(e.to_string()))?;
@@ -42,10 +42,11 @@ impl TaskRepository {
 
     pub async fn get_by_id(pool: &SqlitePool, id: Uuid) -> Result<Task, DbError> {
         let id_str = id.to_string();
-        let row = sqlx::query_as::<_, TaskRow>(
+        let row = sqlx::query_as!(
+            TaskRow,
             "SELECT id, task_type, payload, status, progress, message, result, created_at, started_at, completed_at, error_message FROM tasks WHERE id = ?",
+            id_str,
         )
-        .bind(&id_str)
         .fetch_optional(pool)
         .await
         .map_err(|e| DbError::Query(e.to_string()))?
@@ -59,7 +60,8 @@ impl TaskRepository {
 
     /// List tasks that are still active (pending or running).
     pub async fn list_active(pool: &SqlitePool) -> Result<Vec<Task>, DbError> {
-        let rows = sqlx::query_as::<_, TaskRow>(
+        let rows = sqlx::query_as!(
+            TaskRow,
             "SELECT id, task_type, payload, status, progress, message, result, created_at, started_at, completed_at, error_message FROM tasks WHERE status IN ('pending', 'running') ORDER BY created_at ASC",
         )
         .fetch_all(pool)
@@ -71,10 +73,11 @@ impl TaskRepository {
 
     /// List the most recent tasks, regardless of status.
     pub async fn list_recent(pool: &SqlitePool, limit: i64) -> Result<Vec<Task>, DbError> {
-        let rows = sqlx::query_as::<_, TaskRow>(
+        let rows = sqlx::query_as!(
+            TaskRow,
             "SELECT id, task_type, payload, status, progress, message, result, created_at, started_at, completed_at, error_message FROM tasks ORDER BY created_at DESC LIMIT ?",
+            limit,
         )
-        .bind(limit)
         .fetch_all(pool)
         .await
         .map_err(|e| DbError::Query(e.to_string()))?;
@@ -98,15 +101,15 @@ impl TaskRepository {
         let completed_str = completed_at.map(|t| t.to_rfc3339());
         let result_str = result.map(ToString::to_string);
 
-        let affected = sqlx::query(
+        let affected = sqlx::query!(
             "UPDATE tasks SET status = ?, started_at = COALESCE(?, started_at), completed_at = COALESCE(?, completed_at), error_message = COALESCE(?, error_message), result = COALESCE(?, result) WHERE id = ?",
+            status_str,
+            started_str,
+            completed_str,
+            error_message,
+            result_str,
+            id_str,
         )
-        .bind(&status_str)
-        .bind(&started_str)
-        .bind(&completed_str)
-        .bind(error_message)
-        .bind(&result_str)
-        .bind(&id_str)
         .execute(pool)
         .await
         .map_err(|e| DbError::Query(e.to_string()))?;
@@ -131,12 +134,12 @@ impl TaskRepository {
         let id_str = id.to_string();
         let progress_val = i64::from(progress);
 
-        let affected = sqlx::query(
+        let affected = sqlx::query!(
             "UPDATE tasks SET progress = ?, message = COALESCE(?, message) WHERE id = ?",
+            progress_val,
+            message,
+            id_str,
         )
-        .bind(progress_val)
-        .bind(message)
-        .bind(&id_str)
         .execute(pool)
         .await
         .map_err(|e| DbError::Query(e.to_string()))?;
@@ -155,7 +158,7 @@ impl TaskRepository {
     /// Resets them to pending so they can be re-dispatched.
     /// Returns the recovered tasks.
     pub async fn recover_interrupted(pool: &SqlitePool) -> Result<Vec<Task>, DbError> {
-        sqlx::query(
+        sqlx::query!(
             "UPDATE tasks SET status = 'pending', started_at = NULL, progress = 0, message = 'recovered after restart' WHERE status = 'running'",
         )
         .execute(pool)
@@ -163,7 +166,8 @@ impl TaskRepository {
         .map_err(|e| DbError::Query(e.to_string()))?;
 
         // Return all pending tasks (includes both previously pending and just-recovered)
-        let rows = sqlx::query_as::<_, TaskRow>(
+        let rows = sqlx::query_as!(
+            TaskRow,
             "SELECT id, task_type, payload, status, progress, message, result, created_at, started_at, completed_at, error_message FROM tasks WHERE status = 'pending' ORDER BY created_at ASC",
         )
         .fetch_all(pool)
