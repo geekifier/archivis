@@ -52,13 +52,17 @@ run:
 dev:
     #!/usr/bin/env bash
     trap 'kill 0' EXIT
-    cargo run --package archivis-server &
+    cargo run --package archivis-server -- --data-dir .local/data &
     cd frontend && npm run dev &
     wait
 
 # Run frontend dev server only (expects backend on :9514)
 dev-frontend:
     cd frontend && npm run dev
+
+# Run backend only with local dev data
+dev-backend:
+    cargo run --package archivis-server -- --data-dir .local/data
 
 # Run frontend checks (build + lint + typecheck)
 check-frontend:
