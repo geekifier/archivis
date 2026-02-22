@@ -3,6 +3,7 @@
 	import type { SortField, SortOrder } from '$lib/api/index.js';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
+	import * as AlertDialog from '$lib/components/ui/alert-dialog/index.js';
 	import { filters } from '$lib/stores/filters.svelte.js';
 	import BookCard from '$lib/components/library/BookCard.svelte';
 	import BookListView from '$lib/components/library/BookListView.svelte';
@@ -41,6 +42,14 @@
 	let activeSortBy = $state<SortField>(sortOptions[0].field);
 	let activeSortOrder = $state<SortOrder>(sortOptions[0].order);
 
+	// --- Identify All state ---
+	let identifyAllDialogOpen = $state(false);
+	let identifyingAll = $state(false);
+	let identifyAllError = $state<string | null>(null);
+	let identifyAllCompleted = $state(0);
+	let identifyAllTotal = $state(0);
+	let identifyAllEventSources: EventSource[] = [];
+
 	const sortBy = $derived(sortOptions[sortIndex].field);
 	const sortOrder = $derived(sortOptions[sortIndex].order);
 
@@ -51,6 +60,10 @@
 	});
 
 	const includeParam = $derived(viewMode === 'list' ? 'authors,series,files' : 'authors,files');
+
+	const showIdentifyAll = $derived(
+		filters.activeStatus === 'needs_review' || filters.activeStatus === 'unidentified'
+	);
 
 	function setViewMode(mode: ViewMode) {
 		viewMode = mode;
@@ -134,6 +147,88 @@
 			});
 	});
 
+	// Cleanup SSE on unmount
+	$effect(() => {
+		return () => {
+			for (const es of identifyAllEventSources) {
+				es.close();
+			}
+			identifyAllEventSources = [];
+		};
+	});
+
+	// --- Identify All ---
+
+	async function handleIdentifyAll() {
+		identifyingAll = true;
+		identifyAllError = null;
+		identifyAllCompleted = 0;
+		identifyAllDialogOpen = false;
+
+		try {
+			const response = await api.identify.all();
+			identifyAllTotal = response.count;
+
+			if (response.count === 0) {
+				identifyingAll = false;
+				identifyAllError = 'No books found needing identification.';
+				return;
+			}
+
+			// Subscribe to SSE for each task
+			for (const taskId of response.task_ids) {
+				subscribeToIdentifyTask(taskId);
+			}
+		} catch (err) {
+			identifyAllError = err instanceof Error ? err.message : 'Failed to start identification';
+			identifyingAll = false;
+		}
+	}
+
+	function subscribeToIdentifyTask(taskId: string) {
+		const es = new EventSource(`/api/tasks/${encodeURIComponent(taskId)}/progress`);
+		identifyAllEventSources.push(es);
+
+		es.addEventListener('task:complete', () => {
+			identifyAllCompleted += 1;
+			es.close();
+			removeIdentifyEventSource(es);
+			checkIdentifyAllDone();
+		});
+
+		es.addEventListener('task:error', () => {
+			identifyAllCompleted += 1;
+			es.close();
+			removeIdentifyEventSource(es);
+			checkIdentifyAllDone();
+		});
+
+		es.onerror = () => {
+			identifyAllCompleted += 1;
+			es.close();
+			removeIdentifyEventSource(es);
+			checkIdentifyAllDone();
+		};
+	}
+
+	function removeIdentifyEventSource(es: EventSource) {
+		identifyAllEventSources = identifyAllEventSources.filter((e) => e !== es);
+	}
+
+	function checkIdentifyAllDone() {
+		if (identifyAllCompleted >= identifyAllTotal) {
+			identifyingAll = false;
+			// Refresh the book list
+			currentPage = currentPage;
+		}
+	}
+
+	function dismissIdentifyAll() {
+		identifyAllCompleted = 0;
+		identifyAllTotal = 0;
+		identifyAllError = null;
+	}
+
 	const skeletonIds = Array.from({ length: 12 }, (_, i) => i);
 </script>
 
@@ -170,6 +265,53 @@
 		</div>
 
 		<div class="flex items-center gap-2">
+			{#if showIdentifyAll && data && data.total > 0}
+				<Button
+					size="sm"
+					variant="outline"
+					onclick={() => (identifyAllDialogOpen = true)}
+					disabled={identifyingAll}
+				>
+					{#if identifyingAll}
+						<svg
+							class="size-4 animate-spin"
+							xmlns="http://www.w3.org/2000/svg"
+							fill="none"
+							viewBox="0 0 24 24"
+						>
+							<circle
+								class="opacity-25"
+								cx="12"
+								cy="12"
+								r="10"
+								stroke="currentColor"
+								stroke-width="4"
+							></circle>
+							<path
+								class="opacity-75"
+								fill="currentColor"
+								d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+							></path>
+						</svg>
+						Identifying...
+					{:else}
+						<svg
+							class="size-4"
+							viewBox="0 0 24 24"
+							fill="none"
+							stroke="currentColor"
+							stroke-width="2"
+							stroke-linecap="round"
+							stroke-linejoin="round"
+						>
+							<circle cx="11" cy="11" r="8" />
+							<path d="m21 21-4.3-4.3" />
+						</svg>
+						Identify All
+					{/if}
+				</Button>
+			{/if}
+
 			<!-- View toggle -->
 			<div class="flex rounded-md border border-input shadow-xs">
 				<Button
@@ -212,6 +354,61 @@
 			</select>
 		</div>
 	</div>
+
+	<!-- Identify All progress -->
+	{#if identifyingAll || (identifyAllTotal > 0 && identifyAllCompleted > 0)}
+		<div class="rounded-lg border border-border p-3">
+			<div class="flex items-center justify-between text-sm">
+				<span class="font-medium">
+					{#if identifyingAll}
+						Identifying books...
+					{:else}
+						Identification complete
+					{/if}
+				</span>
+				<div class="flex items-center gap-2">
+					<span class="text-xs text-muted-foreground">
+						{identifyAllCompleted} / {identifyAllTotal}
+					</span>
+					{#if !identifyingAll}
+						<Button
+							variant="ghost"
+							size="icon-sm"
+							class="size-6"
+							onclick={dismissIdentifyAll}
+							aria-label="Dismiss"
+						>
+							<svg
+								class="size-3"
+								xmlns="http://www.w3.org/2000/svg"
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								stroke-width="2"
+								stroke-linecap="round"
+								stroke-linejoin="round"
+							>
+								<path d="M18 6 6 18" />
+								<path d="m6 6 12 12" />
+							</svg>
+						</Button>
+					{/if}
+				</div>
+			</div>
+			<div class="mt-2 h-2 w-full overflow-hidden rounded-full bg-muted">
+				<div
+					class="h-full rounded-full bg-primary transition-all duration-300"
+					style="width: {identifyAllTotal > 0 ? (identifyAllCompleted / identifyAllTotal) * 100 : 0}%"
+				></div>
+			</div>
+		</div>
+	{/if}
+
+	{#if identifyAllError}
+		<div class="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+			{identifyAllError}
+		</div>
+	{/if}
 
 	<!-- Active filter chips -->
 	{#if filters.hasActiveFilters}
@@ -333,3 +530,22 @@
 		</div>
 	{/if}
 </div>
+
+<!-- Identify All confirmation dialog -->
+<AlertDialog.Root bind:open={identifyAllDialogOpen}>
+	<AlertDialog.Content>
+		<AlertDialog.Header>
+			<AlertDialog.Title>Identify Books</AlertDialog.Title>
+			<AlertDialog.Description>
+				Identify all books that need metadata using configured providers? This will
+				search for matching metadata from external sources like Open Library and Hardcover.
+			</AlertDialog.Description>
+		</AlertDialog.Header>
+		<AlertDialog.Footer>
+			<AlertDialog.Cancel>Cancel</AlertDialog.Cancel>
+			<AlertDialog.Action onclick={handleIdentifyAll}>
+				Identify All
+			</AlertDialog.Action>
+		</AlertDialog.Footer>
+	</AlertDialog.Content>
+</AlertDialog.Root>

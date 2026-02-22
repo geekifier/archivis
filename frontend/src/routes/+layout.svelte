@@ -72,13 +72,21 @@
 		{ value: 'unidentified', label: 'Unidentified', colorClass: 'bg-gray-400' }
 	];
 
-	// Fetch needs_review count when authenticated and on library page
+	// Fetch needs_review and unidentified counts when authenticated and on library page
 	$effect(() => {
 		if (auth.isAuthenticated && isLibraryPage) {
 			api.books
 				.list({ status: 'needs_review', per_page: 1 })
 				.then((result) => {
 					filters.setNeedsReviewCount(result.total);
+				})
+				.catch(() => {
+					// Silently ignore count fetch errors
+				});
+			api.books
+				.list({ status: 'unidentified', per_page: 1 })
+				.then((result) => {
+					filters.setUnidentifiedCount(result.total);
 				})
 				.catch(() => {
 					// Silently ignore count fetch errors
@@ -212,6 +220,11 @@
 							{#if st.value === 'needs_review' && filters.needsReviewCount !== null && filters.needsReviewCount > 0}
 								<span class="min-w-5 rounded-full bg-amber-500/15 px-1.5 py-0.5 text-center text-xs font-medium text-amber-600 dark:text-amber-400">
 									{filters.needsReviewCount}
+								</span>
+							{/if}
+							{#if st.value === 'unidentified' && filters.unidentifiedCount !== null && filters.unidentifiedCount > 0}
+								<span class="min-w-5 rounded-full bg-gray-400/15 px-1.5 py-0.5 text-center text-xs font-medium text-gray-600 dark:text-gray-400">
+									{filters.unidentifiedCount}
 								</span>
 							{/if}
 						</button>

@@ -2,11 +2,12 @@
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import { api, ApiError } from '$lib/api/index.js';
-	import type { BookDetail } from '$lib/api/index.js';
+	import type { BookDetail, CandidateResponse, TaskProgressEvent, TaskStatus } from '$lib/api/index.js';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import * as AlertDialog from '$lib/components/ui/alert-dialog/index.js';
 	import BookEditForm from '$lib/components/library/BookEditForm.svelte';
 	import CoverUploadDialog from '$lib/components/library/CoverUploadDialog.svelte';
+	import CandidateReview from '$lib/components/library/CandidateReview.svelte';
 	import {
 		placeholderHue,
 		formatFileSize,
@@ -29,6 +30,15 @@
 	let markingIdentified = $state(false);
 	let markIdentifiedError = $state<string | null>(null);
 
+	// --- Identification state ---
+	let identifying = $state(false);
+	let identifyError = $state<string | null>(null);
+	let identifyProgress = $state<TaskProgressEvent | null>(null);
+	let identifyEventSource: EventSource | null = null;
+	let candidates = $state<CandidateResponse[]>([]);
+	let candidatesError = $state<string | null>(null);
+	let showCandidates = $state(false);
+
 	const bookId = $derived(page.params.id ?? '');
 	const hue = $derived(placeholderHue(bookId));
 	const coverUrl = $derived(
@@ -38,6 +48,11 @@
 	const authors = $derived(book?.authors ?? []);
 	const primaryAuthors = $derived(authors.filter((a) => a.role === 'author'));
 	const otherContributors = $derived(authors.filter((a) => a.role !== 'author'));
+
+	const canIdentify = $derived(
+		book?.metadata_status === 'needs_review' || book?.metadata_status === 'unidentified'
+	);
+
 
 	function fetchBook() {
 		loading = true;
@@ -114,6 +129,120 @@
 			markingIdentified = false;
 		}
 	}
+
+	// --- Identification ---
+
+	async function handleIdentify() {
+		identifying = true;
+		identifyError = null;
+		identifyProgress = null;
+
+		try {
+			const response = await api.identify.book(bookId);
+			subscribeToIdentifyProgress(response.task_id);
+		} catch (err) {
+			identifyError =
+				err instanceof ApiError
+					? err.userMessage
+					: err instanceof Error
+						? err.message
+						: 'Failed to start identification';
+			identifying = false;
+		}
+	}
+
+	function subscribeToIdentifyProgress(taskId: string) {
+		if (identifyEventSource) {
+			identifyEventSource.close();
+		}
+
+		const es = new EventSource(`/api/tasks/${encodeURIComponent(taskId)}/progress`);
+		identifyEventSource = es;
+
+		es.addEventListener('task:progress', (event: MessageEvent) => {
+			try {
+				identifyProgress = JSON.parse(event.data) as TaskProgressEvent;
+			} catch {
+				// Ignore malformed events
+			}
+		});
+
+		es.addEventListener('task:complete', (event: MessageEvent) => {
+			try {
+				const data = JSON.parse(event.data) as TaskProgressEvent;
+				identifyProgress = { ...data, status: 'completed' as TaskStatus, progress: 100 };
+			} catch {
+				// Ignore malformed events
+			}
+			es.close();
+			identifyEventSource = null;
+			identifying = false;
+			// Reload book and candidates
+			fetchBook();
+			loadCandidates();
+		});
+
+		es.addEventListener('task:error', (event: MessageEvent) => {
+			try {
+				const data = JSON.parse(event.data) as TaskProgressEvent;
+				identifyProgress = { ...data, status: 'failed' as TaskStatus };
+				identifyError = data.error ?? 'Identification failed';
+			} catch {
+				identifyError = 'Identification failed';
+			}
+			es.close();
+			identifyEventSource = null;
+			identifying = false;
+		});
+
+		es.onerror = () => {
+			es.close();
+			identifyEventSource = null;
+			identifying = false;
+		};
+	}
+
+	async function loadCandidates() {
+		candidatesError = null;
+		try {
+			candidates = await api.identify.candidates(bookId);
+			if (candidates.length > 0) {
+				showCandidates = true;
+			}
+		} catch (err) {
+			candidatesError =
+				err instanceof Error ? err.message : 'Failed to load candidates';
+		}
+	}
+
+	function handleCandidateApplied(updated: BookDetail) {
+		book = updated;
+		coverLoaded = false;
+		coverError = false;
+		coverCacheBust = Date.now();
+		loadCandidates();
+	}
+
+	function handleCandidateRejected(candidateId: string) {
+		candidates = candidates.map((c) =>
+			c.id === candidateId ? { ...c, status: 'rejected' as const } : c
+		);
+	}
+
+	// Load candidates when book loads (for books that were already identified)
+	$effect(() => {
+		if (book && !loading) {
+			loadCandidates();
+		}
+
+		return () => {
+			// Cleanup SSE on unmount
+			if (identifyEventSource) {
+				identifyEventSource.close();
+				identifyEventSource = null;
+			}
+		};
+	});
 
 	function statusLabel(status: string): string {
 		switch (status) {
@@ -411,12 +540,56 @@
 							>
 								{statusLabel(book.metadata_status)}
 							</span>
-							{#if book.metadata_status === 'needs_review' || book.metadata_status === 'unidentified'}
+							{#if canIdentify}
+								<Button
+									size="sm"
+									onclick={handleIdentify}
+									disabled={identifying || markingIdentified}
+									class="h-6 px-2 text-xs"
+								>
+									{#if identifying}
+										<svg
+											class="size-3 animate-spin"
+											xmlns="http://www.w3.org/2000/svg"
+											fill="none"
+											viewBox="0 0 24 24"
+										>
+											<circle
+												class="opacity-25"
+												cx="12"
+												cy="12"
+												r="10"
+												stroke="currentColor"
+												stroke-width="4"
+											></circle>
+											<path
+												class="opacity-75"
+												fill="currentColor"
+												d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+											></path>
+										</svg>
+										Identifying...
+									{:else}
+										<svg
+											class="size-3"
+											viewBox="0 0 24 24"
+											fill="none"
+											stroke="currentColor"
+											stroke-width="2"
+											stroke-linecap="round"
+											stroke-linejoin="round"
+										>
+											<circle cx="11" cy="11" r="8" />
+											<path d="m21 21-4.3-4.3" />
+										</svg>
+										Identify
+									{/if}
+								</Button>
 								<Button
 									size="sm"
 									variant="outline"
 									onclick={handleMarkIdentified}
-									disabled={markingIdentified}
+									disabled={markingIdentified || identifying}
 									class="h-6 px-2 text-xs"
 								>
 									{#if markingIdentified}
@@ -425,6 +598,9 @@
 										Mark as Identified
 									{/if}
 								</Button>
+							{/if}
+							{#if identifyError}
+								<span class="text-xs text-destructive">{identifyError}</span>
 							{/if}
 							{#if markIdentifiedError}
 								<span class="text-xs text-destructive">{markIdentifiedError}</span>
@@ -440,6 +616,39 @@
 							</div>
 						</div>
 					</div>
+
+					<!-- Identification progress -->
+					{#if identifying && identifyProgress}
+						<div class="rounded-lg border border-border p-3">
+							<div class="flex items-center justify-between text-sm">
+								<span class="font-medium">Identifying book...</span>
+								<span class="text-xs text-muted-foreground">{identifyProgress.progress}%</span>
+							</div>
+							<div class="mt-2 h-2 w-full overflow-hidden rounded-full bg-muted">
+								<div
+									class="h-full rounded-full bg-primary transition-all duration-300"
+									style="width: {identifyProgress.progress}%"
+								></div>
+							</div>
+							{#if identifyProgress.message}
+								<p class="mt-1.5 text-xs text-muted-foreground">{identifyProgress.message}</p>
+							{/if}
+						</div>
+					{/if}
+
+					<!-- Candidates review -->
+					{#if showCandidates && candidates.length > 0 && !editing}
+						<CandidateReview
+							{book}
+							{candidates}
+							onapply={handleCandidateApplied}
+							onreject={handleCandidateRejected}
+						/>
+					{/if}
+
+					{#if candidatesError}
+						<p class="text-sm text-destructive">{candidatesError}</p>
+					{/if}
 
 					<!-- Other contributors -->
 					{#if otherContributors.length > 0}

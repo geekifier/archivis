@@ -5,8 +5,11 @@ import type {
 	AuthStatusResponse,
 	BookDetail,
 	BookListParams,
+	CandidateResponse,
 	CreateAuthorRequest,
 	CreatePublisherRequest,
+	IdentifyAllResponse,
+	IdentifyResponse,
 	LoginRequest,
 	LoginResponse,
 	PaginatedAuthors,
@@ -362,6 +365,49 @@ export const api = {
 		get(id: string): Promise<TaskResponse> {
 			return request<TaskResponse>('GET', `/tasks/${encodeURIComponent(id)}`);
 		}
+	},
+
+	identify: {
+		/** Trigger identification for a single book. */
+		book(id: string): Promise<IdentifyResponse> {
+			return request<IdentifyResponse>('POST', `/books/${encodeURIComponent(id)}/identify`);
+		},
+
+		/** List identification candidates for a book. */
+		candidates(bookId: string): Promise<CandidateResponse[]> {
+			return request<CandidateResponse[]>(
+				'GET',
+				`/books/${encodeURIComponent(bookId)}/candidates`
+			);
+		},
+
+		/** Apply a candidate to a book, updating its metadata. */
+		applyCandidate(bookId: string, candidateId: string): Promise<BookDetail> {
+			return request<BookDetail>(
+				'POST',
+				`/books/${encodeURIComponent(bookId)}/candidates/${encodeURIComponent(candidateId)}/apply`
+			);
+		},
+
+		/** Reject a candidate. */
+		rejectCandidate(bookId: string, candidateId: string): Promise<void> {
+			return request<void>(
+				'POST',
+				`/books/${encodeURIComponent(bookId)}/candidates/${encodeURIComponent(candidateId)}/reject`
+			);
+		},
+
+		/** Trigger identification for multiple books. */
+		batch(bookIds: string[]): Promise<IdentifyResponse[]> {
+			return request<IdentifyResponse[]>('POST', '/identify/batch', { book_ids: bookIds });
+		},
+
+		/** Identify all unidentified/needs-review books. */
+		all(maxBooks?: number): Promise<IdentifyAllResponse> {
+			return request<IdentifyAllResponse>('POST', '/identify/all', {
+				max_books: maxBooks
+			});
+		}
 	}
 } as const;
 
@@ -378,11 +424,15 @@ export type {
 	BookSeriesLink,
 	BookSummary,
 	BookTagLink,
+	CandidateResponse,
+	CandidateSeriesInfo,
 	CreateAuthorRequest,
 	CreatePublisherRequest,
 	FileEntry,
 	FormatSummary,
 	IdentifierEntry,
+	IdentifyAllResponse,
+	IdentifyResponse,
 	LoginRequest,
 	LoginResponse,
 	MetadataSource,

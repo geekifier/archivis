@@ -270,7 +270,7 @@ export interface CreateAuthorRequest {
 
 // --- Import types ---
 
-export type TaskType = 'import_file' | 'import_directory';
+export type TaskType = 'import_file' | 'import_directory' | 'identify_book';
 export type TaskStatus = 'pending' | 'running' | 'completed' | 'failed';
 
 export interface TaskCreatedResponse {
@@ -314,4 +314,40 @@ export interface TaskProgressEvent {
 	message: string | null;
 	result: Record<string, unknown> | null;
 	error: string | null;
+}
+
+// --- Identification types ---
+
+/** Series information included in a candidate response. */
+export interface CandidateSeriesInfo {
+	name: string;
+	position?: number;
+}
+
+/** A metadata identification candidate returned by a provider. */
+export interface CandidateResponse {
+	id: string;
+	provider_name: string;
+	score: number;
+	title?: string;
+	authors: string[];
+	description?: string;
+	publisher?: string;
+	publication_date?: string;
+	isbn?: string;
+	series?: CandidateSeriesInfo;
+	cover_url?: string;
+	match_reasons: string[];
+	status: 'pending' | 'applied' | 'rejected';
+}
+
+/** Response from triggering identification for a book. */
+export interface IdentifyResponse {
+	task_id: string;
+}
+
+/** Response from the identify-all endpoint. */
+export interface IdentifyAllResponse {
+	count: number;
+	task_ids: string[];
 }
