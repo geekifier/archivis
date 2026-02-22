@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE identification_candidates SET status = ? WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "3ef5ba2f2b3ea91db080c7e06aab44a704e02b4cbfd5893266730f487b66bcf7"
+}

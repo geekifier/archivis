@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO identification_candidates (id, book_id, provider_name, score, metadata, match_reasons, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 8
+    },
+    "nullable": []
+  },
+  "hash": "e719e132921170ebb5455c5726e33116743204c39fe0ccc4058b11e492cedc64"
+}

@@ -1,6 +1,7 @@
 mod author;
 mod book;
 mod book_file;
+mod candidate;
 mod enums;
 mod identifier;
 mod publisher;
@@ -12,6 +13,7 @@ mod user;
 pub use author::Author;
 pub use book::Book;
 pub use book_file::BookFile;
+pub use candidate::{CandidateStatus, IdentificationCandidate};
 pub use enums::{BookFormat, IdentifierType, MetadataSource, MetadataStatus};
 pub use identifier::Identifier;
 pub use publisher::Publisher;

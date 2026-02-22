@@ -591,6 +591,27 @@ impl BookRepository {
 
         Ok(())
     }
+
+    /// List books that need identification (below confidence threshold).
+    pub async fn list_needing_identification(
+        pool: &SqlitePool,
+        confidence_threshold: f32,
+        limit: i64,
+    ) -> Result<Vec<Book>, DbError> {
+        let status_identified = "identified";
+        let rows = sqlx::query_as!(
+            BookRow,
+            "SELECT id, title, sort_title, description, language, publication_date, publisher_id, added_at, updated_at, rating, page_count, metadata_status, metadata_confidence, cover_path FROM books WHERE metadata_confidence < ? AND metadata_status != ? ORDER BY added_at DESC LIMIT ?",
+            confidence_threshold,
+            status_identified,
+            limit,
+        )
+        .fetch_all(pool)
+        .await
+        .map_err(|e| DbError::Query(e.to_string()))?;
+
+        rows.into_iter().map(BookRow::into_book).collect()
+    }
 }
 
 // ── Row types for sqlx mapping ──────────────────────────────────

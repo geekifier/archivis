@@ -11,6 +11,7 @@ use uuid::Uuid;
 pub enum TaskType {
     ImportFile,
     ImportDirectory,
+    IdentifyBook,
 }
 
 impl fmt::Display for TaskType {
@@ -18,6 +19,7 @@ impl fmt::Display for TaskType {
         match self {
             Self::ImportFile => write!(f, "import_file"),
             Self::ImportDirectory => write!(f, "import_directory"),
+            Self::IdentifyBook => write!(f, "identify_book"),
         }
     }
 }
@@ -29,6 +31,7 @@ impl FromStr for TaskType {
         match s {
             "import_file" => Ok(Self::ImportFile),
             "import_directory" => Ok(Self::ImportDirectory),
+            "identify_book" => Ok(Self::IdentifyBook),
             other => Err(format!("unknown task type: {other}")),
         }
     }
@@ -125,6 +128,7 @@ mod tests {
     fn task_type_display_and_parse() {
         assert_eq!(TaskType::ImportFile.to_string(), "import_file");
         assert_eq!(TaskType::ImportDirectory.to_string(), "import_directory");
+        assert_eq!(TaskType::IdentifyBook.to_string(), "identify_book");
         assert_eq!(
             "import_file".parse::<TaskType>().unwrap(),
             TaskType::ImportFile,
@@ -132,6 +136,10 @@ mod tests {
         assert_eq!(
             "import_directory".parse::<TaskType>().unwrap(),
             TaskType::ImportDirectory,
+        );
+        assert_eq!(
+            "identify_book".parse::<TaskType>().unwrap(),
+            TaskType::IdentifyBook,
         );
         assert!("bogus".parse::<TaskType>().is_err());
     }
@@ -143,6 +151,12 @@ mod tests {
         assert_eq!(json, r#""import_file""#);
         let deserialized: TaskType = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized, tt);
+
+        let tt2 = TaskType::IdentifyBook;
+        let json2 = serde_json::to_string(&tt2).unwrap();
+        assert_eq!(json2, r#""identify_book""#);
+        let deserialized2: TaskType = serde_json::from_str(&json2).unwrap();
+        assert_eq!(deserialized2, tt2);
     }
 
     #[test]

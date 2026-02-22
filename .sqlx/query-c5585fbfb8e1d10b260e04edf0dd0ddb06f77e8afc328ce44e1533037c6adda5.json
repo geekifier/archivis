@@ -1,0 +1,62 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id, book_id, provider_name, score, metadata, match_reasons, status, created_at FROM identification_candidates WHERE id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "book_id",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "provider_name",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "score",
+        "ordinal": 3,
+        "type_info": "Float"
+      },
+      {
+        "name": "metadata",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "match_reasons",
+        "ordinal": 5,
+        "type_info": "Text"
+      },
+      {
+        "name": "status",
+        "ordinal": 6,
+        "type_info": "Text"
+      },
+      {
+        "name": "created_at",
+        "ordinal": 7,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "c5585fbfb8e1d10b260e04edf0dd0ddb06f77e8afc328ce44e1533037c6adda5"
+}
