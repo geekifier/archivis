@@ -1,0 +1,41 @@
+# ==============================================================================
+# Docker build context exclusions
+# Keep the build context small and avoid leaking secrets or build artifacts.
+# ==============================================================================
+
+# Rust build artifacts (rebuilt inside the container)
+target/
+
+# Frontend build artifacts (rebuilt in the frontend stage)
+frontend/node_modules/
+frontend/build/
+frontend/.svelte-kit/
+
+# Local development data and documentation
+.local/
+.docs/
+data/
+
+# Version control
+.git/
+.gitignore
+
+# IDE and editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Environment files (may contain secrets)
+.env
+.env.*
+!.env.example
+
+# Docker files (avoid recursive builds)
+Dockerfile
+docker-compose*.yml
+.dockerignore
+
+# macOS
+.DS_Store
+._*

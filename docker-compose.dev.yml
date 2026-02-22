@@ -1,0 +1,23 @@
+# Development override — rebuilds on every `docker compose up --build`
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+#
+# For faster iteration, prefer running natively:
+#   just dev
+
+services:
+  archivis:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "9514:9514"
+    volumes:
+      - archivis-dev-data:/data
+      - ./books:/books
+    environment:
+      - ARCHIVIS_LOG_LEVEL=debug
+
+volumes:
+  archivis-dev-data:

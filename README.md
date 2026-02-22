@@ -1,27 +1,64 @@
 # Archivis
 
-A modern, self-hosted e-book collection manager built with Rust and Svelte 5.
+A fast, modern, self-hosted e-book collection manager.
 
-## Prerequisites
+- Import ebooks via upload or directory scan
+- Automatic format detection and metadata extraction (EPUB, PDF)
+- Background import processing with real-time progress
+- Library browsing with grid and list views
+- Search (full-text), sort, and filter
+- Metadata editing with autocomplete
+- REST API with OpenAPI documentation
+- Single binary deployment, backed by embedded SQLite
+- Dark/light theme
 
-- **Rust** (stable toolchain) — installed via [rustup](https://rustup.rs/). The pinned toolchain is picked up automatically from `rust-toolchain.toml`.
-- **just** — command runner. Install via `cargo install just` or [other methods](https://github.com/casey/just#installation).
-- **cargo-deny** — license and advisory audit. Install via `cargo install cargo-deny`.
+## Quick Start
 
-## Build
+### Docker (recommended)
 
-```sh
-just build           # debug build
-just build-release   # release build
+```bash
+# Create a directory for your books
+mkdir -p books
+
+# Start Archivis
+docker compose up -d
+
+# Open http://localhost:9514 in your browser
+# Create your admin account on first launch
 ```
 
-## Run
+Minimal `docker-compose.yml`:
 
-```sh
-just run
-# or directly:
-cargo run --package archivis-server -- --help
+```yaml
+services:
+  archivis:
+    image: archivis/archivis:latest
+    build: .
+    ports:
+      - "9514:9514"
+    volumes:
+      - archivis-data:/data
+      - ./books:/books
+    restart: unless-stopped
+
+volumes:
+  archivis-data:
 ```
+
+See `.env.example` for additional configuration options.
+
+### From source
+
+```bash
+# Build
+cargo build --release --package archivis-server
+cd frontend && npm ci && npm run build && cd ..
+
+# Run (serve frontend from build directory)
+./target/release/archivis --frontend-dir frontend/build
+```
+
+## Configuration
 
 The server accepts configuration via CLI flags, environment variables (`ARCHIVIS_` prefix), or a TOML config file (default: `config.toml`). CLI flags take highest priority.
 
@@ -31,6 +68,7 @@ The server accepts configuration via CLI flags, environment variables (`ARCHIVIS
 | `--port`              | `ARCHIVIS_PORT`              | `9514`             |
 | `--data-dir`          | `ARCHIVIS_DATA_DIR`          | `data`             |
 | `--book-storage-path` | `ARCHIVIS_BOOK_STORAGE_PATH` | `<data_dir>/books` |
+| `--frontend-dir`      | `ARCHIVIS_FRONTEND_DIR`      | _(none)_           |
 | `--log-level`         | `ARCHIVIS_LOG_LEVEL`         | `info`             |
 | `--config` / `-c`     | `ARCHIVIS_CONFIG`            | `config.toml`      |
 
@@ -44,11 +82,42 @@ book_storage_path = "/mnt/books"
 log_level = "info"
 ```
 
-## Test
+In Docker, `ARCHIVIS_LISTEN_ADDRESS` is set to `0.0.0.0` automatically.
 
-```sh
-just test            # run all tests
-just check-all       # fmt + clippy + test + deny (run before pushing)
+## Development
+
+### Prerequisites
+
+- **Rust** (stable toolchain) — installed via [rustup](https://rustup.rs/). The pinned toolchain is picked up automatically from `rust-toolchain.toml`.
+- **Node.js 22+** and npm
+- **just** — command runner. Install via `cargo install just` or [other methods](https://github.com/casey/just#installation).
+- **cargo-deny** — license and advisory audit. Install via `cargo install cargo-deny`.
+
+### Getting started
+
+```bash
+# Install frontend dependencies
+cd frontend && npm install && cd ..
+
+# Run development servers (backend + frontend with hot reload)
+just dev
+```
+
+### Useful commands
+
+| Command               | Description                                     |
+| --------------------- | ----------------------------------------------- |
+| `just dev`            | Run backend + frontend dev servers              |
+| `just check-all`      | fmt + clippy + test + deny (run before pushing) |
+| `just test`           | Run all tests                                   |
+| `just build-release`  | Production build                                |
+| `just sqlx-prepare`   | Regenerate SQLx offline query cache             |
+| `just check-frontend` | Lint and typecheck frontend                     |
+
+### Docker development
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
 ```
 
 ## Project layout

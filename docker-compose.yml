@@ -1,0 +1,17 @@
+services:
+  archivis:
+    image: archivis/archivis:latest
+    build: .
+    ports:
+      - "${ARCHIVIS_PORT:-9514}:9514"
+    volumes:
+      # Library data (metadata, thumbnails, etc.)
+      - archivis-data:/data
+      # Book Storage
+      - ${BOOK_STORAGE_PATH:-./books}:/books
+    restart: unless-stopped
+    environment:
+      - ARCHIVIS_LOG_LEVEL=${ARCHIVIS_LOG_LEVEL:-info}
+
+volumes:
+  archivis-data:
