@@ -6,7 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-archivis-core = { path = "../archivis-core" }
+archivis-core.workspace = true
 async-trait.workspace = true
 futures.workspace = true
 reqwest.workspace = true
