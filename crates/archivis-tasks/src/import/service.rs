@@ -61,7 +61,10 @@ impl<S: StorageBackend> ImportService<S> {
                     DuplicateInfo::SameIsbn {
                         existing_book_id, ..
                     }
-                    | DuplicateInfo::ExactHash { existing_book_id } => *existing_book_id,
+                    | DuplicateInfo::ExactHash { existing_book_id }
+                    | DuplicateInfo::FuzzyMatch {
+                        existing_book_id, ..
+                    } => *existing_book_id,
                 },
                 book_file_id: uuid::Uuid::nil(),
                 status: score.status,
@@ -69,6 +72,27 @@ impl<S: StorageBackend> ImportService<S> {
                 duplicate: Some(dup),
                 cover_extracted: false,
             });
+        }
+
+        // Fuzzy title+author duplicate check (soft — does not block import)
+        let fuzzy_duplicate = self
+            .check_fuzzy_duplicates(&embedded, &parsed, source_path)
+            .await?;
+        if let Some(ref dup) = fuzzy_duplicate {
+            let DuplicateInfo::FuzzyMatch {
+                existing_book_id,
+                title_similarity,
+                author_similarity,
+            } = dup
+            else {
+                unreachable!()
+            };
+            info!(
+                existing_book_id = %existing_book_id,
+                title_sim = title_similarity,
+                author_sim = author_similarity,
+                "fuzzy duplicate detected (soft — import continues)"
+            );
         }
 
         // Determine target book: existing (different format, same ISBN) or new
@@ -106,7 +130,7 @@ impl<S: StorageBackend> ImportService<S> {
             book_file_id: book_file,
             status: score.status,
             confidence: score.confidence,
-            duplicate: None,
+            duplicate: fuzzy_duplicate,
             cover_extracted: embedded.cover_image.is_some(),
         })
     }
@@ -225,6 +249,69 @@ impl<S: StorageBackend> ImportService<S> {
                 }
             }
         }
+        Ok(None)
+    }
+
+    /// Check for fuzzy title+author duplicates among existing books.
+    ///
+    /// Returns a `FuzzyMatch` if a likely duplicate is found. This is a *soft*
+    /// duplicate: the import continues regardless; the caller decides whether
+    /// to surface the match to the user.
+    async fn check_fuzzy_duplicates(
+        &self,
+        embedded: &ExtractedMetadata,
+        parsed: &ParsedFilename,
+        source_path: &Path,
+    ) -> Result<Option<DuplicateInfo>, ImportError> {
+        use archivis_formats::similarity;
+
+        let title = resolve_title(embedded, parsed, source_path);
+        let norm_title = similarity::normalize_title(&title);
+        if norm_title.is_empty() {
+            return Ok(None);
+        }
+
+        let candidates =
+            BookRepository::find_potential_duplicates(&self.db_pool, &title, 20).await?;
+
+        let author = resolve_author(embedded, parsed);
+        let norm_author = similarity::normalize_author(&author);
+
+        for candidate in &candidates {
+            let cand_norm_title = similarity::normalize_title(&candidate.book.title);
+            let title_sim = similarity::trigram_similarity(&norm_title, &cand_norm_title);
+
+            if title_sim < similarity::TITLE_MATCH_THRESHOLD {
+                continue;
+            }
+
+            // Compare authors: find best match across all candidate authors.
+            let author_sim = if norm_author.is_empty() && candidate.author_names.is_empty() {
+                // Both have no author info — treat as matching.
+                1.0
+            } else if candidate.author_names.is_empty() || norm_author.is_empty() {
+                // One side has no author — can't confirm or deny.
+                0.0
+            } else {
+                candidate
+                    .author_names
+                    .iter()
+                    .map(|ca| {
+                        let norm_ca = similarity::normalize_author(ca);
+                        similarity::trigram_similarity(&norm_author, &norm_ca)
+                    })
+                    .fold(0.0_f32, f32::max)
+            };
+
+            if author_sim >= similarity::AUTHOR_MATCH_THRESHOLD {
+                return Ok(Some(DuplicateInfo::FuzzyMatch {
+                    existing_book_id: candidate.book.id,
+                    title_similarity: title_sim,
+                    author_similarity: author_sim,
+                }));
+            }
+        }
+
         Ok(None)
     }
 

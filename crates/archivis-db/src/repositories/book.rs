@@ -33,6 +33,13 @@ pub struct BookSeriesEntry {
     pub position: Option<f64>,
 }
 
+/// A book with its author names pre-loaded (for duplicate detection).
+#[derive(Debug, Clone)]
+pub struct BookWithAuthors {
+    pub book: Book,
+    pub author_names: Vec<String>,
+}
+
 pub struct BookRepository;
 
 // ── Book list helper macros ────────────────────────────────────
@@ -592,6 +599,85 @@ impl BookRepository {
         Ok(())
     }
 
+    /// Find potential duplicate books by title similarity.
+    ///
+    /// Returns books whose normalized `sort_title` starts with the same
+    /// prefix (first 3 characters), enabling efficient DB-level
+    /// pre-filtering before expensive fuzzy matching in Rust.
+    pub async fn find_potential_duplicates(
+        pool: &SqlitePool,
+        title: &str,
+        limit: i64,
+    ) -> Result<Vec<BookWithAuthors>, DbError> {
+        let prefix = title
+            .to_lowercase()
+            .chars()
+            .filter(|c| c.is_alphanumeric())
+            .take(3)
+            .collect::<String>();
+
+        if prefix.len() < 3 {
+            return Ok(Vec::new());
+        }
+
+        let like_pattern = format!("{prefix}%");
+
+        let rows = sqlx::query_as!(
+            DuplicateCandidateRow,
+            r#"SELECT b.id, b.title, b.sort_title, b.description, b.language,
+                      b.publication_date, b.publisher_id, b.added_at, b.updated_at,
+                      b.rating, b.page_count, b.metadata_status, b.metadata_confidence,
+                      b.cover_path,
+                      GROUP_CONCAT(a.name, '||') as "author_names: String"
+               FROM books b
+               LEFT JOIN book_authors ba ON ba.book_id = b.id
+               LEFT JOIN authors a ON a.id = ba.author_id
+               WHERE LOWER(SUBSTR(b.sort_title, 1, 3)) LIKE ?
+               GROUP BY b.id
+               LIMIT ?"#,
+            like_pattern,
+            limit,
+        )
+        .fetch_all(pool)
+        .await
+        .map_err(|e| DbError::Query(e.to_string()))?;
+
+        rows.into_iter()
+            .map(|r| {
+                let book = BookRow {
+                    id: r.id,
+                    title: r.title,
+                    sort_title: r.sort_title,
+                    description: r.description,
+                    language: r.language,
+                    publication_date: r.publication_date,
+                    publisher_id: r.publisher_id,
+                    added_at: r.added_at,
+                    updated_at: r.updated_at,
+                    rating: r.rating,
+                    page_count: r.page_count,
+                    metadata_status: r.metadata_status,
+                    metadata_confidence: r.metadata_confidence,
+                    cover_path: r.cover_path,
+                }
+                .into_book()?;
+
+                let author_names = r
+                    .author_names
+                    .map(|names| {
+                        names
+                            .split("||")
+                            .filter(|s| !s.is_empty())
+                            .map(String::from)
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
+                Ok(BookWithAuthors { book, author_names })
+            })
+            .collect()
+    }
+
     /// List books that need identification (below confidence threshold).
     pub async fn list_needing_identification(
         pool: &SqlitePool,
@@ -615,6 +701,26 @@ impl BookRepository {
 }
 
 // ── Row types for sqlx mapping ──────────────────────────────────
+
+/// Row type for the `find_potential_duplicates` query (book + grouped author names).
+#[derive(sqlx::FromRow)]
+struct DuplicateCandidateRow {
+    id: String,
+    title: String,
+    sort_title: String,
+    description: Option<String>,
+    language: Option<String>,
+    publication_date: Option<String>,
+    publisher_id: Option<String>,
+    added_at: String,
+    updated_at: String,
+    rating: Option<f64>,
+    page_count: Option<i64>,
+    metadata_status: String,
+    metadata_confidence: f64,
+    cover_path: Option<String>,
+    author_names: Option<String>,
+}
 
 #[derive(sqlx::FromRow)]
 struct BookRow {

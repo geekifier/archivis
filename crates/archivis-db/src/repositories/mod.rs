@@ -12,7 +12,9 @@ mod types;
 mod user;
 
 pub use author::AuthorRepository;
-pub use book::{BookAuthorEntry, BookRepository, BookSeriesEntry, BookWithRelations};
+pub use book::{
+    BookAuthorEntry, BookRepository, BookSeriesEntry, BookWithAuthors, BookWithRelations,
+};
 pub use book_file::BookFileRepository;
 pub use candidate::CandidateRepository;
 pub use identifier::IdentifierRepository;

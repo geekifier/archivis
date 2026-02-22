@@ -60,6 +60,12 @@ pub enum DuplicateInfo {
         existing_book_id: Uuid,
         isbn: String,
     },
+    /// Fuzzy title+author match — soft duplicate that does not block import.
+    FuzzyMatch {
+        existing_book_id: Uuid,
+        title_similarity: f32,
+        author_similarity: f32,
+    },
 }
 
 /// Errors that can occur during a single-file import.

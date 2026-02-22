@@ -199,7 +199,10 @@ impl<S: StorageBackend> BulkImportService<S> {
                         });
                         outcome
                     }
-                    None => {
+                    Some(DuplicateInfo::FuzzyMatch { .. }) | None => {
+                        // FuzzyMatch is a soft duplicate — the book is still
+                        // imported. The duplicate info is preserved in the
+                        // ImportResult for downstream consumers.
                         let outcome = FileOutcome::Imported(result.book_id);
                         imported.push(result);
                         outcome

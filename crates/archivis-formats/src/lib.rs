@@ -3,6 +3,7 @@ pub mod epub;
 pub mod filename;
 pub mod pdf;
 pub mod scoring;
+pub mod similarity;
 
 use archivis_core::models::{IdentifierType, MetadataSource};
 
