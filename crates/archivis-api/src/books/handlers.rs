@@ -295,10 +295,30 @@ pub async fn get_cover(
                 .join(id.to_string())
                 .join(format!("{size}.webp"));
 
+            // Lazily generate if missing
             if !thumb_path.exists() {
-                return Err(ApiError::NotFound(format!(
-                    "thumbnail '{size}' not available"
-                )));
+                let storage = state.storage();
+                let cover_bytes = storage.read(cover_path).await?;
+
+                let target_height = if size == "sm" { 150 } else { 300 };
+
+                // Write source to a temp file for generate_thumbnail
+                let tmp_dir = tempfile::tempdir()
+                    .map_err(|e| ApiError::Internal(format!("failed to create temp dir: {e}")))?;
+                let tmp_source = tmp_dir.path().join("source");
+                tokio::fs::write(&tmp_source, &cover_bytes)
+                    .await
+                    .map_err(|e| ApiError::Internal(format!("failed to write temp cover: {e}")))?;
+
+                archivis_tasks::import::generate_thumbnail(
+                    &tmp_source,
+                    id,
+                    data_dir,
+                    size,
+                    target_height,
+                )
+                .await
+                .map_err(|e| ApiError::Internal(format!("thumbnail generation failed: {e}")))?;
             }
 
             serve_file_with_etag(&thumb_path, "image/webp", &headers).await

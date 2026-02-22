@@ -138,7 +138,7 @@ impl<S: StorageBackend> ImportService<S> {
                 Err(e) => warn!("cover storage failed, continuing without cover: {e}"),
             }
 
-            let cache_dir = self.config.data_dir.join("cache");
+            let cache_dir = self.config.data_dir.clone();
             if let Err(e) = cover::generate_thumbnails(
                 cover_data,
                 book_id,
