@@ -6,6 +6,9 @@ use std::sync::Arc;
 
 use archivis_api::state::{ApiConfig, AppState};
 use archivis_auth::{AuthService, LocalAuthAdapter};
+use archivis_metadata::{
+    HardcoverProvider, MetadataHttpClient, OpenLibraryProvider, ProviderRegistry,
+};
 use archivis_storage::local::LocalStorage;
 use archivis_tasks::import::{BulkImportService, ImportConfig, ImportService};
 use archivis_tasks::queue::{self, TaskQueue, Worker};
@@ -70,10 +73,68 @@ async fn main() {
     let auth_adapter = LocalAuthAdapter::new(db_pool.clone());
     let auth_service = AuthService::new(db_pool.clone(), auth_adapter);
 
-    // 4. Task queue + workers
+    // 4. Metadata providers
+    let provider_registry = init_metadata_providers(&config.metadata);
+
+    // 5. Task queue + workers
     let (task_queue, dispatch_rx) = TaskQueue::new(db_pool.clone());
     let task_queue = Arc::new(task_queue);
 
+    let workers = init_workers(&db_pool, &storage, &config);
+    let progress = task_queue.progress_sender();
+    let dispatcher_pool = db_pool.clone();
+    tokio::spawn(async move {
+        queue::run_dispatcher(dispatch_rx, workers, progress, dispatcher_pool).await;
+    });
+
+    // Recover interrupted tasks from previous run
+    if let Err(err) = queue::recover_tasks(&db_pool, &task_queue.dispatch_sender()).await {
+        tracing::warn!(%err, "Failed to recover interrupted tasks");
+    }
+
+    // 6. Build application state and router
+    let api_config = ApiConfig {
+        data_dir: config.data_dir.clone(),
+        frontend_dir: config.frontend_dir.clone(),
+    };
+    let state = AppState::new(
+        db_pool,
+        task_queue,
+        auth_service,
+        storage,
+        provider_registry,
+        api_config,
+    );
+    let router = archivis_api::build_router(state);
+
+    // 7. Bind and serve
+    let bind_addr = config.bind_address();
+    let listener = match TcpListener::bind(&bind_addr).await {
+        Ok(l) => l,
+        Err(err) => {
+            tracing::error!(%err, addr = %bind_addr, "Failed to bind TCP listener");
+            std::process::exit(1);
+        }
+    };
+
+    tracing::info!(addr = %bind_addr, "Archivis ready — listening for connections");
+
+    let server = axum::serve(listener, router).with_graceful_shutdown(shutdown_signal());
+
+    if let Err(err) = server.await {
+        tracing::error!(%err, "Server error");
+        std::process::exit(1);
+    }
+
+    tracing::info!("Archivis stopped");
+}
+
+/// Create and register background task workers.
+fn init_workers(
+    db_pool: &archivis_db::DbPool,
+    storage: &LocalStorage,
+    config: &AppConfig,
+) -> HashMap<archivis_core::models::TaskType, Arc<dyn Worker>> {
     let import_config = ImportConfig {
         data_dir: config.data_dir.clone(),
         ..ImportConfig::default()
@@ -101,46 +162,49 @@ async fn main() {
         archivis_core::models::TaskType::ImportDirectory,
         Arc::new(ImportDirectoryWorker::new(Arc::clone(&bulk_import_service))),
     );
+    workers
+}
 
-    let progress = task_queue.progress_sender();
-    let dispatcher_pool = db_pool.clone();
-    tokio::spawn(async move {
-        queue::run_dispatcher(dispatch_rx, workers, progress, dispatcher_pool).await;
-    });
+/// Build and configure the metadata provider registry from the application config.
+fn init_metadata_providers(metadata_config: &config::MetadataConfig) -> Arc<ProviderRegistry> {
+    let version = env!("CARGO_PKG_VERSION");
+    let mut http_client =
+        MetadataHttpClient::new(version, metadata_config.contact_email.as_deref());
 
-    // Recover interrupted tasks from previous run
-    if let Err(err) = queue::recover_tasks(&db_pool, &task_queue.dispatch_sender()).await {
-        tracing::warn!(%err, "Failed to recover interrupted tasks");
-    }
+    // Register rate limiters before wrapping in Arc
+    OpenLibraryProvider::register_rate_limiter_with_limit(
+        &mut http_client,
+        metadata_config.open_library.max_requests_per_minute,
+    );
+    HardcoverProvider::register_rate_limiter_with_limit(
+        &mut http_client,
+        metadata_config.hardcover.max_requests_per_minute,
+    );
 
-    // 5. Build application state and router
-    let api_config = ApiConfig {
-        data_dir: config.data_dir.clone(),
-        frontend_dir: config.frontend_dir.clone(),
-    };
-    let state = AppState::new(db_pool, task_queue, auth_service, storage, api_config);
-    let router = archivis_api::build_router(state);
+    let http_client = Arc::new(http_client);
 
-    // 6. Bind and serve
-    let bind_addr = config.bind_address();
-    let listener = match TcpListener::bind(&bind_addr).await {
-        Ok(l) => l,
-        Err(err) => {
-            tracing::error!(%err, addr = %bind_addr, "Failed to bind TCP listener");
-            std::process::exit(1);
-        }
-    };
+    let ol_provider = OpenLibraryProvider::new(
+        Arc::clone(&http_client),
+        metadata_config.enabled && metadata_config.open_library.enabled,
+    );
+    let hc_provider = HardcoverProvider::new(
+        Arc::clone(&http_client),
+        metadata_config.hardcover.api_token.clone(),
+        metadata_config.enabled && metadata_config.hardcover.enabled,
+    );
 
-    tracing::info!(addr = %bind_addr, "Archivis ready — listening for connections");
+    let mut registry = ProviderRegistry::new();
+    registry.register(Arc::new(ol_provider));
+    registry.register(Arc::new(hc_provider));
 
-    let server = axum::serve(listener, router).with_graceful_shutdown(shutdown_signal());
+    let available = registry.available();
+    tracing::info!(
+        providers = available.len(),
+        names = ?available.iter().map(|p| p.name()).collect::<Vec<_>>(),
+        "Metadata providers initialized"
+    );
 
-    if let Err(err) = server.await {
-        tracing::error!(%err, "Server error");
-        std::process::exit(1);
-    }
-
-    tracing::info!("Archivis stopped");
+    Arc::new(registry)
 }
 
 async fn shutdown_signal() {

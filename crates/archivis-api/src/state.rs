@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use archivis_auth::{AuthService, LocalAuthAdapter};
 use archivis_db::DbPool;
+use archivis_metadata::ProviderRegistry;
 use archivis_storage::local::LocalStorage;
 use archivis_tasks::queue::TaskQueue;
 
@@ -28,6 +29,7 @@ struct AppStateInner {
     task_queue: Arc<TaskQueue>,
     auth_service: AuthService<LocalAuthAdapter>,
     storage: LocalStorage,
+    provider_registry: Arc<ProviderRegistry>,
     config: ApiConfig,
 }
 
@@ -37,6 +39,7 @@ impl AppState {
         task_queue: Arc<TaskQueue>,
         auth_service: AuthService<LocalAuthAdapter>,
         storage: LocalStorage,
+        provider_registry: Arc<ProviderRegistry>,
         config: ApiConfig,
     ) -> Self {
         Self {
@@ -45,6 +48,7 @@ impl AppState {
                 task_queue,
                 auth_service,
                 storage,
+                provider_registry,
                 config,
             }),
         }
@@ -64,6 +68,10 @@ impl AppState {
 
     pub fn storage(&self) -> &LocalStorage {
         &self.inner.storage
+    }
+
+    pub fn provider_registry(&self) -> &Arc<ProviderRegistry> {
+        &self.inner.provider_registry
     }
 
     pub fn config(&self) -> &ApiConfig {

@@ -17,6 +17,7 @@ archivis-api.workspace = true
 archivis-auth.workspace = true
 archivis-core.workspace = true
 archivis-db.workspace = true
+archivis-metadata.workspace = true
 archivis-storage.workspace = true
 archivis-tasks.workspace = true
 axum.workspace = true

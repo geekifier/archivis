@@ -226,11 +226,14 @@ mod tests {
         let auth_service = archivis_auth::AuthService::new(db_pool.clone(), auth_adapter);
         let (task_queue, _rx) = archivis_tasks::queue::TaskQueue::new(db_pool.clone());
 
+        let provider_registry = Arc::new(archivis_metadata::ProviderRegistry::new());
+
         AppState::new(
             db_pool,
             Arc::new(task_queue),
             auth_service,
             storage,
+            provider_registry,
             ApiConfig {
                 data_dir: dir.to_path_buf(),
                 frontend_dir,

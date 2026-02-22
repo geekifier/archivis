@@ -68,6 +68,82 @@ pub struct AppConfig {
     pub frontend_dir: Option<PathBuf>,
     /// Log level filter string (supports `tracing` directives).
     pub log_level: String,
+    /// Metadata provider configuration.
+    #[serde(default)]
+    pub metadata: MetadataConfig,
+}
+
+/// Configuration for metadata provider lookups.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct MetadataConfig {
+    /// Enable metadata provider lookups.
+    pub enabled: bool,
+    /// Contact email included in User-Agent for API identification.
+    /// Recommended for Open Library (triples rate limit).
+    pub contact_email: Option<String>,
+    /// Open Library provider settings.
+    pub open_library: OpenLibraryConfig,
+    /// Hardcover provider settings.
+    pub hardcover: HardcoverConfig,
+    /// Auto-identify books after import when confidence is below this threshold.
+    pub auto_identify_threshold: f32,
+    /// Maximum concurrent identification tasks.
+    pub max_concurrent_identifies: usize,
+}
+
+impl Default for MetadataConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            contact_email: None,
+            open_library: OpenLibraryConfig::default(),
+            hardcover: HardcoverConfig::default(),
+            auto_identify_threshold: 0.6,
+            max_concurrent_identifies: 2,
+        }
+    }
+}
+
+/// Open Library provider settings.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct OpenLibraryConfig {
+    /// Whether Open Library lookups are enabled.
+    pub enabled: bool,
+    /// Maximum requests per minute (default: 100).
+    pub max_requests_per_minute: u32,
+}
+
+impl Default for OpenLibraryConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_requests_per_minute: 100,
+        }
+    }
+}
+
+/// Hardcover provider settings.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct HardcoverConfig {
+    /// Whether Hardcover lookups are enabled.
+    pub enabled: bool,
+    /// Bearer token for the Hardcover GraphQL API.
+    pub api_token: Option<String>,
+    /// Maximum requests per minute (default: 50).
+    pub max_requests_per_minute: u32,
+}
+
+impl Default for HardcoverConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            api_token: None,
+            max_requests_per_minute: 50,
+        }
+    }
 }
 
 impl Default for AppConfig {
@@ -80,6 +156,7 @@ impl Default for AppConfig {
             book_storage_path: PathBuf::new(),
             frontend_dir: None,
             log_level: "info".to_owned(),
+            metadata: MetadataConfig::default(),
         }
     }
 }
@@ -124,7 +201,7 @@ impl AppConfig {
         };
 
         figment = figment
-            .merge(Env::prefixed("ARCHIVIS_"))
+            .merge(Env::prefixed("ARCHIVIS_").split("__"))
             .merge(Serialized::defaults(overrides));
 
         let mut config: Self = figment.extract()?;
@@ -272,6 +349,74 @@ frontend_dir = "/opt/archivis/frontend"
         );
         // data_dir still default since not in TOML
         assert_eq!(config.data_dir, PathBuf::from("data"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn default_metadata_config_has_sane_defaults() {
+        let config = MetadataConfig::default();
+        assert!(config.enabled);
+        assert!(config.contact_email.is_none());
+        assert!(config.open_library.enabled);
+        assert_eq!(config.open_library.max_requests_per_minute, 100);
+        assert!(config.hardcover.enabled);
+        assert!(config.hardcover.api_token.is_none());
+        assert_eq!(config.hardcover.max_requests_per_minute, 50);
+        assert!((config.auto_identify_threshold - 0.6).abs() < f32::EPSILON);
+        assert_eq!(config.max_concurrent_identifies, 2);
+    }
+
+    #[test]
+    fn app_config_defaults_include_metadata() {
+        let cli = Cli::parse_from(["archivis", "--config", "/nonexistent/config.toml"]);
+        let config = AppConfig::load(&cli).expect("should load from defaults");
+        assert!(config.metadata.enabled);
+        assert!(config.metadata.open_library.enabled);
+        assert!(config.metadata.hardcover.api_token.is_none());
+    }
+
+    #[test]
+    fn toml_metadata_config_is_loaded() {
+        let dir = std::env::temp_dir().join("archivis-test-metadata-config");
+        std::fs::create_dir_all(&dir).unwrap();
+        let config_path = dir.join("test-metadata.toml");
+        std::fs::write(
+            &config_path,
+            r#"
+[metadata]
+enabled = true
+contact_email = "test@example.com"
+auto_identify_threshold = 0.8
+
+[metadata.open_library]
+enabled = false
+max_requests_per_minute = 50
+
+[metadata.hardcover]
+enabled = true
+api_token = "test-token-123"
+max_requests_per_minute = 30
+"#,
+        )
+        .unwrap();
+
+        let cli = Cli::parse_from(["archivis", "--config", config_path.to_str().unwrap()]);
+        let config = AppConfig::load(&cli).expect("should load metadata config from TOML");
+        assert!(config.metadata.enabled);
+        assert_eq!(
+            config.metadata.contact_email.as_deref(),
+            Some("test@example.com")
+        );
+        assert!((config.metadata.auto_identify_threshold - 0.8).abs() < f32::EPSILON);
+        assert!(!config.metadata.open_library.enabled);
+        assert_eq!(config.metadata.open_library.max_requests_per_minute, 50);
+        assert!(config.metadata.hardcover.enabled);
+        assert_eq!(
+            config.metadata.hardcover.api_token.as_deref(),
+            Some("test-token-123")
+        );
+        assert_eq!(config.metadata.hardcover.max_requests_per_minute, 30);
 
         let _ = std::fs::remove_dir_all(&dir);
     }
