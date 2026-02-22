@@ -12,7 +12,7 @@ use archivis_db::{
 };
 use archivis_metadata::{
     ExistingBookMetadata, MetadataQuery, MetadataResolver, ProviderIdentifier, ProviderMetadata,
-    ResolverResult,
+    ResolverResult, ScoredCandidate,
 };
 use archivis_storage::StorageBackend;
 use tracing::{debug, info, warn};
@@ -114,8 +114,26 @@ impl<S: StorageBackend> IdentificationService<S> {
                 .map_err(|e| TaskError::Failed(format!("failed to store candidate: {e}")))?;
         }
 
-        // 6. If auto_apply is true, apply the best match
-        if result.auto_apply {
+        // 6. Determine whether to auto-apply the best match.
+        //
+        // Even when the resolver flags auto_apply=true, we apply additional
+        // conservative guards here to avoid overwriting metadata when results
+        // are ambiguous:
+        //   - Never auto-apply when 2+ candidates are above the auto-apply threshold (0.85).
+        //   - Never auto-apply when the top two candidates have scores within 0.1.
+        //   - Only auto-apply when the best candidate is at least 0.15 above the second-best.
+        let should_auto_apply = result.auto_apply && {
+            let dominated = is_clearly_dominant(&result.candidates, 0.85);
+            if !dominated {
+                info!(
+                    book_id = %book_id,
+                    "auto-apply suppressed by service: ambiguous candidates"
+                );
+            }
+            dominated
+        };
+
+        if should_auto_apply {
             if let Some(ref best) = result.best_match {
                 info!(
                     book_id = %book_id,
@@ -611,6 +629,44 @@ fn merge_book_fields(book: &mut Book, provider_meta: &ProviderMetadata) {
     }
 }
 
+/// Check whether the best candidate is clearly dominant over all others.
+///
+/// Returns `true` only when:
+/// - There is at most one candidate above the `threshold`.
+/// - The top two candidates are NOT within 0.1 of each other.
+/// - The best candidate is at least 0.15 above the second-best.
+///
+/// Candidates must already be sorted by score descending.
+fn is_clearly_dominant(candidates: &[ScoredCandidate], threshold: f32) -> bool {
+    // If there's zero or one candidate, it's trivially dominant.
+    if candidates.len() <= 1 {
+        return true;
+    }
+
+    // Multiple candidates above the auto-apply threshold means ambiguity.
+    let above_threshold = candidates.iter().filter(|c| c.score >= threshold).count();
+    if above_threshold > 1 {
+        return false;
+    }
+
+    // Check the gap between the best and the second-best.
+    let best_score = candidates[0].score;
+    let second_score = candidates[1].score;
+    let gap = best_score - second_score;
+
+    // Top two too close (within 0.1) — ambiguous.
+    if gap < 0.1 {
+        return false;
+    }
+
+    // Second-best must be at least 0.15 below the best.
+    if gap < 0.15 {
+        return false;
+    }
+
+    true
+}
+
 /// Build a `MetadataQuery` from a book's existing metadata.
 fn build_metadata_query(
     book: &Book,
@@ -716,5 +772,112 @@ mod tests {
 
         let query = build_metadata_query(&book, &identifiers, &authors);
         assert_eq!(query.asin.as_deref(), Some("B000FA5ZEG"));
+    }
+
+    // ── is_clearly_dominant tests ──
+
+    /// Helper to build a minimal `ScoredCandidate` for dominance tests.
+    fn make_candidate(score: f32) -> ScoredCandidate {
+        ScoredCandidate {
+            metadata: ProviderMetadata {
+                provider_name: "test".to_string(),
+                title: Some("Test Book".to_string()),
+                authors: vec![],
+                description: None,
+                language: None,
+                publisher: None,
+                publication_date: None,
+                identifiers: vec![],
+                subjects: vec![],
+                series: None,
+                page_count: None,
+                cover_url: None,
+                rating: None,
+                confidence: score,
+            },
+            score,
+            provider_name: "test".to_string(),
+            match_reasons: vec![],
+        }
+    }
+
+    #[test]
+    fn dominant_single_candidate() {
+        let candidates = vec![make_candidate(0.95)];
+        assert!(
+            is_clearly_dominant(&candidates, 0.85),
+            "single candidate should be clearly dominant"
+        );
+    }
+
+    #[test]
+    fn dominant_empty_candidates() {
+        let candidates: Vec<ScoredCandidate> = vec![];
+        assert!(
+            is_clearly_dominant(&candidates, 0.85),
+            "empty list should be trivially dominant"
+        );
+    }
+
+    #[test]
+    fn not_dominant_two_above_threshold() {
+        let candidates = vec![make_candidate(0.95), make_candidate(0.90)];
+        assert!(
+            !is_clearly_dominant(&candidates, 0.85),
+            "two candidates above threshold should NOT be dominant"
+        );
+    }
+
+    #[test]
+    fn not_dominant_close_scores_within_010() {
+        // Best = 0.90, second = 0.82, gap = 0.08 (< 0.1)
+        let candidates = vec![make_candidate(0.90), make_candidate(0.82)];
+        assert!(
+            !is_clearly_dominant(&candidates, 0.85),
+            "gap < 0.1 should NOT be dominant"
+        );
+    }
+
+    #[test]
+    fn not_dominant_gap_between_010_and_015() {
+        // Best = 0.90, second = 0.78, gap = 0.12 (>= 0.1 but < 0.15)
+        let candidates = vec![make_candidate(0.90), make_candidate(0.78)];
+        assert!(
+            !is_clearly_dominant(&candidates, 0.85),
+            "gap between 0.10 and 0.15 should NOT be dominant"
+        );
+    }
+
+    #[test]
+    fn dominant_large_gap() {
+        // Best = 0.95, second = 0.60, gap = 0.35 (well above 0.15)
+        let candidates = vec![make_candidate(0.95), make_candidate(0.60)];
+        assert!(
+            is_clearly_dominant(&candidates, 0.85),
+            "gap >= 0.15 with only one above threshold should be dominant"
+        );
+    }
+
+    #[test]
+    fn dominant_just_above_015_gap() {
+        // Best = 0.90, second = 0.74, gap = 0.16 (just above boundary)
+        let candidates = vec![make_candidate(0.90), make_candidate(0.74)];
+        assert!(
+            is_clearly_dominant(&candidates, 0.85),
+            "gap above 0.15 should be dominant"
+        );
+    }
+
+    #[test]
+    fn not_dominant_three_candidates_two_above_threshold() {
+        let candidates = vec![
+            make_candidate(0.95),
+            make_candidate(0.88),
+            make_candidate(0.50),
+        ];
+        assert!(
+            !is_clearly_dominant(&candidates, 0.85),
+            "two of three candidates above threshold should NOT be dominant"
+        );
     }
 }

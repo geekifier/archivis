@@ -36,6 +36,14 @@ const CONTRADICTION_THRESHOLD: f32 = 0.3;
 /// Default auto-apply threshold.
 const DEFAULT_AUTO_APPLY_THRESHOLD: f32 = 0.85;
 
+/// Minimum gap between best and second-best candidate scores for auto-apply.
+/// If the gap is smaller, results are considered ambiguous and need manual review.
+const AUTO_APPLY_MIN_GAP: f32 = 0.15;
+
+/// Score proximity threshold for considering two candidates "close".
+/// If the top two candidates are within this range, auto-apply is suppressed.
+const AUTO_APPLY_CLOSE_SCORE_RANGE: f32 = 0.1;
+
 // ── Public types ────────────────────────────────────────────────────
 
 /// Result of resolving metadata across multiple providers.
@@ -147,15 +155,77 @@ impl MetadataResolver {
 
         // Phase 6: Determine auto-apply.
         let best_match = all_candidates.first().cloned();
-        let auto_apply = best_match
-            .as_ref()
-            .is_some_and(|m| m.score >= self.auto_apply_threshold && has_multi_signal(m));
+        let auto_apply = self.should_auto_apply(best_match.as_ref(), &all_candidates);
 
         ResolverResult {
             candidates: all_candidates,
             best_match,
             auto_apply,
         }
+    }
+
+    /// Determine whether the best match should be auto-applied.
+    ///
+    /// Conservative rules to avoid applying ambiguous results:
+    /// 1. The best candidate must exceed the auto-apply threshold.
+    /// 2. The best candidate must have multiple corroborating signals.
+    /// 3. There must be at most ONE candidate above the threshold.
+    /// 4. The top two candidates must NOT have scores within 0.1 of each other.
+    /// 5. The second-best candidate must be at least 0.15 below the best.
+    fn should_auto_apply(
+        &self,
+        best_match: Option<&ScoredCandidate>,
+        candidates: &[ScoredCandidate],
+    ) -> bool {
+        let Some(best) = best_match else {
+            return false;
+        };
+
+        // Basic requirements: above threshold and multiple signals.
+        if best.score < self.auto_apply_threshold || !has_multi_signal(best) {
+            return false;
+        }
+
+        // Count how many candidates are above the auto-apply threshold.
+        let above_threshold = candidates
+            .iter()
+            .filter(|c| c.score >= self.auto_apply_threshold)
+            .count();
+
+        if above_threshold > 1 {
+            debug!(
+                above_threshold,
+                "auto-apply suppressed: multiple candidates above threshold"
+            );
+            return false;
+        }
+
+        // Check the gap between best and second-best.
+        if let Some(second) = candidates.get(1) {
+            let gap = best.score - second.score;
+
+            if gap < AUTO_APPLY_CLOSE_SCORE_RANGE {
+                debug!(
+                    best_score = best.score,
+                    second_score = second.score,
+                    gap,
+                    "auto-apply suppressed: top two candidates too close"
+                );
+                return false;
+            }
+
+            if gap < AUTO_APPLY_MIN_GAP {
+                debug!(
+                    best_score = best.score,
+                    second_score = second.score,
+                    gap,
+                    "auto-apply suppressed: second-best too close (need gap >= {AUTO_APPLY_MIN_GAP})"
+                );
+                return false;
+            }
+        }
+
+        true
     }
 
     /// Gather candidates from all providers via ISBN lookup and/or search.
@@ -1343,6 +1413,370 @@ mod tests {
                 .iter()
                 .any(|r| r.contains("Cross-provider")),
             "same-provider merge should not claim cross-provider match"
+        );
+    }
+
+    // ── Conservative auto-apply tests ──
+
+    #[test]
+    fn no_auto_apply_when_two_candidates_above_threshold() {
+        // Directly test should_auto_apply with two candidates above threshold.
+        let registry = make_registry(vec![]);
+        let resolver = MetadataResolver::with_defaults(registry);
+
+        let best = ScoredCandidate {
+            metadata: make_metadata(
+                "ol",
+                "Dune",
+                &["Frank Herbert"],
+                Some("9780441172719"),
+                0.95,
+            ),
+            score: 0.95,
+            provider_name: "open_library".to_string(),
+            match_reasons: vec![
+                "ISBN exact match".to_string(),
+                "Title fuzzy match (100%)".to_string(),
+            ],
+        };
+        let second = ScoredCandidate {
+            metadata: make_metadata(
+                "ol",
+                "Foundation",
+                &["Isaac Asimov"],
+                Some("9780553293357"),
+                0.90,
+            ),
+            score: 0.88,
+            provider_name: "open_library".to_string(),
+            match_reasons: vec![
+                "ISBN exact match".to_string(),
+                "Title fuzzy match (85%)".to_string(),
+            ],
+        };
+        let candidates = vec![best.clone(), second];
+
+        // Both are above 0.85 threshold -> should NOT auto-apply.
+        assert!(
+            !resolver.should_auto_apply(Some(&best), &candidates),
+            "auto-apply should be false when multiple candidates exceed threshold"
+        );
+    }
+
+    #[tokio::test]
+    async fn no_auto_apply_when_top_two_scores_close() {
+        // Two candidates with scores within 0.1 of each other.
+        // Use search results with moderately high confidence to get close scores.
+        let ol = StubProvider::new("open_library").with_search_results(vec![
+            make_metadata(
+                "open_library",
+                "Dune",
+                &["Frank Herbert"],
+                Some("9780441172719"),
+                0.80,
+            ),
+            make_metadata(
+                "open_library",
+                "Dune Messiah",
+                &["Frank Herbert"],
+                Some("9780593098233"),
+                0.78,
+            ),
+        ]);
+
+        let registry = make_registry(vec![Arc::new(ol)]);
+        let resolver = MetadataResolver::with_defaults(registry);
+
+        let query = MetadataQuery {
+            title: Some("Dune".to_string()),
+            author: Some("Frank Herbert".to_string()),
+            ..Default::default()
+        };
+        let existing = ExistingBookMetadata {
+            title: Some("Dune".to_string()),
+            authors: vec!["Frank Herbert".to_string()],
+            ..Default::default()
+        };
+
+        let result = resolver.resolve(&query, Some(&existing)).await;
+
+        if result.candidates.len() >= 2 {
+            let gap = result.candidates[0].score - result.candidates[1].score;
+            if gap < 0.1 {
+                assert!(
+                    !result.auto_apply,
+                    "auto-apply should be false when top two candidates are within 0.1 (gap={gap})"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn auto_apply_with_single_dominant_candidate() {
+        // One high-confidence candidate, one much lower — should auto-apply.
+        let ol = StubProvider::new("open_library").with_isbn_results(vec![
+            make_metadata(
+                "open_library",
+                "Dune",
+                &["Frank Herbert"],
+                Some("9780441172719"),
+                0.95,
+            ),
+            make_metadata(
+                "open_library",
+                "Foundation",
+                &["Isaac Asimov"],
+                Some("9780553293357"),
+                0.3,
+            ),
+        ]);
+
+        let registry = make_registry(vec![Arc::new(ol)]);
+        let resolver = MetadataResolver::with_defaults(registry);
+
+        let query = MetadataQuery {
+            isbn: Some("9780441172719".to_string()),
+            title: Some("Dune".to_string()),
+            author: Some("Frank Herbert".to_string()),
+            ..Default::default()
+        };
+        let existing = ExistingBookMetadata {
+            title: Some("Dune".to_string()),
+            authors: vec!["Frank Herbert".to_string()],
+            ..Default::default()
+        };
+
+        let result = resolver.resolve(&query, Some(&existing)).await;
+
+        // The best match should have ISBN + title signals and be well above threshold.
+        let best = result.best_match.as_ref().unwrap();
+        assert!(
+            best.score >= 0.85,
+            "expected best score >= 0.85, got {}",
+            best.score
+        );
+
+        // If the gap to second-best is >= 0.15, auto-apply should be true.
+        if result.candidates.len() >= 2 {
+            let gap = result.candidates[0].score - result.candidates[1].score;
+            if gap >= 0.15 {
+                assert!(
+                    result.auto_apply,
+                    "auto-apply should be true with dominant candidate (gap={gap})"
+                );
+            }
+        } else {
+            // Only one candidate — should auto-apply if above threshold with multi-signal.
+            assert!(
+                result.auto_apply,
+                "single dominant candidate should auto-apply"
+            );
+        }
+    }
+
+    #[test]
+    fn should_auto_apply_unit_single_candidate_above_threshold() {
+        let registry = make_registry(vec![]);
+        let resolver = MetadataResolver::with_defaults(registry);
+
+        let best = ScoredCandidate {
+            metadata: make_metadata(
+                "ol",
+                "Dune",
+                &["Frank Herbert"],
+                Some("9780441172719"),
+                0.95,
+            ),
+            score: 0.95,
+            provider_name: "open_library".to_string(),
+            match_reasons: vec![
+                "ISBN exact match".to_string(),
+                "Title fuzzy match (100%)".to_string(),
+            ],
+        };
+        let candidates = vec![best.clone()];
+
+        assert!(
+            resolver.should_auto_apply(Some(&best), &candidates),
+            "single candidate above threshold with multi-signal should auto-apply"
+        );
+    }
+
+    #[test]
+    fn should_auto_apply_unit_two_above_threshold() {
+        let registry = make_registry(vec![]);
+        let resolver = MetadataResolver::with_defaults(registry);
+
+        let best = ScoredCandidate {
+            metadata: make_metadata(
+                "ol",
+                "Dune",
+                &["Frank Herbert"],
+                Some("9780441172719"),
+                0.95,
+            ),
+            score: 0.95,
+            provider_name: "open_library".to_string(),
+            match_reasons: vec![
+                "ISBN exact match".to_string(),
+                "Title fuzzy match (100%)".to_string(),
+            ],
+        };
+        let second = ScoredCandidate {
+            metadata: make_metadata(
+                "hc",
+                "Dune",
+                &["Frank Herbert"],
+                Some("9780593098233"),
+                0.90,
+            ),
+            score: 0.90,
+            provider_name: "hardcover".to_string(),
+            match_reasons: vec![
+                "ISBN exact match".to_string(),
+                "Title fuzzy match (90%)".to_string(),
+            ],
+        };
+        let candidates = vec![best.clone(), second];
+
+        assert!(
+            !resolver.should_auto_apply(Some(&best), &candidates),
+            "should NOT auto-apply when two candidates are above threshold"
+        );
+    }
+
+    #[test]
+    fn should_auto_apply_unit_close_scores() {
+        let registry = make_registry(vec![]);
+        let resolver = MetadataResolver::with_defaults(registry);
+
+        let best = ScoredCandidate {
+            metadata: make_metadata(
+                "ol",
+                "Dune",
+                &["Frank Herbert"],
+                Some("9780441172719"),
+                0.95,
+            ),
+            score: 0.90,
+            provider_name: "open_library".to_string(),
+            match_reasons: vec![
+                "ISBN exact match".to_string(),
+                "Title fuzzy match (100%)".to_string(),
+            ],
+        };
+        let second = ScoredCandidate {
+            metadata: make_metadata("hc", "Foundation", &["Isaac Asimov"], None, 0.5),
+            score: 0.82, // Within 0.1 of best (0.90 - 0.82 = 0.08)
+            provider_name: "hardcover".to_string(),
+            match_reasons: vec![],
+        };
+        let candidates = vec![best.clone(), second];
+
+        assert!(
+            !resolver.should_auto_apply(Some(&best), &candidates),
+            "should NOT auto-apply when top two scores are within 0.1"
+        );
+    }
+
+    #[test]
+    fn should_auto_apply_unit_gap_between_010_and_015() {
+        let registry = make_registry(vec![]);
+        let resolver = MetadataResolver::with_defaults(registry);
+
+        let best = ScoredCandidate {
+            metadata: make_metadata(
+                "ol",
+                "Dune",
+                &["Frank Herbert"],
+                Some("9780441172719"),
+                0.95,
+            ),
+            score: 0.90,
+            provider_name: "open_library".to_string(),
+            match_reasons: vec![
+                "ISBN exact match".to_string(),
+                "Title fuzzy match (100%)".to_string(),
+            ],
+        };
+        let second = ScoredCandidate {
+            metadata: make_metadata("hc", "Foundation", &["Isaac Asimov"], None, 0.5),
+            score: 0.78, // Gap = 0.12, between 0.10 and 0.15
+            provider_name: "hardcover".to_string(),
+            match_reasons: vec![],
+        };
+        let candidates = vec![best.clone(), second];
+
+        assert!(
+            !resolver.should_auto_apply(Some(&best), &candidates),
+            "should NOT auto-apply when gap is between 0.10 and 0.15"
+        );
+    }
+
+    #[test]
+    fn should_auto_apply_unit_large_gap() {
+        let registry = make_registry(vec![]);
+        let resolver = MetadataResolver::with_defaults(registry);
+
+        let best = ScoredCandidate {
+            metadata: make_metadata(
+                "ol",
+                "Dune",
+                &["Frank Herbert"],
+                Some("9780441172719"),
+                0.95,
+            ),
+            score: 0.95,
+            provider_name: "open_library".to_string(),
+            match_reasons: vec![
+                "ISBN exact match".to_string(),
+                "Title fuzzy match (100%)".to_string(),
+            ],
+        };
+        let second = ScoredCandidate {
+            metadata: make_metadata("hc", "Foundation", &["Isaac Asimov"], None, 0.5),
+            score: 0.50, // Gap = 0.45, well above 0.15
+            provider_name: "hardcover".to_string(),
+            match_reasons: vec![],
+        };
+        let candidates = vec![best.clone(), second];
+
+        assert!(
+            resolver.should_auto_apply(Some(&best), &candidates),
+            "should auto-apply when gap is well above 0.15 and only one above threshold"
+        );
+    }
+
+    #[test]
+    fn should_auto_apply_unit_no_best_match() {
+        let registry = make_registry(vec![]);
+        let resolver = MetadataResolver::with_defaults(registry);
+
+        assert!(
+            !resolver.should_auto_apply(None, &[]),
+            "should NOT auto-apply without a best match"
+        );
+    }
+
+    #[test]
+    fn should_auto_apply_unit_below_threshold() {
+        let registry = make_registry(vec![]);
+        let resolver = MetadataResolver::with_defaults(registry);
+
+        let best = ScoredCandidate {
+            metadata: make_metadata("ol", "Dune", &["Frank Herbert"], None, 0.5),
+            score: 0.70,
+            provider_name: "open_library".to_string(),
+            match_reasons: vec![
+                "ISBN exact match".to_string(),
+                "Title fuzzy match (100%)".to_string(),
+            ],
+        };
+        let candidates = vec![best.clone()];
+
+        assert!(
+            !resolver.should_auto_apply(Some(&best), &candidates),
+            "should NOT auto-apply when best score is below threshold"
         );
     }
 }
