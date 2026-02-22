@@ -1,5 +1,5 @@
 use chrono::{DateTime, NaiveDate, Utc};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 use validator::Validate;
@@ -8,6 +8,19 @@ use archivis_core::models::{
     Book, BookFile, BookFormat, Identifier, IdentifierType, MetadataSource, MetadataStatus, Tag,
 };
 use archivis_db::{BookAuthorEntry, BookSeriesEntry, BookWithRelations, PaginatedResult};
+
+/// Deserializer that distinguishes between absent, `null`, and a present value.
+/// - Field absent in JSON: `None` (no change)
+/// - Field present as `null`: `Some(None)` (clear the value)
+/// - Field present with value: `Some(Some(value))` (set the value)
+#[allow(clippy::option_option)]
+fn deserialize_optional_field<'de, T, D>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    T: Deserialize<'de>,
+    D: Deserializer<'de>,
+{
+    Ok(Some(Option::deserialize(deserializer)?))
+}
 
 // ── Query Parameters ────────────────────────────────────────────
 
@@ -60,6 +73,12 @@ pub struct UpdateBookRequest {
     pub page_count: Option<i32>,
     #[schema(value_type = Option<String>)]
     pub metadata_status: Option<MetadataStatus>,
+    /// Set or clear the publisher. Pass a UUID to set, `null` to clear.
+    /// Omit entirely to leave unchanged.
+    #[serde(default, deserialize_with = "deserialize_optional_field")]
+    #[schema(value_type = Option<String>)]
+    #[allow(clippy::option_option)]
+    pub publisher_id: Option<Option<Uuid>>,
 }
 
 /// A single author link in a set-authors request.
@@ -153,6 +172,7 @@ pub struct BookDetail {
     pub language: Option<String>,
     #[schema(value_type = Option<String>)]
     pub publication_date: Option<NaiveDate>,
+    pub publisher_id: Option<Uuid>,
     pub publisher_name: Option<String>,
     pub added_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -235,6 +255,7 @@ impl From<BookWithRelations> for BookDetail {
             description: bwr.book.description,
             language: bwr.book.language,
             publication_date: bwr.book.publication_date,
+            publisher_id: bwr.book.publisher_id,
             publisher_name: bwr.publisher_name,
             added_at: bwr.book.added_at,
             updated_at: bwr.book.updated_at,

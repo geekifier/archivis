@@ -3,6 +3,7 @@ pub mod authors;
 pub mod books;
 pub mod errors;
 pub mod import;
+pub mod publishers;
 pub mod series;
 pub mod state;
 pub mod tags;
@@ -54,6 +55,13 @@ mod openapi {
             super::authors::handlers::update_author,
             super::authors::handlers::delete_author,
             super::authors::handlers::list_author_books,
+            // Publishers
+            super::publishers::handlers::list_publishers,
+            super::publishers::handlers::create_publisher,
+            super::publishers::handlers::get_publisher,
+            super::publishers::handlers::update_publisher,
+            super::publishers::handlers::delete_publisher,
+            super::publishers::handlers::list_publisher_books,
             // Series
             super::series::handlers::list_series,
             super::series::handlers::create_series,
@@ -106,6 +114,11 @@ mod openapi {
             super::authors::types::UpdateAuthorRequest,
             super::authors::types::AuthorResponse,
             super::authors::types::PaginatedAuthors,
+            // Publishers
+            super::publishers::types::CreatePublisherRequest,
+            super::publishers::types::UpdatePublisherRequest,
+            super::publishers::types::PublisherResponse,
+            super::publishers::types::PaginatedPublishers,
             // Series
             super::series::types::CreateSeriesRequest,
             super::series::types::UpdateSeriesRequest,
@@ -130,6 +143,7 @@ mod openapi {
             (name = "auth", description = "Authentication and user management"),
             (name = "books", description = "Book CRUD operations"),
             (name = "authors", description = "Author management"),
+            (name = "publishers", description = "Publisher management"),
             (name = "series", description = "Series management"),
             (name = "tags", description = "Tag management"),
             (name = "import", description = "File and directory import"),
@@ -150,6 +164,7 @@ pub fn build_router(state: AppState) -> Router {
         .nest("/auth", auth::router())
         .nest("/books", books::router())
         .nest("/authors", authors::router())
+        .nest("/publishers", publishers::router())
         .nest("/series", series::router())
         .nest("/tags", tags::router())
         .nest("/import", import::router());

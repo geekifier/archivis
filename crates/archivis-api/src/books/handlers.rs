@@ -78,6 +78,7 @@ pub async fn list_books(
         tags: None,
         author_id: params.author_id.map(|id| id.to_string()),
         series_id: params.series_id.map(|id| id.to_string()),
+        publisher_id: None,
     };
 
     let pool = state.db_pool();
@@ -197,6 +198,10 @@ pub async fn update_book(
     }
     if let Some(status) = body.metadata_status {
         book.metadata_status = status;
+    }
+    // publisher_id: Some(Some(id)) = set, Some(None) = clear, None = no change
+    if let Some(pub_id) = body.publisher_id {
+        book.publisher_id = pub_id;
     }
 
     BookRepository::update(pool, &book).await?;

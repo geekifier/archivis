@@ -60,6 +60,8 @@ pub struct BookFilter {
     pub author_id: Option<String>,
     /// Filter by series ID.
     pub series_id: Option<String>,
+    /// Filter by publisher ID (direct column on books table).
+    pub publisher_id: Option<String>,
 }
 
 /// Paginated query result.

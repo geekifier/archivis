@@ -124,6 +124,7 @@ export interface BookDetail {
 	description: string | null;
 	language: string | null;
 	publication_date: string | null;
+	publisher_id: string | null;
 	publisher_name: string | null;
 	added_at: string;
 	updated_at: string;
@@ -168,6 +169,8 @@ export interface UpdateBookRequest {
 	rating?: number; // 0.0-5.0
 	page_count?: number;
 	metadata_status?: MetadataStatus;
+	/** Set to a UUID to assign a publisher, or null to clear. Omit to leave unchanged. */
+	publisher_id?: string | null;
 }
 
 export interface BookAuthorLink {
@@ -241,6 +244,23 @@ export interface PaginatedSeries {
 	page: number;
 	per_page: number;
 	total_pages: number;
+}
+
+export interface PublisherResponse {
+	id: string;
+	name: string;
+}
+
+export interface PaginatedPublishers {
+	items: PublisherResponse[];
+	total: number;
+	page: number;
+	per_page: number;
+	total_pages: number;
+}
+
+export interface CreatePublisherRequest {
+	name: string;
 }
 
 // --- Import types ---

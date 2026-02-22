@@ -13,6 +13,11 @@
 	import { Label } from '$lib/components/ui/label/index.js';
 	import AutocompleteInput from './AutocompleteInput.svelte';
 
+	interface PublisherInfo {
+		id: string;
+		name: string;
+	}
+
 	interface Props {
 		book: BookDetail;
 		oncancel: () => void;
@@ -33,7 +38,11 @@
 			pageCount: b.page_count != null ? String(b.page_count) : '',
 			authors: b.authors.map((a): AuthorEntry => ({ ...a })),
 			tags: b.tags.map((t): TagEntry => ({ ...t })),
-			series: b.series.map((s): SeriesEntry => ({ ...s }))
+			series: b.series.map((s): SeriesEntry => ({ ...s })),
+			publisher:
+				b.publisher_id && b.publisher_name
+					? ({ id: b.publisher_id, name: b.publisher_name } as PublisherInfo)
+					: null
 		};
 	}
 	const snapshot = untrack(() => snapshotBook(book));
@@ -48,6 +57,7 @@
 	let editAuthors = $state<AuthorEntry[]>(snapshot.authors);
 	let editTags = $state<TagEntry[]>(snapshot.tags);
 	let editSeries = $state<SeriesEntry[]>(snapshot.series);
+	let editPublisher = $state<PublisherInfo | null>(snapshot.publisher);
 
 	let saving = $state(false);
 	let saveError = $state<string | null>(null);
@@ -133,6 +143,29 @@
 		];
 	}
 
+	// --- Publisher management ---
+
+	function removePublisher() {
+		editPublisher = null;
+	}
+
+	async function searchPublishers(q: string) {
+		const result = await api.publishers.search(q);
+		return result.items.map((p) => ({
+			id: p.id,
+			label: p.name
+		}));
+	}
+
+	function selectPublisher(item: { id: string; label: string }) {
+		editPublisher = { id: item.id, name: item.label };
+	}
+
+	async function createPublisher(name: string) {
+		const publisher = await api.publishers.create({ name });
+		editPublisher = { id: publisher.id, name: publisher.name };
+	}
+
 	// --- Series management ---
 
 	function removeSeries(index: number) {
@@ -190,6 +223,14 @@
 		if (ratingVal !== book.rating) updateData.rating = ratingVal ?? undefined;
 		const pageVal = pageCount === '' ? null : Number(pageCount);
 		if (pageVal !== book.page_count) updateData.page_count = pageVal ?? undefined;
+
+		// Check if publisher changed and include in scalar update
+		const originalPublisherId = book.publisher_id ?? null;
+		const newPublisherId = editPublisher?.id ?? null;
+		const publisherChanged = newPublisherId !== originalPublisherId;
+		if (publisherChanged) {
+			updateData.publisher_id = newPublisherId;
+		}
 
 		const hasScalarChanges = Object.keys(updateData).length > 0;
 
@@ -303,6 +344,43 @@
 			rows="4"
 			class="border-input bg-background ring-offset-background placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 flex w-full rounded-md border px-3 py-2 text-sm shadow-xs outline-none focus-visible:ring-[3px] disabled:cursor-not-allowed disabled:opacity-50"
 		></textarea>
+	</div>
+
+	<!-- Publisher -->
+	<div class="space-y-1.5">
+		<Label>Publisher</Label>
+		{#if editPublisher}
+			<div class="flex items-center gap-2 rounded border border-border px-2 py-1 text-sm">
+				<span class="flex-1 font-medium">{editPublisher.name}</span>
+				<button
+					type="button"
+					class="p-0.5 text-muted-foreground hover:text-destructive"
+					onclick={removePublisher}
+					aria-label="Remove publisher"
+				>
+					<svg
+						class="size-3.5"
+						viewBox="0 0 24 24"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="2"
+						stroke-linecap="round"
+						stroke-linejoin="round"
+					>
+						<path d="M18 6 6 18" />
+						<path d="m6 6 12 12" />
+					</svg>
+				</button>
+			</div>
+		{:else}
+			<AutocompleteInput
+				placeholder="Search publisher..."
+				search={searchPublishers}
+				onselect={selectPublisher}
+				allowCreate
+				oncreate={createPublisher}
+			/>
+		{/if}
 	</div>
 
 	<!-- Authors -->

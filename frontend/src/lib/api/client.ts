@@ -4,12 +4,15 @@ import type {
 	AuthStatusResponse,
 	BookDetail,
 	BookListParams,
+	CreatePublisherRequest,
 	LoginRequest,
 	LoginResponse,
 	PaginatedAuthors,
 	PaginatedBooks,
+	PaginatedPublishers,
 	PaginatedSeries,
 	PaginatedTags,
+	PublisherResponse,
 	ScanManifestResponse,
 	SetBookAuthorsRequest,
 	SetBookSeriesRequest,
@@ -192,6 +195,19 @@ export const api = {
 		}
 	},
 
+	publishers: {
+		/** Search publishers by query string. */
+		search(q: string): Promise<PaginatedPublishers> {
+			const params = new URLSearchParams({ q, per_page: '10' });
+			return request<PaginatedPublishers>('GET', `/publishers?${params.toString()}`);
+		},
+
+		/** Create a new publisher. */
+		create(data: CreatePublisherRequest): Promise<PublisherResponse> {
+			return request<PublisherResponse>('POST', '/publishers', data);
+		}
+	},
+
 	series: {
 		/** Search series by query string. */
 		search(q: string): Promise<PaginatedSeries> {
@@ -271,6 +287,7 @@ export type {
 	BookSeriesLink,
 	BookSummary,
 	BookTagLink,
+	CreatePublisherRequest,
 	FileEntry,
 	FormatSummary,
 	IdentifierEntry,
@@ -280,8 +297,10 @@ export type {
 	MetadataStatus,
 	PaginatedAuthors,
 	PaginatedBooks,
+	PaginatedPublishers,
 	PaginatedSeries,
 	PaginatedTags,
+	PublisherResponse,
 	ScanManifestResponse,
 	SeriesEntry,
 	SeriesResponse,
