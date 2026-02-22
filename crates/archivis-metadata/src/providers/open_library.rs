@@ -231,24 +231,21 @@ impl OpenLibraryProvider {
 
         let mut identifiers = Vec::new();
 
-        // ISBN-13
-        if let Some(ref isbns) = edition.isbn_13 {
-            for isbn in isbns {
-                identifiers.push(ProviderIdentifier {
-                    identifier_type: IdentifierType::Isbn13,
-                    value: isbn.clone(),
-                });
-            }
+        // ISBN-13 — keep only the first entry; editions rarely have
+        // multiple ISBN-13s, but cap defensively.
+        if let Some(isbn) = edition.isbn_13.as_ref().and_then(|v| v.first()) {
+            identifiers.push(ProviderIdentifier {
+                identifier_type: IdentifierType::Isbn13,
+                value: isbn.clone(),
+            });
         }
 
-        // ISBN-10
-        if let Some(ref isbns) = edition.isbn_10 {
-            for isbn in isbns {
-                identifiers.push(ProviderIdentifier {
-                    identifier_type: IdentifierType::Isbn10,
-                    value: isbn.clone(),
-                });
-            }
+        // ISBN-10 — same: keep only the first.
+        if let Some(isbn) = edition.isbn_10.as_ref().and_then(|v| v.first()) {
+            identifiers.push(ProviderIdentifier {
+                identifier_type: IdentifierType::Isbn10,
+                value: isbn.clone(),
+            });
         }
 
         // Open Library key as OLID
@@ -325,18 +322,31 @@ impl OpenLibraryProvider {
 
                 let subjects = doc.subject.clone().unwrap_or_default();
 
+                // OL search results aggregate ISBNs across ALL editions of a
+                // work (hardcover, paperback, audiobook, etc.). Limit to at most
+                // one ISBN-13 and one ISBN-10 to avoid polluting the book record
+                // with identifiers from unrelated editions.
                 let mut identifiers = Vec::new();
                 if let Some(ref isbns) = doc.isbn {
+                    let mut has_isbn13 = false;
+                    let mut has_isbn10 = false;
                     for isbn in isbns {
-                        let id_type = if isbn.len() == 13 {
-                            IdentifierType::Isbn13
-                        } else {
-                            IdentifierType::Isbn10
-                        };
-                        identifiers.push(ProviderIdentifier {
-                            identifier_type: id_type,
-                            value: isbn.clone(),
-                        });
+                        if isbn.len() == 13 && !has_isbn13 {
+                            has_isbn13 = true;
+                            identifiers.push(ProviderIdentifier {
+                                identifier_type: IdentifierType::Isbn13,
+                                value: isbn.clone(),
+                            });
+                        } else if isbn.len() != 13 && !has_isbn10 {
+                            has_isbn10 = true;
+                            identifiers.push(ProviderIdentifier {
+                                identifier_type: IdentifierType::Isbn10,
+                                value: isbn.clone(),
+                            });
+                        }
+                        if has_isbn13 && has_isbn10 {
+                            break;
+                        }
                     }
                 }
 
@@ -1095,6 +1105,150 @@ mod tests {
             .find(|id| id.identifier_type == IdentifierType::OpenLibrary);
         assert!(olid.is_some());
         assert_eq!(olid.unwrap().value, "OL7353617M");
+    }
+
+    // ── ISBN capping ─────────────────────────────────────────────────
+
+    #[test]
+    fn search_results_cap_isbns_to_one_per_type() {
+        // Simulate an OL search doc with many ISBNs aggregated across
+        // editions (hardcover, paperback, audiobook, different printings).
+        let json = r#"{
+            "numFound": 1,
+            "start": 0,
+            "docs": [
+                {
+                    "key": "/works/OL20648239W",
+                    "title": "Wicked Plants",
+                    "author_name": ["Amy Stewart"],
+                    "first_publish_year": 2009,
+                    "isbn": [
+                        "9781565126831",
+                        "9780606264020",
+                        "9781565129399",
+                        "156512683X",
+                        "0606264027",
+                        "1565129393",
+                        "9781616200640",
+                        "9781616200190",
+                        "1616200642",
+                        "1616200197",
+                        "9780374531137",
+                        "0374531137",
+                        "9781469285894",
+                        "1469285894",
+                        "9781622311118",
+                        "1622311116"
+                    ],
+                    "cover_i": 6466800,
+                    "publisher": ["Algonquin Books"],
+                    "number_of_pages_median": 236,
+                    "subject": ["Botany", "Poisonous plants"]
+                }
+            ]
+        }"#;
+
+        let search_response: OlSearchResponse = serde_json::from_str(json).unwrap();
+        let query = MetadataQuery {
+            title: Some("Wicked Plants".to_string()),
+            ..Default::default()
+        };
+
+        let results = OpenLibraryProvider::parse_search_results(&search_response, &query);
+        assert_eq!(results.len(), 1);
+
+        let isbn_identifiers: Vec<_> = results[0]
+            .identifiers
+            .iter()
+            .filter(|id| {
+                matches!(
+                    id.identifier_type,
+                    IdentifierType::Isbn13 | IdentifierType::Isbn10
+                )
+            })
+            .collect();
+
+        // At most one ISBN-13 and one ISBN-10 (2 total max).
+        assert!(
+            isbn_identifiers.len() <= 2,
+            "expected at most 2 ISBN identifiers, got {}",
+            isbn_identifiers.len()
+        );
+
+        let isbn13_count = isbn_identifiers
+            .iter()
+            .filter(|id| id.identifier_type == IdentifierType::Isbn13)
+            .count();
+        let isbn10_count = isbn_identifiers
+            .iter()
+            .filter(|id| id.identifier_type == IdentifierType::Isbn10)
+            .count();
+
+        assert_eq!(isbn13_count, 1, "expected exactly one ISBN-13");
+        assert_eq!(isbn10_count, 1, "expected exactly one ISBN-10");
+
+        // Should be the *first* of each type encountered.
+        let isbn13 = isbn_identifiers
+            .iter()
+            .find(|id| id.identifier_type == IdentifierType::Isbn13)
+            .unwrap();
+        assert_eq!(isbn13.value, "9781565126831");
+
+        let isbn10 = isbn_identifiers
+            .iter()
+            .find(|id| id.identifier_type == IdentifierType::Isbn10)
+            .unwrap();
+        assert_eq!(isbn10.value, "156512683X");
+
+        // OLID should still be present.
+        let olid = results[0]
+            .identifiers
+            .iter()
+            .find(|id| id.identifier_type == IdentifierType::OpenLibrary);
+        assert!(olid.is_some());
+    }
+
+    #[test]
+    fn edition_metadata_caps_isbns_to_first_of_each_type() {
+        let edition = OlEdition {
+            key: Some("/books/OL12345M".to_string()),
+            title: Some("Test Book".to_string()),
+            authors: None,
+            publishers: None,
+            publish_date: None,
+            isbn_13: Some(vec![
+                "9781111111111".to_string(),
+                "9782222222222".to_string(),
+                "9783333333333".to_string(),
+            ]),
+            isbn_10: Some(vec!["1111111111".to_string(), "2222222222".to_string()]),
+            number_of_pages: None,
+            covers: None,
+            languages: None,
+            series: None,
+            works: None,
+            description: None,
+        };
+
+        let metadata =
+            OpenLibraryProvider::build_metadata_from_edition(&edition, None, &[], "9781111111111");
+
+        let isbn13s: Vec<_> = metadata
+            .identifiers
+            .iter()
+            .filter(|id| id.identifier_type == IdentifierType::Isbn13)
+            .collect();
+        let isbn10s: Vec<_> = metadata
+            .identifiers
+            .iter()
+            .filter(|id| id.identifier_type == IdentifierType::Isbn10)
+            .collect();
+
+        assert_eq!(isbn13s.len(), 1, "expected exactly one ISBN-13");
+        assert_eq!(isbn13s[0].value, "9781111111111");
+
+        assert_eq!(isbn10s.len(), 1, "expected exactly one ISBN-10");
+        assert_eq!(isbn10s[0].value, "1111111111");
     }
 
     // ── 404 handling ─────────────────────────────────────────────────
