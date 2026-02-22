@@ -4,6 +4,7 @@
 	import type {
 		AuthorEntry,
 		BookDetail,
+		MetadataStatus,
 		SeriesEntry,
 		TagEntry,
 		UpdateBookRequest
@@ -11,7 +12,14 @@
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
 	import { Label } from '$lib/components/ui/label/index.js';
+	import * as Select from '$lib/components/ui/select/index.js';
 	import AutocompleteInput from './AutocompleteInput.svelte';
+
+	const metadataStatusOptions: { value: MetadataStatus; label: string }[] = [
+		{ value: 'identified', label: 'Identified' },
+		{ value: 'needs_review', label: 'Needs Review' },
+		{ value: 'unidentified', label: 'Unidentified' }
+	];
 
 	interface PublisherInfo {
 		id: string;
@@ -36,6 +44,7 @@
 			publicationDate: b.publication_date ?? '',
 			rating: b.rating != null ? String(b.rating) : '',
 			pageCount: b.page_count != null ? String(b.page_count) : '',
+			metadataStatus: b.metadata_status,
 			authors: b.authors.map((a): AuthorEntry => ({ ...a })),
 			tags: b.tags.map((t): TagEntry => ({ ...t })),
 			series: b.series.map((s): SeriesEntry => ({ ...s })),
@@ -54,6 +63,7 @@
 	let publicationDate = $state(snapshot.publicationDate);
 	let rating = $state(snapshot.rating);
 	let pageCount = $state(snapshot.pageCount);
+	let metadataStatus = $state<MetadataStatus>(snapshot.metadataStatus);
 	let editAuthors = $state<AuthorEntry[]>(snapshot.authors);
 	let editTags = $state<TagEntry[]>(snapshot.tags);
 	let editSeries = $state<SeriesEntry[]>(snapshot.series);
@@ -224,6 +234,11 @@
 		const pageVal = pageCount === '' ? null : Number(pageCount);
 		if (pageVal !== book.page_count) updateData.page_count = pageVal ?? undefined;
 
+		// Check if metadata status changed
+		if (metadataStatus !== book.metadata_status) {
+			updateData.metadata_status = metadataStatus;
+		}
+
 		// Check if publisher changed and include in scalar update
 		const originalPublisherId = book.publisher_id ?? null;
 		const newPublisherId = editPublisher?.id ?? null;
@@ -344,6 +359,21 @@
 			rows="4"
 			class="border-input bg-background ring-offset-background placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 flex w-full rounded-md border px-3 py-2 text-sm shadow-xs outline-none focus-visible:ring-[3px] disabled:cursor-not-allowed disabled:opacity-50"
 		></textarea>
+	</div>
+
+	<!-- Metadata Status -->
+	<div class="space-y-1.5">
+		<Label>Metadata Status</Label>
+		<Select.Root type="single" bind:value={metadataStatus}>
+			<Select.Trigger class="w-full">
+				{metadataStatusOptions.find((o) => o.value === metadataStatus)?.label ?? metadataStatus}
+			</Select.Trigger>
+			<Select.Content>
+				{#each metadataStatusOptions as option (option.value)}
+					<Select.Item value={option.value} label={option.label} />
+				{/each}
+			</Select.Content>
+		</Select.Root>
 	</div>
 
 	<!-- Publisher -->

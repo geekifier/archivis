@@ -27,6 +27,8 @@
 	let coverUploadError = $state<string | null>(null);
 	let coverCacheBust = $state(0);
 	let coverFileInput = $state<HTMLInputElement | null>(null);
+	let markingIdentified = $state(false);
+	let markIdentifiedError = $state<string | null>(null);
 
 	const bookId = $derived(page.params.id ?? '');
 	const hue = $derived(placeholderHue(bookId));
@@ -117,6 +119,19 @@
 			uploadingCover = false;
 			// Reset the input so the same file can be selected again
 			input.value = '';
+		}
+	}
+
+	async function handleMarkIdentified() {
+		markingIdentified = true;
+		markIdentifiedError = null;
+		try {
+			const updated = await api.books.update(bookId, { metadata_status: 'identified' });
+			book = updated;
+		} catch (err) {
+			markIdentifiedError = err instanceof Error ? err.message : 'Failed to update status';
+		} finally {
+			markingIdentified = false;
 		}
 	}
 
@@ -443,6 +458,24 @@
 							>
 								{statusLabel(book.metadata_status)}
 							</span>
+							{#if book.metadata_status === 'needs_review' || book.metadata_status === 'unidentified'}
+								<Button
+									size="sm"
+									variant="outline"
+									onclick={handleMarkIdentified}
+									disabled={markingIdentified}
+									class="h-6 px-2 text-xs"
+								>
+									{#if markingIdentified}
+										Updating...
+									{:else}
+										Mark as Identified
+									{/if}
+								</Button>
+							{/if}
+							{#if markIdentifiedError}
+								<span class="text-xs text-destructive">{markIdentifiedError}</span>
+							{/if}
 							<div class="flex items-center gap-2 text-xs text-muted-foreground">
 								<span>{Math.round(book.metadata_confidence * 100)}% confidence</span>
 								<div class="h-1.5 w-20 overflow-hidden rounded-full bg-muted">
