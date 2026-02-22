@@ -681,7 +681,38 @@
 						<!-- Completion result -->
 						{#if progress?.status === 'completed' && progress.result}
 							<div class="mt-2 rounded bg-muted/50 p-2 text-xs">
-								{#if typeof progress.result === 'object'}
+								{#if progress.result.imported !== undefined}
+									<!-- Directory import result summary -->
+									<div class="flex flex-wrap gap-3">
+										<span>
+											<span class="font-semibold text-green-600 dark:text-green-400">{progress.result.imported}</span>
+											<span class="text-muted-foreground"> imported</span>
+										</span>
+										{#if Number(progress.result.skipped) > 0}
+											<span>
+												<span class="font-semibold text-amber-600 dark:text-amber-400">{progress.result.skipped}</span>
+												<span class="text-muted-foreground"> skipped</span>
+											</span>
+										{/if}
+										{#if Number(progress.result.failed) > 0}
+											<span>
+												<span class="font-semibold text-red-600 dark:text-red-400">{progress.result.failed}</span>
+												<span class="text-muted-foreground"> failed</span>
+											</span>
+										{/if}
+									</div>
+								{:else if progress.result.book_id}
+									<!-- Single file import result -->
+									<div class="flex items-center justify-between">
+										<span class="text-muted-foreground">Book imported successfully</span>
+										<a
+											href="/books/{progress.result.book_id}"
+											class="font-medium text-primary hover:underline"
+										>
+											View Book
+										</a>
+									</div>
+								{:else}
 									{#each Object.entries(progress.result) as [key, value] (key)}
 										<div class="flex justify-between">
 											<span class="text-muted-foreground">{key}:</span>
@@ -689,6 +720,17 @@
 										</div>
 									{/each}
 								{/if}
+							</div>
+							<div class="mt-2">
+								<a
+									href="/"
+									class="inline-flex items-center gap-1.5 text-xs font-medium text-primary hover:underline"
+								>
+									<svg class="size-3.5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+										<path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H19a1 1 0 0 1 1 1v18a1 1 0 0 1-1 1H6.5a1 1 0 0 1 0-5H20" />
+									</svg>
+									View Library
+								</a>
 							</div>
 						{/if}
 					</div>

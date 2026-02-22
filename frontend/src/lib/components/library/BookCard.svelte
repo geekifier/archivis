@@ -18,6 +18,22 @@
 	const coverMd = $derived(`/api/books/${book.id}/cover?size=md`);
 
 	const hue = $derived(placeholderHue(book.id));
+
+	/** Primary format badge extracted from the first file. */
+	const formatLabel = $derived(
+		book.files && book.files.length > 0
+			? book.files[0].format.toUpperCase()
+			: null
+	);
+
+	/** Status indicator: only shown for non-identified books. */
+	const statusIndicator = $derived<{ color: string; title: string } | null>(
+		book.metadata_status === 'needs_review'
+			? { color: 'bg-amber-500', title: 'Needs review' }
+			: book.metadata_status === 'unidentified'
+				? { color: 'bg-red-500', title: 'Unidentified' }
+				: null
+	);
 </script>
 
 <a
@@ -46,6 +62,17 @@
 					{book.title}
 				</span>
 			</div>
+		{/if}
+		{#if formatLabel}
+			<span class="absolute bottom-1.5 right-1.5 rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-semibold uppercase leading-none text-white/90 backdrop-blur-sm">
+				{formatLabel}
+			</span>
+		{/if}
+		{#if statusIndicator}
+			<span
+				class="absolute top-1.5 right-1.5 size-2.5 rounded-full ring-2 ring-background {statusIndicator.color}"
+				title={statusIndicator.title}
+			></span>
 		{/if}
 	</div>
 

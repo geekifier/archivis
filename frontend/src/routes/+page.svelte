@@ -50,7 +50,7 @@
 		activeSortOrder = sortOrder;
 	});
 
-	const includeParam = $derived(viewMode === 'list' ? 'authors,series,files' : 'authors');
+	const includeParam = $derived(viewMode === 'list' ? 'authors,series,files' : 'authors,files');
 
 	function setViewMode(mode: ViewMode) {
 		viewMode = mode;
@@ -312,13 +312,22 @@
 		<div class="flex items-center justify-center rounded-lg border border-dashed border-border p-12">
 			<div class="text-center">
 				{#if activeQuery || filters.hasActiveFilters}
-					<p class="text-muted-foreground">No books match your {activeQuery ? 'search' : 'filters'}.</p>
+					<svg class="mx-auto mb-3 size-10 text-muted-foreground/50" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+						<circle cx="11" cy="11" r="8" />
+						<path d="m21 21-4.3-4.3" />
+					</svg>
+					<p class="font-medium text-foreground">No books found</p>
+					<p class="mt-1 text-sm text-muted-foreground">No books match your current {activeQuery && filters.hasActiveFilters ? 'search and filters' : activeQuery ? 'search' : 'filters'}.</p>
 					<Button variant="outline" class="mt-4" onclick={() => { searchInput = ''; activeQuery = ''; filters.clearFilters(); }}>
 						Clear {activeQuery && filters.hasActiveFilters ? 'search & filters' : activeQuery ? 'search' : 'filters'}
 					</Button>
 				{:else}
-					<p class="text-muted-foreground">No books in your library yet.</p>
-					<Button variant="outline" class="mt-4" href="/import">Import books</Button>
+					<svg class="mx-auto mb-3 size-10 text-muted-foreground/50" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+						<path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H19a1 1 0 0 1 1 1v18a1 1 0 0 1-1 1H6.5a1 1 0 0 1 0-5H20" />
+					</svg>
+					<p class="font-medium text-foreground">Welcome to Archivis</p>
+					<p class="mt-1 text-sm text-muted-foreground">Your library is empty. Import your first e-books to get started.</p>
+					<Button class="mt-4" href="/import">Import books</Button>
 				{/if}
 			</div>
 		</div>
