@@ -10,10 +10,14 @@ import type {
 	PaginatedBooks,
 	PaginatedSeries,
 	PaginatedTags,
+	ScanManifestResponse,
 	SetBookAuthorsRequest,
 	SetBookTagsRequest,
 	SetupRequest,
+	TaskCreatedResponse,
+	TaskResponse,
 	UpdateBookRequest,
+	UploadResponse,
 	User
 } from './types.js';
 
@@ -188,6 +192,63 @@ export const api = {
 			const params = new URLSearchParams({ q, per_page: '10' });
 			return request<PaginatedSeries>('GET', `/series?${params.toString()}`);
 		}
+	},
+
+	import: {
+		/** Upload one or more ebook files via multipart form data. */
+		async upload(files: File[]): Promise<UploadResponse> {
+			const formData = new FormData();
+			for (const file of files) {
+				formData.append('file', file);
+			}
+
+			const headers: Record<string, string> = {
+				Accept: 'application/json'
+			};
+			const token = getSessionToken();
+			if (token) {
+				headers['Authorization'] = `Bearer ${token}`;
+			}
+			// Do NOT set Content-Type — let the browser set the multipart boundary.
+
+			const response = await fetch(`${BASE_URL}/import/upload`, {
+				method: 'POST',
+				headers,
+				body: formData
+			});
+
+			if (!response.ok) {
+				const error = await parseApiError(response);
+				if (error.isUnauthorized) {
+					handleUnauthorized();
+				}
+				throw error;
+			}
+
+			return (await response.json()) as UploadResponse;
+		},
+
+		/** Scan a directory for importable ebook files. */
+		scan(path: string): Promise<ScanManifestResponse> {
+			return request<ScanManifestResponse>('POST', '/import/scan', { path });
+		},
+
+		/** Start bulk import from a previously scanned directory. */
+		startImport(path: string): Promise<TaskCreatedResponse> {
+			return request<TaskCreatedResponse>('POST', '/import/scan/start', { path });
+		}
+	},
+
+	tasks: {
+		/** List recent tasks. */
+		list(): Promise<TaskResponse[]> {
+			return request<TaskResponse[]>('GET', '/tasks');
+		},
+
+		/** Get a single task by ID. */
+		get(id: string): Promise<TaskResponse> {
+			return request<TaskResponse>('GET', `/tasks/${encodeURIComponent(id)}`);
+		}
 	}
 } as const;
 
@@ -204,6 +265,7 @@ export type {
 	BookSummary,
 	BookTagLink,
 	FileEntry,
+	FormatSummary,
 	IdentifierEntry,
 	LoginRequest,
 	LoginResponse,
@@ -213,6 +275,7 @@ export type {
 	PaginatedBooks,
 	PaginatedSeries,
 	PaginatedTags,
+	ScanManifestResponse,
 	SeriesEntry,
 	SeriesResponse,
 	SetBookAuthorsRequest,
@@ -222,7 +285,13 @@ export type {
 	SortOrder,
 	TagEntry,
 	TagResponse,
+	TaskCreatedResponse,
+	TaskProgressEvent,
+	TaskResponse,
+	TaskStatus,
+	TaskType,
 	UpdateBookRequest,
+	UploadResponse,
 	User,
 	UserRole
 } from './types.js';

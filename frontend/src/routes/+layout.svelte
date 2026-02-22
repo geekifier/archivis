@@ -4,6 +4,9 @@
 	import { goto } from '$app/navigation';
 	import { theme } from '$lib/theme.svelte.js';
 	import { auth } from '$lib/stores/auth.svelte.js';
+	import { filters } from '$lib/stores/filters.svelte.js';
+	import { api } from '$lib/api/index.js';
+	import type { BookFormat, MetadataStatus } from '$lib/api/types.js';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { page } from '$app/state';
 
@@ -49,6 +52,39 @@
 		if (href === '/') return page.url.pathname === '/' || page.url.pathname.startsWith('/books');
 		return page.url.pathname.startsWith(href);
 	}
+
+	const isLibraryPage = $derived(page.url.pathname === '/' || page.url.pathname.startsWith('/books'));
+
+	const formats: { value: BookFormat; label: string }[] = [
+		{ value: 'epub', label: 'EPUB' },
+		{ value: 'pdf', label: 'PDF' },
+		{ value: 'mobi', label: 'MOBI' },
+		{ value: 'cbz', label: 'CBZ' },
+		{ value: 'fb2', label: 'FB2' },
+		{ value: 'txt', label: 'TXT' },
+		{ value: 'djvu', label: 'DJVU' },
+		{ value: 'azw3', label: 'AZW3' }
+	];
+
+	const statuses: { value: MetadataStatus; label: string; colorClass: string }[] = [
+		{ value: 'identified', label: 'Identified', colorClass: 'bg-green-500' },
+		{ value: 'needs_review', label: 'Needs Review', colorClass: 'bg-amber-500' },
+		{ value: 'unidentified', label: 'Unidentified', colorClass: 'bg-gray-400' }
+	];
+
+	// Fetch needs_review count when authenticated and on library page
+	$effect(() => {
+		if (auth.isAuthenticated && isLibraryPage) {
+			api.books
+				.list({ status: 'needs_review', per_page: 1 })
+				.then((result) => {
+					filters.setNeedsReviewCount(result.total);
+				})
+				.catch(() => {
+					// Silently ignore count fetch errors
+				});
+		}
+	});
 </script>
 
 <svelte:head>
@@ -112,7 +148,7 @@
 			<div class="flex h-14 items-center border-b border-sidebar-border px-4">
 				<a href="/" class="text-lg font-semibold text-sidebar-primary">Archivis</a>
 			</div>
-			<nav class="flex-1 space-y-1 p-3">
+			<nav class="flex-1 space-y-1 overflow-y-auto p-3">
 				{#each navItems as item (item.href)}
 					<a
 						href={item.href}
@@ -136,6 +172,63 @@
 						{item.label}
 					</a>
 				{/each}
+
+				{#if isLibraryPage}
+					<!-- Separator -->
+					<div class="my-3 border-t border-sidebar-border"></div>
+
+					<!-- Format filters -->
+					<div class="px-3 pb-1">
+						<span class="text-xs font-semibold uppercase tracking-wider text-sidebar-foreground/60">Format</span>
+					</div>
+					<div class="flex flex-wrap gap-1 px-2">
+						{#each formats as fmt (fmt.value)}
+							<button
+								onclick={() => filters.setFormat(fmt.value)}
+								class="rounded px-2 py-0.5 text-xs font-medium transition-colors
+								{filters.activeFormat === fmt.value
+									? 'bg-primary text-primary-foreground'
+									: 'text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'}"
+							>
+								{fmt.label}
+							</button>
+						{/each}
+					</div>
+
+					<!-- Status filters -->
+					<div class="mt-3 px-3 pb-1">
+						<span class="text-xs font-semibold uppercase tracking-wider text-sidebar-foreground/60">Status</span>
+					</div>
+					{#each statuses as st (st.value)}
+						<button
+							onclick={() => filters.setStatus(st.value)}
+							class="flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-sm transition-colors
+							{filters.activeStatus === st.value
+								? 'bg-sidebar-accent text-sidebar-accent-foreground font-medium'
+								: 'text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'}"
+						>
+							<span class="size-2 rounded-full {st.colorClass}"></span>
+							<span class="flex-1 text-left">{st.label}</span>
+							{#if st.value === 'needs_review' && filters.needsReviewCount !== null && filters.needsReviewCount > 0}
+								<span class="min-w-5 rounded-full bg-amber-500/15 px-1.5 py-0.5 text-center text-xs font-medium text-amber-600 dark:text-amber-400">
+									{filters.needsReviewCount}
+								</span>
+							{/if}
+						</button>
+					{/each}
+
+					<!-- Clear filters -->
+					{#if filters.hasActiveFilters}
+						<div class="mt-2 px-2">
+							<button
+								onclick={() => filters.clearFilters()}
+								class="w-full rounded-md px-3 py-1.5 text-xs text-sidebar-foreground/60 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+							>
+								Clear filters
+							</button>
+						</div>
+					{/if}
+				{/if}
 			</nav>
 		</aside>
 

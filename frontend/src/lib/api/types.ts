@@ -233,3 +233,51 @@ export interface PaginatedSeries {
 	per_page: number;
 	total_pages: number;
 }
+
+// --- Import types ---
+
+export type TaskType = 'import_file' | 'import_directory';
+export type TaskStatus = 'pending' | 'running' | 'completed' | 'failed';
+
+export interface TaskCreatedResponse {
+	task_id: string;
+}
+
+export interface UploadResponse {
+	tasks: TaskCreatedResponse[];
+}
+
+export interface FormatSummary {
+	format: string;
+	count: number;
+	total_size: number;
+}
+
+export interface ScanManifestResponse {
+	total_files: number;
+	total_size: number;
+	formats: FormatSummary[];
+}
+
+export interface TaskResponse {
+	id: string;
+	task_type: TaskType;
+	status: TaskStatus;
+	progress: number;
+	message: string | null;
+	result: Record<string, unknown> | null;
+	created_at: string;
+	started_at: string | null;
+	completed_at: string | null;
+	error_message: string | null;
+}
+
+/** SSE progress event data for a single task. */
+export interface TaskProgressEvent {
+	task_id: string;
+	status: TaskStatus;
+	progress: number;
+	message: string | null;
+	result: Record<string, unknown> | null;
+	error: string | null;
+}

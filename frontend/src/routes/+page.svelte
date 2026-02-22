@@ -3,6 +3,7 @@
 	import type { SortField, SortOrder } from '$lib/api/index.js';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
+	import { filters } from '$lib/stores/filters.svelte.js';
 	import BookCard from '$lib/components/library/BookCard.svelte';
 	import BookListView from '$lib/components/library/BookListView.svelte';
 	import Pagination from '$lib/components/library/Pagination.svelte';
@@ -88,11 +89,13 @@
 		if (idx >= 0) sortIndex = idx;
 	}
 
-	// Reset to page 1 when search or sort changes
+	// Reset to page 1 when search, sort, or filters change
 	$effect(() => {
 		void activeQuery;
 		void activeSortBy;
 		void activeSortOrder;
+		void filters.activeFormat;
+		void filters.activeStatus;
 		currentPage = 1;
 	});
 
@@ -103,6 +106,8 @@
 		const order = activeSortOrder;
 		const q = activeQuery;
 		const include = includeParam;
+		const format = filters.activeFormat;
+		const status = filters.activeStatus;
 
 		loading = true;
 		error = null;
@@ -114,6 +119,8 @@
 				sort_by: field,
 				sort_order: order,
 				q: q || undefined,
+				format: format ?? undefined,
+				status: status ?? undefined,
 				include
 			})
 			.then((result) => {
@@ -206,6 +213,46 @@
 		</div>
 	</div>
 
+	<!-- Active filter chips -->
+	{#if filters.hasActiveFilters}
+		<div class="flex flex-wrap items-center gap-2">
+			{#if filters.activeFormat}
+				<span class="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2.5 py-1 text-xs font-medium text-primary">
+					{filters.activeFormat.toUpperCase()}
+					<button
+						onclick={() => filters.setFormat(filters.activeFormat!)}
+						class="ml-0.5 rounded-full p-0.5 transition-colors hover:bg-primary/20"
+						aria-label="Remove format filter"
+					>
+						<svg class="size-3" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+							<path d="M18 6 6 18" /><path d="m6 6 12 12" />
+						</svg>
+					</button>
+				</span>
+			{/if}
+			{#if filters.activeStatus}
+				<span class="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2.5 py-1 text-xs font-medium text-primary">
+					{filters.activeStatus === 'needs_review' ? 'Needs Review' : filters.activeStatus === 'identified' ? 'Identified' : 'Unidentified'}
+					<button
+						onclick={() => filters.setStatus(filters.activeStatus!)}
+						class="ml-0.5 rounded-full p-0.5 transition-colors hover:bg-primary/20"
+						aria-label="Remove status filter"
+					>
+						<svg class="size-3" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+							<path d="M18 6 6 18" /><path d="m6 6 12 12" />
+						</svg>
+					</button>
+				</span>
+			{/if}
+			<button
+				onclick={() => filters.clearFilters()}
+				class="text-xs text-muted-foreground transition-colors hover:text-foreground"
+			>
+				Clear all
+			</button>
+		</div>
+	{/if}
+
 	<!-- Content area -->
 	{#if loading}
 		{#if viewMode === 'grid'}
@@ -264,10 +311,10 @@
 		<!-- Empty state -->
 		<div class="flex items-center justify-center rounded-lg border border-dashed border-border p-12">
 			<div class="text-center">
-				{#if activeQuery}
-					<p class="text-muted-foreground">No books match your search.</p>
-					<Button variant="outline" class="mt-4" onclick={() => { searchInput = ''; activeQuery = ''; }}>
-						Clear search
+				{#if activeQuery || filters.hasActiveFilters}
+					<p class="text-muted-foreground">No books match your {activeQuery ? 'search' : 'filters'}.</p>
+					<Button variant="outline" class="mt-4" onclick={() => { searchInput = ''; activeQuery = ''; filters.clearFilters(); }}>
+						Clear {activeQuery && filters.hasActiveFilters ? 'search & filters' : activeQuery ? 'search' : 'filters'}
 					</Button>
 				{:else}
 					<p class="text-muted-foreground">No books in your library yet.</p>
