@@ -47,6 +47,16 @@ pub struct IdentifyAllRequest {
     pub max_books: Option<i64>,
 }
 
+/// Optional request body for the apply-candidate endpoint.
+///
+/// When omitted or empty, all fields are applied (default behavior).
+#[derive(Debug, Deserialize, Default, ToSchema)]
+pub struct ApplyCandidateBody {
+    /// Fields to exclude from application (e.g. `["cover", "title"]`).
+    #[serde(default)]
+    pub exclude_fields: Vec<String>,
+}
+
 /// Response from the identify-all endpoint.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct IdentifyAllResponse {

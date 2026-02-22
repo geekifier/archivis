@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -148,7 +149,10 @@ impl<S: StorageBackend> IdentificationService<S> {
                     .map_err(|e| TaskError::Failed(format!("failed to list candidates: {e}")))?;
 
                 if let Some(best_candidate) = candidates.first() {
-                    if let Err(e) = self.apply_candidate(book_id, best_candidate.id).await {
+                    if let Err(e) = self
+                        .apply_candidate(book_id, best_candidate.id, &HashSet::new())
+                        .await
+                    {
                         warn!(
                             book_id = %book_id,
                             error = %e,
@@ -180,10 +184,15 @@ impl<S: StorageBackend> IdentificationService<S> {
     ///
     /// Overwrites only fields that are from lower-trust sources; never
     /// overwrites user-edited metadata.
+    ///
+    /// When `exclude_fields` is non-empty, the named fields are skipped.
+    /// Valid field names: `title`, `description`, `publication_date`,
+    /// `authors`, `identifiers`, `series`, `cover`.
     pub async fn apply_candidate(
         &self,
         book_id: Uuid,
         candidate_id: Uuid,
+        exclude_fields: &HashSet<String>,
     ) -> Result<Book, TaskError> {
         // Guard: check if another candidate is already applied for this book
         let existing_candidates = CandidateRepository::list_by_book(&self.db_pool, book_id)
@@ -234,7 +243,7 @@ impl<S: StorageBackend> IdentificationService<S> {
             book.metadata_status == MetadataStatus::Identified && book.metadata_confidence >= 1.0;
 
         if !current_is_user_edited {
-            merge_book_fields(&mut book, &provider_meta);
+            merge_book_fields(&mut book, &provider_meta, exclude_fields);
         }
 
         // 5. Update metadata_status and metadata_confidence
@@ -242,7 +251,7 @@ impl<S: StorageBackend> IdentificationService<S> {
         book.metadata_confidence = candidate.score;
 
         // 4. If candidate has cover_url and book has no cover: fetch and store
-        if book.cover_path.is_none() {
+        if book.cover_path.is_none() && !exclude_fields.contains("cover") {
             if let Some(ref cover_url) = provider_meta.cover_url {
                 match self.fetch_and_store_cover(book_id, cover_url, &book).await {
                     Ok(path) => {
@@ -265,16 +274,22 @@ impl<S: StorageBackend> IdentificationService<S> {
             .map_err(|e| TaskError::Failed(format!("failed to update book: {e}")))?;
 
         // 3. Add new identifiers from provider
-        self.add_provider_identifiers(book_id, &provider_meta, candidate.score)
-            .await?;
+        if !exclude_fields.contains("identifiers") {
+            self.add_provider_identifiers(book_id, &provider_meta, candidate.score)
+                .await?;
+        }
 
         // Update authors from provider if book has only "Unknown Author"
-        self.update_authors_from_provider(book_id, &provider_meta)
-            .await?;
+        if !exclude_fields.contains("authors") {
+            self.update_authors_from_provider(book_id, &provider_meta)
+                .await?;
+        }
 
         // Update series from provider
-        self.update_series_from_provider(book_id, &provider_meta)
-            .await?;
+        if !exclude_fields.contains("series") {
+            self.update_series_from_provider(book_id, &provider_meta)
+                .await?;
+        }
 
         // 6. Mark candidate as Applied
         CandidateRepository::update_status(&self.db_pool, candidate_id, CandidateStatus::Applied)
@@ -587,16 +602,24 @@ impl<S: StorageBackend> IdentificationService<S> {
 ///
 /// Only overwrites fields that are currently empty or from lower-trust
 /// sources. User-edited fields are never overwritten.
-fn merge_book_fields(book: &mut Book, provider_meta: &ProviderMetadata) {
+///
+/// Fields listed in `exclude_fields` are skipped entirely.
+fn merge_book_fields(
+    book: &mut Book,
+    provider_meta: &ProviderMetadata,
+    exclude_fields: &HashSet<String>,
+) {
     // Title: overwrite with provider data
-    if let Some(ref title) = provider_meta.title {
-        if !title.is_empty() {
-            book.set_title(title);
+    if !exclude_fields.contains("title") {
+        if let Some(ref title) = provider_meta.title {
+            if !title.is_empty() {
+                book.set_title(title);
+            }
         }
     }
 
     // Description: fill if empty
-    if book.description.is_none() {
+    if !exclude_fields.contains("description") && book.description.is_none() {
         if let Some(ref desc) = provider_meta.description {
             if !desc.is_empty() {
                 book.description = Some(desc.clone());
@@ -604,18 +627,18 @@ fn merge_book_fields(book: &mut Book, provider_meta: &ProviderMetadata) {
         }
     }
 
-    // Language: fill if empty
+    // Language: fill if empty (never excluded — not in UI)
     if book.language.is_none() {
         book.language.clone_from(&provider_meta.language);
     }
 
-    // Page count: fill if empty
+    // Page count: fill if empty (never excluded — not in UI)
     if book.page_count.is_none() {
         book.page_count = provider_meta.page_count;
     }
 
     // Publication date: fill if empty
-    if book.publication_date.is_none() {
+    if !exclude_fields.contains("publication_date") && book.publication_date.is_none() {
         if let Some(ref date_str) = provider_meta.publication_date {
             if let Ok(date) = chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d") {
                 book.publication_date = Some(date);

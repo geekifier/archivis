@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::Json;
@@ -13,8 +15,8 @@ use crate::errors::ApiError;
 use crate::state::AppState;
 
 use super::types::{
-    BatchIdentifyRequest, CandidateResponse, IdentifyAllRequest, IdentifyAllResponse,
-    IdentifyResponse, SeriesInfo,
+    ApplyCandidateBody, BatchIdentifyRequest, CandidateResponse, IdentifyAllRequest,
+    IdentifyAllResponse, IdentifyResponse, SeriesInfo,
 };
 
 /// POST /api/books/{id}/identify -- trigger identification for a single book.
@@ -91,6 +93,7 @@ pub async fn list_candidates(
         ("id" = Uuid, Path, description = "Book ID"),
         ("candidate_id" = Uuid, Path, description = "Candidate ID"),
     ),
+    request_body(content = ApplyCandidateBody, description = "Optional field exclusions", content_type = "application/json"),
     responses(
         (status = 200, description = "Candidate applied, book updated", body = BookDetail),
         (status = 404, description = "Book or candidate not found"),
@@ -103,6 +106,7 @@ pub async fn apply_candidate(
     State(state): State<AppState>,
     AuthUser(_user): AuthUser,
     Path((book_id, candidate_id)): Path<(Uuid, Uuid)>,
+    body: Option<Json<ApplyCandidateBody>>,
 ) -> Result<Json<BookDetail>, ApiError> {
     let pool = state.db_pool();
 
@@ -129,10 +133,15 @@ pub async fn apply_candidate(
         )));
     }
 
+    // Build exclusion set from optional body
+    let exclude_fields: HashSet<String> = body
+        .map(|b| b.0.exclude_fields.into_iter().collect())
+        .unwrap_or_default();
+
     // Apply the candidate via the identification service
     state
         .identify_service()
-        .apply_candidate(book_id, candidate_id)
+        .apply_candidate(book_id, candidate_id, &exclude_fields)
         .await
         .map_err(|e| {
             let msg = e.to_string();

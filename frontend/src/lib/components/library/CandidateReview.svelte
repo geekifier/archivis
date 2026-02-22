@@ -18,16 +18,59 @@
 	let undoingId = $state<string | null>(null);
 	let actionError = $state<string | null>(null);
 
+	/** Per-candidate field selections: candidateId -> fieldName -> included. */
+	let fieldSelections = $state<Record<string, Record<string, boolean>>>({});
+
 	const pendingCandidates = $derived(candidates.filter((c) => c.status === 'pending'));
 	const rejectedCandidates = $derived(candidates.filter((c) => c.status === 'rejected'));
 	const appliedCandidates = $derived(candidates.filter((c) => c.status === 'applied'));
 	const hasAppliedCandidate = $derived(appliedCandidates.length > 0);
 
+	/** Initialize default selections for any new pending candidate. */
+	$effect(() => {
+		for (const candidate of pendingCandidates) {
+			if (!fieldSelections[candidate.id]) {
+				const sel: Record<string, boolean> = {};
+				if (candidate.title != null) sel.title = true;
+				if (candidate.authors.length > 0) sel.authors = true;
+				if (candidate.publication_date != null) sel.publication_date = true;
+				if (candidate.isbn != null) sel.identifiers = true;
+				if (candidate.series != null) sel.series = true;
+				if (candidate.description != null) sel.description = true;
+				if (candidate.cover_url != null) sel.cover = true;
+				fieldSelections[candidate.id] = sel;
+			}
+		}
+	});
+
+	function isFieldIncluded(candidateId: string, field: string): boolean {
+		return fieldSelections[candidateId]?.[field] ?? true;
+	}
+
+	function toggleField(candidateId: string, field: string) {
+		if (!fieldSelections[candidateId]) return;
+		fieldSelections[candidateId][field] = !fieldSelections[candidateId][field];
+	}
+
+	/** Collect excluded field names for a candidate. */
+	function getExcludedFields(candidateId: string): string[] {
+		const sel = fieldSelections[candidateId];
+		if (!sel) return [];
+		return Object.entries(sel)
+			.filter(([, included]) => !included)
+			.map(([field]) => field);
+	}
+
 	async function handleApply(candidateId: string) {
 		applyingId = candidateId;
 		actionError = null;
 		try {
-			const updated = await api.identify.applyCandidate(book.id, candidateId);
+			const excluded = getExcludedFields(candidateId);
+			const updated = await api.identify.applyCandidate(
+				book.id,
+				candidateId,
+				excluded.length > 0 ? excluded : undefined
+			);
 			onapply(updated);
 		} catch (err) {
 			actionError =
@@ -107,15 +150,6 @@
 </script>
 
 <div class="space-y-4">
-	<div class="flex items-center justify-between">
-		<h3 class="text-sm font-semibold text-muted-foreground">
-			Identification Candidates
-			{#if pendingCandidates.length > 0}
-				<span class="ml-1 text-xs font-normal">({pendingCandidates.length} pending)</span>
-			{/if}
-		</h3>
-	</div>
-
 	{#if actionError}
 		<div class="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm text-destructive">
 			{actionError}
@@ -204,6 +238,7 @@
 						<table class="w-full text-sm">
 							<thead>
 								<tr class="border-b border-border text-left text-xs text-muted-foreground">
+									<th class="w-6 pb-2 pr-1"></th>
 									<th class="pb-2 pr-3 font-medium">Field</th>
 									<th class="pb-2 pr-3 font-medium">Current</th>
 									<th class="pb-2 font-medium">Candidate</th>
@@ -211,30 +246,67 @@
 							</thead>
 							<tbody class="divide-y divide-border/50">
 								<!-- Title -->
-								<tr>
-									<td class="py-1.5 pr-3 text-xs font-medium text-muted-foreground">Title</td>
-									<td class="py-1.5 pr-3 text-xs">{book.title}</td>
-									<td
-										class="py-1.5 text-xs {hasChange(candidate.title, book.title) ? 'font-medium text-primary' : ''}"
-									>
-										{candidate.title ?? '--'}
-									</td>
-								</tr>
+								{#if candidate.title != null}
+									<tr class="{!isFieldIncluded(candidate.id, 'title') ? 'opacity-40' : ''}">
+										<td class="py-1.5 pr-1">
+											<input
+												type="checkbox"
+												checked={isFieldIncluded(candidate.id, 'title')}
+												onchange={() => toggleField(candidate.id, 'title')}
+												class="h-3.5 w-3.5 rounded border-border"
+											/>
+										</td>
+										<td class="py-1.5 pr-3 text-xs font-medium text-muted-foreground">Title</td>
+										<td class="py-1.5 pr-3 text-xs">{book.title}</td>
+										<td
+											class="py-1.5 text-xs {hasChange(candidate.title, book.title) ? 'font-medium text-primary' : ''}"
+										>
+											{candidate.title}
+										</td>
+									</tr>
+								{:else}
+									<tr>
+										<td class="py-1.5 pr-1"></td>
+										<td class="py-1.5 pr-3 text-xs font-medium text-muted-foreground">Title</td>
+										<td class="py-1.5 pr-3 text-xs">{book.title}</td>
+										<td class="py-1.5 text-xs">--</td>
+									</tr>
+								{/if}
 								<!-- Authors -->
-								<tr>
-									<td class="py-1.5 pr-3 text-xs font-medium text-muted-foreground">Authors</td>
-									<td class="py-1.5 pr-3 text-xs">
-										{book.authors.map((a) => a.name).join(', ') || '--'}
-									</td>
-									<td
-										class="py-1.5 text-xs {candidate.authors.length > 0 && candidate.authors.join(', ') !== book.authors.map((a) => a.name).join(', ') ? 'font-medium text-primary' : ''}"
-									>
-										{candidate.authors.join(', ') || '--'}
-									</td>
-								</tr>
-								<!-- Publisher -->
+								{#if candidate.authors.length > 0}
+									<tr class="{!isFieldIncluded(candidate.id, 'authors') ? 'opacity-40' : ''}">
+										<td class="py-1.5 pr-1">
+											<input
+												type="checkbox"
+												checked={isFieldIncluded(candidate.id, 'authors')}
+												onchange={() => toggleField(candidate.id, 'authors')}
+												class="h-3.5 w-3.5 rounded border-border"
+											/>
+										</td>
+										<td class="py-1.5 pr-3 text-xs font-medium text-muted-foreground">Authors</td>
+										<td class="py-1.5 pr-3 text-xs">
+											{book.authors.map((a) => a.name).join(', ') || '--'}
+										</td>
+										<td
+											class="py-1.5 text-xs {candidate.authors.join(', ') !== book.authors.map((a) => a.name).join(', ') ? 'font-medium text-primary' : ''}"
+										>
+											{candidate.authors.join(', ')}
+										</td>
+									</tr>
+								{:else}
+									<tr>
+										<td class="py-1.5 pr-1"></td>
+										<td class="py-1.5 pr-3 text-xs font-medium text-muted-foreground">Authors</td>
+										<td class="py-1.5 pr-3 text-xs">
+											{book.authors.map((a) => a.name).join(', ') || '--'}
+										</td>
+										<td class="py-1.5 text-xs">--</td>
+									</tr>
+								{/if}
+								<!-- Publisher (no checkbox — backend doesn't apply publisher) -->
 								{#if candidate.publisher || book.publisher_name}
 									<tr>
+										<td class="py-1.5 pr-1"></td>
 										<td class="py-1.5 pr-3 text-xs font-medium text-muted-foreground"
 											>Publisher</td
 										>
@@ -248,7 +320,19 @@
 								{/if}
 								<!-- Publication Date -->
 								{#if candidate.publication_date || book.publication_date}
-									<tr>
+									<tr class="{candidate.publication_date != null && !isFieldIncluded(candidate.id, 'publication_date') ? 'opacity-40' : ''}">
+										{#if candidate.publication_date != null}
+											<td class="py-1.5 pr-1">
+												<input
+													type="checkbox"
+													checked={isFieldIncluded(candidate.id, 'publication_date')}
+													onchange={() => toggleField(candidate.id, 'publication_date')}
+													class="h-3.5 w-3.5 rounded border-border"
+												/>
+											</td>
+										{:else}
+											<td class="py-1.5 pr-1"></td>
+										{/if}
 										<td class="py-1.5 pr-3 text-xs font-medium text-muted-foreground"
 											>Published</td
 										>
@@ -262,7 +346,15 @@
 								{/if}
 								<!-- ISBN -->
 								{#if candidate.isbn}
-									<tr>
+									<tr class="{!isFieldIncluded(candidate.id, 'identifiers') ? 'opacity-40' : ''}">
+										<td class="py-1.5 pr-1">
+											<input
+												type="checkbox"
+												checked={isFieldIncluded(candidate.id, 'identifiers')}
+												onchange={() => toggleField(candidate.id, 'identifiers')}
+												class="h-3.5 w-3.5 rounded border-border"
+											/>
+										</td>
 										<td class="py-1.5 pr-3 text-xs font-medium text-muted-foreground">ISBN</td>
 										<td class="py-1.5 pr-3 font-mono text-xs">
 											{book.identifiers.find((i) => i.identifier_type === 'isbn13' || i.identifier_type === 'isbn10')?.value ?? '--'}
@@ -274,7 +366,15 @@
 								{/if}
 								<!-- Series -->
 								{#if candidate.series}
-									<tr>
+									<tr class="{!isFieldIncluded(candidate.id, 'series') ? 'opacity-40' : ''}">
+										<td class="py-1.5 pr-1">
+											<input
+												type="checkbox"
+												checked={isFieldIncluded(candidate.id, 'series')}
+												onchange={() => toggleField(candidate.id, 'series')}
+												class="h-3.5 w-3.5 rounded border-border"
+											/>
+										</td>
 										<td class="py-1.5 pr-3 text-xs font-medium text-muted-foreground">Series</td>
 										<td class="py-1.5 pr-3 text-xs">
 											{book.series.length > 0 ? book.series.map((s) => s.position != null ? `${s.name} #${s.position}` : s.name).join(', ') : '--'}
@@ -286,7 +386,15 @@
 								{/if}
 								<!-- Description (show truncated if present) -->
 								{#if candidate.description}
-									<tr>
+									<tr class="{!isFieldIncluded(candidate.id, 'description') ? 'opacity-40' : ''}">
+										<td class="py-1.5 pr-1 align-top">
+											<input
+												type="checkbox"
+												checked={isFieldIncluded(candidate.id, 'description')}
+												onchange={() => toggleField(candidate.id, 'description')}
+												class="mt-0.5 h-3.5 w-3.5 rounded border-border"
+											/>
+										</td>
 										<td class="py-1.5 pr-3 align-top text-xs font-medium text-muted-foreground"
 											>Description</td
 										>
@@ -310,7 +418,13 @@
 
 					<!-- Cover preview -->
 					{#if candidate.cover_url}
-						<div class="mt-3 flex items-start gap-3 border-t border-border pt-3">
+						<div class="mt-3 flex items-start gap-3 border-t border-border pt-3 {!isFieldIncluded(candidate.id, 'cover') ? 'opacity-40' : ''}">
+							<input
+								type="checkbox"
+								checked={isFieldIncluded(candidate.id, 'cover')}
+								onchange={() => toggleField(candidate.id, 'cover')}
+								class="mt-0.5 h-3.5 w-3.5 rounded border-border"
+							/>
 							<span class="text-xs font-medium text-muted-foreground">Cover:</span>
 							<img
 								src={candidate.cover_url}

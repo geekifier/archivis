@@ -382,10 +382,19 @@ export const api = {
 		},
 
 		/** Apply a candidate to a book, updating its metadata. */
-		applyCandidate(bookId: string, candidateId: string): Promise<BookDetail> {
+		applyCandidate(
+			bookId: string,
+			candidateId: string,
+			excludeFields?: string[]
+		): Promise<BookDetail> {
+			const body =
+				excludeFields && excludeFields.length > 0
+					? { exclude_fields: excludeFields }
+					: undefined;
 			return request<BookDetail>(
 				'POST',
-				`/books/${encodeURIComponent(bookId)}/candidates/${encodeURIComponent(candidateId)}/apply`
+				`/books/${encodeURIComponent(bookId)}/candidates/${encodeURIComponent(candidateId)}/apply`,
+				body
 			);
 		},
 

@@ -152,6 +152,7 @@ mod openapi {
             super::identify::types::CandidateResponse,
             super::identify::types::SeriesInfo,
             super::identify::types::IdentifyResponse,
+            super::identify::types::ApplyCandidateBody,
             super::identify::types::BatchIdentifyRequest,
             super::identify::types::IdentifyAllRequest,
             super::identify::types::IdentifyAllResponse,

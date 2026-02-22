@@ -37,7 +37,7 @@
 	let identifyEventSource: EventSource | null = null;
 	let candidates = $state<CandidateResponse[]>([]);
 	let candidatesError = $state<string | null>(null);
-	let showCandidates = $state(false);
+	let candidatesExpanded = $state(false);
 
 	const bookId = $derived(page.params.id ?? '');
 	const hue = $derived(placeholderHue(bookId));
@@ -52,6 +52,8 @@
 	const canIdentify = $derived(
 		book?.metadata_status === 'needs_review' || book?.metadata_status === 'unidentified'
 	);
+
+	const appliedCandidate = $derived(candidates.find((c) => c.status === 'applied'));
 
 
 	function fetchBook() {
@@ -207,7 +209,8 @@
 		try {
 			candidates = await api.identify.candidates(bookId);
 			if (candidates.length > 0) {
-				showCandidates = true;
+				// Auto-expand for needs_review (user needs to act), collapse for identified
+				candidatesExpanded = book?.metadata_status === 'needs_review';
 			}
 		} catch (err) {
 			candidatesError =
@@ -619,6 +622,32 @@
 									></div>
 								</div>
 							</div>
+							{#if appliedCandidate}
+								<span class="text-xs text-muted-foreground">
+									via {appliedCandidate.provider_name}
+								</span>
+							{/if}
+							{#if candidates.length > 0 && !editing}
+								<button
+									type="button"
+									class="inline-flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
+									onclick={() => (candidatesExpanded = !candidatesExpanded)}
+								>
+									<svg
+										class="size-3.5 transition-transform duration-150 {candidatesExpanded ? 'rotate-90' : ''}"
+										viewBox="0 0 24 24"
+										fill="none"
+										stroke="currentColor"
+										stroke-width="2"
+										stroke-linecap="round"
+										stroke-linejoin="round"
+									>
+										<path d="m9 18 6-6-6-6" />
+									</svg>
+									{candidates.length}
+									{candidates.length === 1 ? 'candidate' : 'candidates'}
+								</button>
+							{/if}
 						</div>
 					</div>
 
@@ -641,8 +670,8 @@
 						</div>
 					{/if}
 
-					<!-- Candidates review -->
-					{#if showCandidates && candidates.length > 0 && !editing}
+					<!-- Candidates review (collapsible) -->
+					{#if candidatesExpanded && candidates.length > 0 && !editing}
 						<CandidateReview
 							{book}
 							{candidates}
