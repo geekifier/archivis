@@ -506,6 +506,16 @@ impl BookRepository {
         Ok(())
     }
 
+    /// Remove all series links for a book.
+    pub async fn clear_series(pool: &SqlitePool, book_id: Uuid) -> Result<(), DbError> {
+        let id_str = book_id.to_string();
+        sqlx::query!("DELETE FROM book_series WHERE book_id = ?", id_str)
+            .execute(pool)
+            .await
+            .map_err(|e| DbError::Query(e.to_string()))?;
+        Ok(())
+    }
+
     /// Remove all tag links for a book.
     pub async fn clear_tags(pool: &SqlitePool, book_id: Uuid) -> Result<(), DbError> {
         let id_str = book_id.to_string();

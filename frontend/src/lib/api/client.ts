@@ -12,6 +12,7 @@ import type {
 	PaginatedTags,
 	ScanManifestResponse,
 	SetBookAuthorsRequest,
+	SetBookSeriesRequest,
 	SetBookTagsRequest,
 	SetupRequest,
 	TaskCreatedResponse,
@@ -164,6 +165,11 @@ export const api = {
 			return request<BookDetail>('POST', `/books/${encodeURIComponent(id)}/authors`, data);
 		},
 
+		/** Replace all series links for a book. */
+		setSeries(id: string, data: SetBookSeriesRequest): Promise<BookDetail> {
+			return request<BookDetail>('POST', `/books/${encodeURIComponent(id)}/series`, data);
+		},
+
 		/** Replace all tag links for a book. */
 		setTags(id: string, data: SetBookTagsRequest): Promise<BookDetail> {
 			return request<BookDetail>('POST', `/books/${encodeURIComponent(id)}/tags`, data);
@@ -262,6 +268,7 @@ export type {
 	BookDetail,
 	BookFormat,
 	BookListParams,
+	BookSeriesLink,
 	BookSummary,
 	BookTagLink,
 	FileEntry,
@@ -279,6 +286,7 @@ export type {
 	SeriesEntry,
 	SeriesResponse,
 	SetBookAuthorsRequest,
+	SetBookSeriesRequest,
 	SetBookTagsRequest,
 	SetupRequest,
 	SortField,

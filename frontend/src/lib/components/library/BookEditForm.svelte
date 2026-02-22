@@ -208,6 +208,15 @@
 			editTags.length !== book.tags.length ||
 			editTags.some((t, i) => t.id !== book.tags[i]?.id);
 
+		// Check if series changed
+		const seriesChanged =
+			editSeries.length !== book.series.length ||
+			editSeries.some(
+				(s, i) =>
+					s.id !== book.series[i]?.id ||
+					s.position !== book.series[i]?.position
+			);
+
 		try {
 			let latestBook = originalBook;
 
@@ -236,8 +245,17 @@
 				});
 			}
 
+			if (seriesChanged) {
+				latestBook = await api.books.setSeries(book.id, {
+					series: editSeries.map((s) => ({
+						series_id: s.id,
+						position: s.position
+					}))
+				});
+			}
+
 			// If nothing changed, just close
-			if (!hasScalarChanges && !authorsChanged && !tagsChanged) {
+			if (!hasScalarChanges && !authorsChanged && !tagsChanged && !seriesChanged) {
 				oncancel();
 				return;
 			}

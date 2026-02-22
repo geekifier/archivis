@@ -45,6 +45,7 @@ mod openapi {
             super::books::handlers::get_cover,
             super::books::handlers::download_file,
             super::books::handlers::set_book_authors,
+            super::books::handlers::set_book_series,
             super::books::handlers::set_book_tags,
             // Authors
             super::authors::handlers::list_authors,
@@ -88,6 +89,8 @@ mod openapi {
             super::books::types::UpdateBookRequest,
             super::books::types::SetBookAuthorsRequest,
             super::books::types::BookAuthorLink,
+            super::books::types::SetBookSeriesRequest,
+            super::books::types::BookSeriesLink,
             super::books::types::SetBookTagsRequest,
             super::books::types::BookTagLink,
             super::books::types::BookSummary,

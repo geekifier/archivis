@@ -180,6 +180,15 @@ export interface SetBookAuthorsRequest {
 	authors: BookAuthorLink[];
 }
 
+export interface BookSeriesLink {
+	series_id: string;
+	position?: number | null;
+}
+
+export interface SetBookSeriesRequest {
+	series: BookSeriesLink[];
+}
+
 export interface BookTagLink {
 	tag_id?: string;
 	name?: string;

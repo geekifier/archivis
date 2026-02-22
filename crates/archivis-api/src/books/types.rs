@@ -82,6 +82,19 @@ pub struct SetBookAuthorsRequest {
     pub authors: Vec<BookAuthorLink>,
 }
 
+/// A single series link in a set-series request.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct BookSeriesLink {
+    pub series_id: Uuid,
+    pub position: Option<f64>,
+}
+
+/// Request body for `POST /api/books/{id}/series`.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct SetBookSeriesRequest {
+    pub series: Vec<BookSeriesLink>,
+}
+
 /// A single tag link in a set-tags request.
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct BookTagLink {

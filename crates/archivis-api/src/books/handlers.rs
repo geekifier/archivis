@@ -11,8 +11,8 @@ use uuid::Uuid;
 use validator::Validate;
 
 use archivis_db::{
-    AuthorRepository, BookFileRepository, BookFilter, BookRepository, PaginationParams, SortOrder,
-    TagRepository,
+    AuthorRepository, BookFileRepository, BookFilter, BookRepository, PaginationParams,
+    SeriesRepository, SortOrder, TagRepository,
 };
 use archivis_storage::StorageBackend;
 
@@ -22,7 +22,7 @@ use crate::state::AppState;
 
 use super::types::{
     BookDetail, BookListParams, BookSummary, CoverParams, PaginatedBooks, SetBookAuthorsRequest,
-    SetBookTagsRequest, UpdateBookRequest,
+    SetBookSeriesRequest, SetBookTagsRequest, UpdateBookRequest,
 };
 
 /// GET /api/books — paginated list with sorting, filtering, FTS search.
@@ -526,6 +526,46 @@ pub async fn set_book_authors(
     BookRepository::clear_authors(pool, id).await?;
     for link in &body.authors {
         BookRepository::add_author(pool, id, link.author_id, &link.role, link.position).await?;
+    }
+
+    let bwr = BookRepository::get_with_relations(pool, id).await?;
+    Ok(Json(bwr.into()))
+}
+
+/// POST /api/books/{id}/series — replace book-series links.
+#[utoipa::path(
+    post,
+    path = "/api/books/{id}/series",
+    tag = "books",
+    params(("id" = Uuid, Path, description = "Book ID")),
+    request_body = SetBookSeriesRequest,
+    responses(
+        (status = 200, description = "Updated book", body = BookDetail),
+        (status = 404, description = "Book or series not found"),
+        (status = 401, description = "Not authenticated"),
+    ),
+    security(("bearer" = []))
+)]
+pub async fn set_book_series(
+    State(state): State<AppState>,
+    AuthUser(_user): AuthUser,
+    Path(id): Path<Uuid>,
+    Json(body): Json<SetBookSeriesRequest>,
+) -> Result<Json<BookDetail>, ApiError> {
+    let pool = state.db_pool();
+
+    // Verify book exists
+    BookRepository::get_by_id(pool, id).await?;
+
+    // Verify each series exists
+    for link in &body.series {
+        SeriesRepository::get_by_id(pool, link.series_id).await?;
+    }
+
+    // Replace all series links
+    BookRepository::clear_series(pool, id).await?;
+    for link in &body.series {
+        BookRepository::add_series(pool, id, link.series_id, link.position).await?;
     }
 
     let bwr = BookRepository::get_with_relations(pool, id).await?;
