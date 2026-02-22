@@ -231,6 +231,75 @@ impl MetadataHttpClient {
         }
     }
 
+    /// Perform a POST request with a JSON body and additional headers,
+    /// respecting rate limits and retrying on 429/503 with exponential
+    /// backoff (max 3 retries).
+    ///
+    /// Extra headers are provided as `(name, value)` pairs and are added
+    /// on top of the default headers.
+    pub async fn post_json_with_headers<T: serde::Serialize + Sync + ?Sized>(
+        &self,
+        provider_name: &str,
+        url: &str,
+        body: &T,
+        extra_headers: &[(&str, &str)],
+    ) -> Result<reqwest::Response, ProviderError> {
+        self.wait_for_token(provider_name).await;
+
+        let mut retries = 0u32;
+        let max_retries = 3;
+
+        loop {
+            debug!(
+                provider = provider_name,
+                url = url,
+                "POST request (with headers)"
+            );
+
+            let mut request = self
+                .client
+                .post(url)
+                .header(CONTENT_TYPE, "application/json");
+
+            for &(name, value) in extra_headers {
+                request = request.header(name, value);
+            }
+
+            let response = request.json(body).send().await?;
+
+            let status = response.status().as_u16();
+
+            if status == 429 || status == 503 {
+                retries += 1;
+                if retries > max_retries {
+                    warn!(
+                        provider = provider_name,
+                        status = status,
+                        "max retries exceeded"
+                    );
+                    return Err(ProviderError::ApiError {
+                        status,
+                        message: format!("request failed after {max_retries} retries"),
+                    });
+                }
+
+                let backoff = Duration::from_secs(1 << (retries - 1));
+                warn!(
+                    provider = provider_name,
+                    status = status,
+                    retry = retries,
+                    backoff_secs = backoff.as_secs(),
+                    "retrying after backoff"
+                );
+                tokio::time::sleep(backoff).await;
+                self.wait_for_token(provider_name).await;
+                continue;
+            }
+
+            return Ok(response);
+        }
+    }
+
     /// Returns the underlying `reqwest::Client` for direct use when
     /// rate limiting is not needed (e.g., fetching cover images from CDNs).
     pub fn raw_client(&self) -> &reqwest::Client {
