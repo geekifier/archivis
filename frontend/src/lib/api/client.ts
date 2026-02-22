@@ -2,8 +2,10 @@ import { goto } from '$app/navigation';
 import { parseApiError } from './errors.js';
 import type {
 	AuthStatusResponse,
+	BookListParams,
 	LoginRequest,
 	LoginResponse,
+	PaginatedBooks,
 	SetupRequest,
 	User
 } from './types.js';
@@ -120,8 +122,42 @@ export const api = {
 		me(): Promise<User> {
 			return request<User>('GET', '/auth/me');
 		}
+	},
+
+	books: {
+		list(params?: BookListParams): Promise<PaginatedBooks> {
+			const searchParams = new URLSearchParams();
+			if (params) {
+				for (const [key, value] of Object.entries(params)) {
+					if (value !== undefined && value !== null && value !== '') {
+						searchParams.set(key, String(value));
+					}
+				}
+			}
+			const qs = searchParams.toString();
+			return request<PaginatedBooks>('GET', `/books${qs ? `?${qs}` : ''}`);
+		}
 	}
 } as const;
 
 export { ApiError } from './errors.js';
-export type { ApiErrorResponse, AuthStatusResponse, LoginRequest, LoginResponse, SetupRequest, User, UserRole } from './types.js';
+export type {
+	ApiErrorResponse,
+	AuthorEntry,
+	AuthStatusResponse,
+	BookFormat,
+	BookListParams,
+	BookSummary,
+	FileEntry,
+	LoginRequest,
+	LoginResponse,
+	MetadataStatus,
+	PaginatedBooks,
+	SeriesEntry,
+	SetupRequest,
+	SortField,
+	SortOrder,
+	TagEntry,
+	User,
+	UserRole
+} from './types.js';
