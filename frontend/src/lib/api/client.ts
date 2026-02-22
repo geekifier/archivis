@@ -176,6 +176,11 @@ export const api = {
 		/** Replace all tag links for a book. */
 		setTags(id: string, data: SetBookTagsRequest): Promise<BookDetail> {
 			return request<BookDetail>('POST', `/books/${encodeURIComponent(id)}/tags`, data);
+		},
+
+		/** Delete a book and all associated files. */
+		delete(id: string): Promise<void> {
+			return request<void>('DELETE', `/books/${encodeURIComponent(id)}`);
 		}
 	},
 

@@ -1,8 +1,10 @@
 <script lang="ts">
 	import { page } from '$app/state';
+	import { goto } from '$app/navigation';
 	import { api, ApiError } from '$lib/api/index.js';
 	import type { BookDetail } from '$lib/api/index.js';
 	import { Button } from '$lib/components/ui/button/index.js';
+	import * as AlertDialog from '$lib/components/ui/alert-dialog/index.js';
 	import BookEditForm from '$lib/components/library/BookEditForm.svelte';
 	import {
 		placeholderHue,
@@ -18,6 +20,9 @@
 	let coverLoaded = $state(false);
 	let coverError = $state(false);
 	let editing = $state(false);
+	let deleteDialogOpen = $state(false);
+	let deleting = $state(false);
+	let deleteError = $state<string | null>(null);
 
 	const bookId = $derived(page.params.id ?? '');
 	const hue = $derived(placeholderHue(bookId));
@@ -72,6 +77,20 @@
 	function handleSave(updated: BookDetail) {
 		book = updated;
 		editing = false;
+	}
+
+	async function handleDelete() {
+		deleting = true;
+		deleteError = null;
+		try {
+			await api.books.delete(bookId);
+			deleteDialogOpen = false;
+			goto('/');
+		} catch (err) {
+			deleteError = err instanceof Error ? err.message : 'Failed to delete book';
+		} finally {
+			deleting = false;
+		}
 	}
 
 	function statusLabel(status: string): string {
@@ -274,23 +293,47 @@
 					<div>
 						<div class="flex items-start justify-between gap-4">
 							<h1 class="text-2xl font-bold tracking-tight md:text-3xl">{book.title}</h1>
-							<Button size="sm" variant="outline" onclick={enterEditMode}>
-								<svg
-									class="size-4"
-									viewBox="0 0 24 24"
-									fill="none"
-									stroke="currentColor"
-									stroke-width="2"
-									stroke-linecap="round"
-									stroke-linejoin="round"
+							<div class="flex items-center gap-2">
+								<Button size="sm" variant="outline" onclick={enterEditMode}>
+									<svg
+										class="size-4"
+										viewBox="0 0 24 24"
+										fill="none"
+										stroke="currentColor"
+										stroke-width="2"
+										stroke-linecap="round"
+										stroke-linejoin="round"
+									>
+										<path
+											d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"
+										/>
+										<path d="m15 5 4 4" />
+									</svg>
+									Edit
+								</Button>
+								<Button
+									size="sm"
+									variant="destructive"
+									onclick={() => (deleteDialogOpen = true)}
 								>
-									<path
-										d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"
-									/>
-									<path d="m15 5 4 4" />
-								</svg>
-								Edit
-							</Button>
+									<svg
+										class="size-4"
+										viewBox="0 0 24 24"
+										fill="none"
+										stroke="currentColor"
+										stroke-width="2"
+										stroke-linecap="round"
+										stroke-linejoin="round"
+									>
+										<path d="M3 6h18" />
+										<path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
+										<path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
+										<line x1="10" x2="10" y1="11" y2="17" />
+										<line x1="14" x2="14" y1="11" y2="17" />
+									</svg>
+									Delete
+								</Button>
+							</div>
 						</div>
 						{#if authorDisplay}
 							<p class="mt-1 text-lg text-muted-foreground">{authorDisplay}</p>
@@ -447,3 +490,35 @@
 		</div>
 	{/if}
 </div>
+
+<!-- Delete confirmation dialog -->
+{#if book}
+	<AlertDialog.Root bind:open={deleteDialogOpen}>
+		<AlertDialog.Content>
+			<AlertDialog.Header>
+				<AlertDialog.Title>Delete Book</AlertDialog.Title>
+				<AlertDialog.Description>
+					Are you sure you want to delete <strong>{book.title}</strong>? This will permanently
+					remove the book, all associated files, and cover images. This action cannot be undone.
+				</AlertDialog.Description>
+			</AlertDialog.Header>
+			{#if deleteError}
+				<p class="text-sm text-destructive">{deleteError}</p>
+			{/if}
+			<AlertDialog.Footer>
+				<AlertDialog.Cancel disabled={deleting}>Cancel</AlertDialog.Cancel>
+				<AlertDialog.Action
+					class="bg-destructive text-destructive-foreground shadow-sm hover:bg-destructive/90"
+					onclick={handleDelete}
+					disabled={deleting}
+				>
+					{#if deleting}
+						Deleting...
+					{:else}
+						Delete
+					{/if}
+				</AlertDialog.Action>
+			</AlertDialog.Footer>
+		</AlertDialog.Content>
+	</AlertDialog.Root>
+{/if}

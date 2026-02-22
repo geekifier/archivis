@@ -9,6 +9,8 @@ export type WithElementRef<T, E extends HTMLElement = HTMLElement> = T & {
 	ref?: E | null;
 };
 
+export type { WithoutChild, WithoutChildrenOrChild } from 'bits-ui';
+
 /** Generate a deterministic hue (0-359) from a string ID for cover placeholders. */
 export function placeholderHue(id: string): number {
 	let hash = 0;
