@@ -14,6 +14,7 @@
 	import { Label } from '$lib/components/ui/label/index.js';
 	import * as Select from '$lib/components/ui/select/index.js';
 	import AutocompleteInput from './AutocompleteInput.svelte';
+	import CoverUploadDialog from './CoverUploadDialog.svelte';
 
 	const metadataStatusOptions: { value: MetadataStatus; label: string }[] = [
 		{ value: 'identified', label: 'Identified' },
@@ -30,9 +31,12 @@
 		book: BookDetail;
 		oncancel: () => void;
 		onsave: (updated: BookDetail) => void;
+		oncoverupdate?: (updated: BookDetail) => void;
 	}
 
-	let { book, oncancel, onsave }: Props = $props();
+	let { book, oncancel, onsave, oncoverupdate }: Props = $props();
+
+	let coverDialogOpen = $state(false);
 
 	// Snapshot initial values from the book prop for the edit form.
 	// We intentionally capture initial values (not reactive) for editing.
@@ -403,6 +407,34 @@
 		{/if}
 	</div>
 
+	<!-- Cover Image -->
+	<div class="space-y-1.5">
+		<div class="flex items-center justify-between">
+			<Label>Cover Image</Label>
+			<Button
+				size="sm"
+				variant="outline"
+				class="h-7 px-2 text-xs"
+				onclick={() => (coverDialogOpen = true)}
+			>
+				<svg
+					class="size-3.5"
+					viewBox="0 0 24 24"
+					fill="none"
+					stroke="currentColor"
+					stroke-width="2"
+					stroke-linecap="round"
+					stroke-linejoin="round"
+				>
+					<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+					<polyline points="17 8 12 3 7 8" />
+					<line x1="12" x2="12" y1="3" y2="15" />
+				</svg>
+				{book.has_cover ? 'Change Cover' : 'Add Cover'}
+			</Button>
+		</div>
+	</div>
+
 	<!-- Title -->
 	<div class="space-y-1.5">
 		<div class="flex items-center justify-between">
@@ -730,3 +762,10 @@
 		</div>
 	</div>
 </div>
+
+<CoverUploadDialog
+	bookId={book.id}
+	hasCover={book.has_cover}
+	bind:open={coverDialogOpen}
+	onupdate={(updated) => oncoverupdate?.(updated)}
+/>
