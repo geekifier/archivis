@@ -5,6 +5,7 @@ import type {
 	AuthStatusResponse,
 	BookDetail,
 	BookListParams,
+	CreateAuthorRequest,
 	CreatePublisherRequest,
 	LoginRequest,
 	LoginResponse,
@@ -232,6 +233,11 @@ export const api = {
 			return request<PaginatedAuthors>('GET', `/authors?${params.toString()}`);
 		},
 
+		/** Create a new author. */
+		create(data: CreateAuthorRequest): Promise<AuthorResponse> {
+			return request<AuthorResponse>('POST', '/authors', data);
+		},
+
 		/** List books by a specific author. */
 		listBooks(id: string, params?: BookListParams): Promise<PaginatedBooks> {
 			const searchParams = new URLSearchParams();
@@ -372,6 +378,7 @@ export type {
 	BookSeriesLink,
 	BookSummary,
 	BookTagLink,
+	CreateAuthorRequest,
 	CreatePublisherRequest,
 	FileEntry,
 	FormatSummary,

@@ -263,6 +263,11 @@ export interface CreatePublisherRequest {
 	name: string;
 }
 
+export interface CreateAuthorRequest {
+	name: string;
+	sort_name?: string;
+}
+
 // --- Import types ---
 
 export type TaskType = 'import_file' | 'import_directory';

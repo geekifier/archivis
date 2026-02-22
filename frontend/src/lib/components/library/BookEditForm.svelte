@@ -71,6 +71,63 @@
 
 	let saving = $state(false);
 	let saveError = $state<string | null>(null);
+	let swapping = $state(false);
+	let swapError = $state<string | null>(null);
+	let swapSnapshot = $state<{ title: string; firstAuthor: AuthorEntry } | null>(null);
+
+	// --- Swap title/author ---
+
+	async function resolveOrCreateAuthor(name: string): Promise<{ id: string; name: string; sort_name: string }> {
+		const results = await api.authors.search(name);
+		const match = results.items.find((a) => a.name.toLowerCase() === name.toLowerCase());
+		if (match) return match;
+		return await api.authors.create({ name });
+	}
+
+	async function handleSwapTitleAuthor() {
+		if (editAuthors.length === 0) return;
+		if (!title.trim()) {
+			swapError = 'Title is empty — nothing to swap';
+			return;
+		}
+		if (title.trim().toLowerCase() === editAuthors[0].name.toLowerCase()) return;
+
+		swapping = true;
+		swapError = null;
+
+		const oldTitle = title;
+		const oldFirstAuthor = { ...editAuthors[0] };
+
+		try {
+			const newAuthor = await resolveOrCreateAuthor(oldTitle);
+			swapSnapshot = { title: oldTitle, firstAuthor: oldFirstAuthor };
+			title = oldFirstAuthor.name;
+			editAuthors = [
+				{
+					id: newAuthor.id,
+					name: newAuthor.name,
+					sort_name: newAuthor.sort_name,
+					role: oldFirstAuthor.role,
+					position: 0
+				},
+				...editAuthors.slice(1)
+			];
+		} catch (err) {
+			swapError =
+				err instanceof Error ? err.message : 'Failed to swap title and author';
+			swapSnapshot = null;
+		} finally {
+			swapping = false;
+		}
+	}
+
+	function handleUndoSwap() {
+		if (!swapSnapshot) return;
+		title = swapSnapshot.title;
+		editAuthors = [swapSnapshot.firstAuthor, ...editAuthors.slice(1)];
+		swapSnapshot = null;
+		swapError = null;
+	}
 
 	// --- Author management ---
 
@@ -216,6 +273,8 @@
 	async function handleSave() {
 		saving = true;
 		saveError = null;
+		swapSnapshot = null;
+		swapError = null;
 
 		// Snapshot the original book for rollback
 		const originalBook = book;
@@ -346,50 +405,17 @@
 
 	<!-- Title -->
 	<div class="space-y-1.5">
-		<Label for="edit-title">Title</Label>
-		<Input id="edit-title" type="text" bind:value={title} />
-	</div>
-
-	<!-- Description -->
-	<div class="space-y-1.5">
-		<Label for="edit-description">Description</Label>
-		<textarea
-			id="edit-description"
-			bind:value={description}
-			rows="4"
-			class="border-input bg-background ring-offset-background placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 flex w-full rounded-md border px-3 py-2 text-sm shadow-xs outline-none focus-visible:ring-[3px] disabled:cursor-not-allowed disabled:opacity-50"
-		></textarea>
-	</div>
-
-	<!-- Metadata Status -->
-	<div class="space-y-1.5">
-		<Label>Metadata Status</Label>
-		<Select.Root type="single" bind:value={metadataStatus}>
-			<Select.Trigger class="w-full">
-				{metadataStatusOptions.find((o) => o.value === metadataStatus)?.label ?? metadataStatus}
-			</Select.Trigger>
-			<Select.Content>
-				{#each metadataStatusOptions as option (option.value)}
-					<Select.Item value={option.value} label={option.label} />
-				{/each}
-			</Select.Content>
-		</Select.Root>
-	</div>
-
-	<!-- Publisher -->
-	<div class="space-y-1.5">
-		<Label>Publisher</Label>
-		{#if editPublisher}
-			<div class="flex items-center gap-2 rounded border border-border px-2 py-1 text-sm">
-				<span class="flex-1 font-medium">{editPublisher.name}</span>
+		<div class="flex items-center justify-between">
+			<Label for="edit-title">Title</Label>
+			{#if swapSnapshot}
 				<button
 					type="button"
-					class="p-0.5 text-muted-foreground hover:text-destructive"
-					onclick={removePublisher}
-					aria-label="Remove publisher"
+					class="inline-flex items-center gap-1 rounded border border-border px-1.5 py-0.5 text-xs text-muted-foreground hover:text-foreground hover:border-foreground/30 transition-colors"
+					onclick={handleUndoSwap}
+					title="Revert to original title and author"
 				>
 					<svg
-						class="size-3.5"
+						class="size-3"
 						viewBox="0 0 24 24"
 						fill="none"
 						stroke="currentColor"
@@ -397,20 +423,39 @@
 						stroke-linecap="round"
 						stroke-linejoin="round"
 					>
-						<path d="M18 6 6 18" />
-						<path d="m6 6 12 12" />
+						<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+						<path d="M3 3v5h5" />
 					</svg>
+					Undo Swap
 				</button>
-			</div>
-		{:else}
-			<AutocompleteInput
-				placeholder="Search publisher..."
-				search={searchPublishers}
-				onselect={selectPublisher}
-				allowCreate
-				oncreate={createPublisher}
-			/>
-		{/if}
+			{:else}
+				<button
+					type="button"
+					class="inline-flex items-center gap-1 rounded border border-border px-1.5 py-0.5 text-xs text-muted-foreground hover:text-foreground hover:border-foreground/30 transition-colors disabled:opacity-40 disabled:pointer-events-none"
+					onclick={handleSwapTitleAuthor}
+					disabled={editAuthors.length === 0 || swapping}
+					title="Swap title with first author's name"
+				>
+					<svg
+						class="size-3"
+						viewBox="0 0 24 24"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="2"
+						stroke-linecap="round"
+						stroke-linejoin="round"
+					>
+						<path d="m16 3 4 4-4 4" />
+						<path d="M20 7H4" />
+						<path d="m8 21-4-4 4-4" />
+						<path d="M4 17h16" />
+					</svg>
+					{swapping ? 'Swapping...' : 'Swap with Author'}
+				</button>
+			{/if}
+		</div>
+		<Input id="edit-title" type="text" bind:value={title} />
+		{#if swapError}<p class="text-xs text-destructive">{swapError}</p>{/if}
 	</div>
 
 	<!-- Authors -->
@@ -488,6 +533,69 @@
 			search={searchAuthors}
 			onselect={addAuthor}
 		/>
+	</div>
+
+	<!-- Description -->
+	<div class="space-y-1.5">
+		<Label for="edit-description">Description</Label>
+		<textarea
+			id="edit-description"
+			bind:value={description}
+			rows="4"
+			class="border-input bg-background ring-offset-background placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 flex w-full rounded-md border px-3 py-2 text-sm shadow-xs outline-none focus-visible:ring-[3px] disabled:cursor-not-allowed disabled:opacity-50"
+		></textarea>
+	</div>
+
+	<!-- Metadata Status -->
+	<div class="space-y-1.5">
+		<Label>Metadata Status</Label>
+		<Select.Root type="single" bind:value={metadataStatus}>
+			<Select.Trigger class="w-full">
+				{metadataStatusOptions.find((o) => o.value === metadataStatus)?.label ?? metadataStatus}
+			</Select.Trigger>
+			<Select.Content>
+				{#each metadataStatusOptions as option (option.value)}
+					<Select.Item value={option.value} label={option.label} />
+				{/each}
+			</Select.Content>
+		</Select.Root>
+	</div>
+
+	<!-- Publisher -->
+	<div class="space-y-1.5">
+		<Label>Publisher</Label>
+		{#if editPublisher}
+			<div class="flex items-center gap-2 rounded border border-border px-2 py-1 text-sm">
+				<span class="flex-1 font-medium">{editPublisher.name}</span>
+				<button
+					type="button"
+					class="p-0.5 text-muted-foreground hover:text-destructive"
+					onclick={removePublisher}
+					aria-label="Remove publisher"
+				>
+					<svg
+						class="size-3.5"
+						viewBox="0 0 24 24"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="2"
+						stroke-linecap="round"
+						stroke-linejoin="round"
+					>
+						<path d="M18 6 6 18" />
+						<path d="m6 6 12 12" />
+					</svg>
+				</button>
+			</div>
+		{:else}
+			<AutocompleteInput
+				placeholder="Search publisher..."
+				search={searchPublishers}
+				onselect={selectPublisher}
+				allowCreate
+				oncreate={createPublisher}
+			/>
+		{/if}
 	</div>
 
 	<!-- Series -->
