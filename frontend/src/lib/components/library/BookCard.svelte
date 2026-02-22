@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { BookSummary } from '$lib/api/index.js';
+	import { placeholderHue } from '$lib/utils.js';
 
 	interface Props {
 		book: BookSummary;
@@ -15,15 +16,6 @@
 
 	const coverSm = $derived(`/api/books/${book.id}/cover?size=sm`);
 	const coverMd = $derived(`/api/books/${book.id}/cover?size=md`);
-
-	/** Generate a deterministic hue from book ID for the placeholder. */
-	function placeholderHue(id: string): number {
-		let hash = 0;
-		for (let i = 0; i < id.length; i++) {
-			hash = (hash * 31 + id.charCodeAt(i)) | 0;
-		}
-		return Math.abs(hash) % 360;
-	}
 
 	const hue = $derived(placeholderHue(book.id));
 </script>

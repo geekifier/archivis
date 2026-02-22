@@ -4,11 +4,14 @@
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
 	import BookCard from '$lib/components/library/BookCard.svelte';
+	import BookListView from '$lib/components/library/BookListView.svelte';
 	import Pagination from '$lib/components/library/Pagination.svelte';
 
 	const PER_PAGE = 24;
 	const DEBOUNCE_MS = 300;
+	const VIEW_STORAGE_KEY = 'archivis-library-view';
 
+	type ViewMode = 'grid' | 'list';
 	type SortOption = { label: string; field: SortField; order: SortOrder };
 
 	const sortOptions: SortOption[] = [
@@ -18,6 +21,13 @@
 		{ label: 'Highest Rated', field: 'rating', order: 'desc' }
 	];
 
+	function loadViewPreference(): ViewMode {
+		if (typeof localStorage === 'undefined') return 'grid';
+		const stored = localStorage.getItem(VIEW_STORAGE_KEY);
+		return stored === 'list' ? 'list' : 'grid';
+	}
+
+	let viewMode = $state<ViewMode>(loadViewPreference());
 	let searchInput = $state('');
 	let activeQuery = $state('');
 	let sortIndex = $state(0);
@@ -27,8 +37,24 @@
 	let error = $state<string | null>(null);
 	let debounceTimer: ReturnType<typeof setTimeout> | undefined;
 
+	let activeSortBy = $state<SortField>(sortOptions[0].field);
+	let activeSortOrder = $state<SortOrder>(sortOptions[0].order);
+
 	const sortBy = $derived(sortOptions[sortIndex].field);
 	const sortOrder = $derived(sortOptions[sortIndex].order);
+
+	// Keep activeSortBy/Order in sync with dropdown changes
+	$effect(() => {
+		activeSortBy = sortBy;
+		activeSortOrder = sortOrder;
+	});
+
+	const includeParam = $derived(viewMode === 'list' ? 'authors,series,files' : 'authors');
+
+	function setViewMode(mode: ViewMode) {
+		viewMode = mode;
+		localStorage.setItem(VIEW_STORAGE_KEY, mode);
+	}
 
 	function handleSearchInput(e: Event) {
 		const value = (e.target as HTMLInputElement).value;
@@ -54,21 +80,29 @@
 		currentPage = page;
 	}
 
+	function handleListSort(field: SortField, order: SortOrder) {
+		activeSortBy = field;
+		activeSortOrder = order;
+		// Sync dropdown if it matches a preset
+		const idx = sortOptions.findIndex((o) => o.field === field && o.order === order);
+		if (idx >= 0) sortIndex = idx;
+	}
+
 	// Reset to page 1 when search or sort changes
 	$effect(() => {
-		// Touch reactive deps to track them
 		void activeQuery;
-		void sortBy;
-		void sortOrder;
+		void activeSortBy;
+		void activeSortOrder;
 		currentPage = 1;
 	});
 
 	// Fetch books when query params change
 	$effect(() => {
 		const page = currentPage;
-		const field = sortBy;
-		const order = sortOrder;
+		const field = activeSortBy;
+		const order = activeSortOrder;
 		const q = activeQuery;
+		const include = includeParam;
 
 		loading = true;
 		error = null;
@@ -80,7 +114,7 @@
 				sort_by: field,
 				sort_order: order,
 				q: q || undefined,
-				include: 'authors'
+				include
 			})
 			.then((result) => {
 				data = result;
@@ -128,31 +162,78 @@
 			/>
 		</div>
 
-		<select
-			class="h-9 rounded-md border border-input bg-background px-3 text-sm shadow-xs focus-visible:border-ring focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
-			value={sortIndex}
-			onchange={handleSortChange}
-		>
-			{#each sortOptions as option, i (option.field + option.order)}
-				<option value={i}>{option.label}</option>
-			{/each}
-		</select>
+		<div class="flex items-center gap-2">
+			<!-- View toggle -->
+			<div class="flex rounded-md border border-input shadow-xs">
+				<Button
+					variant={viewMode === 'grid' ? 'default' : 'ghost'}
+					size="icon-sm"
+					onclick={() => setViewMode('grid')}
+					aria-label="Grid view"
+					class="rounded-r-none border-0 shadow-none"
+				>
+					<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="size-4">
+						<rect x="3" y="3" width="7" height="7" />
+						<rect x="14" y="3" width="7" height="7" />
+						<rect x="3" y="14" width="7" height="7" />
+						<rect x="14" y="14" width="7" height="7" />
+					</svg>
+				</Button>
+				<Button
+					variant={viewMode === 'list' ? 'default' : 'ghost'}
+					size="icon-sm"
+					onclick={() => setViewMode('list')}
+					aria-label="List view"
+					class="rounded-l-none border-0 shadow-none"
+				>
+					<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="size-4">
+						<line x1="3" y1="6" x2="21" y2="6" />
+						<line x1="3" y1="12" x2="21" y2="12" />
+						<line x1="3" y1="18" x2="21" y2="18" />
+					</svg>
+				</Button>
+			</div>
+
+			<select
+				class="h-9 rounded-md border border-input bg-background px-3 text-sm shadow-xs focus-visible:border-ring focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+				value={sortIndex}
+				onchange={handleSortChange}
+			>
+				{#each sortOptions as option, i (option.field + option.order)}
+					<option value={i}>{option.label}</option>
+				{/each}
+			</select>
+		</div>
 	</div>
 
 	<!-- Content area -->
 	{#if loading}
-		<!-- Skeleton grid -->
-		<div class="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
-			{#each skeletonIds as id (id)}
-				<div>
-					<div class="aspect-[2/3] w-full animate-pulse rounded-lg bg-muted"></div>
-					<div class="mt-1.5 space-y-1 px-0.5">
-						<div class="h-4 w-3/4 animate-pulse rounded bg-muted"></div>
-						<div class="h-3 w-1/2 animate-pulse rounded bg-muted"></div>
+		{#if viewMode === 'grid'}
+			<!-- Skeleton grid -->
+			<div class="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
+				{#each skeletonIds as id (id)}
+					<div>
+						<div class="aspect-[2/3] w-full animate-pulse rounded-lg bg-muted"></div>
+						<div class="mt-1.5 space-y-1 px-0.5">
+							<div class="h-4 w-3/4 animate-pulse rounded bg-muted"></div>
+							<div class="h-3 w-1/2 animate-pulse rounded bg-muted"></div>
+						</div>
 					</div>
-				</div>
-			{/each}
-		</div>
+				{/each}
+			</div>
+		{:else}
+			<!-- Skeleton list -->
+			<div class="space-y-0 overflow-hidden rounded-lg border border-border">
+				{#each skeletonIds.slice(0, 8) as id (id)}
+					<div class="flex items-center gap-3 border-b border-border px-3 py-2 last:border-b-0">
+						<div class="h-10 w-7 animate-pulse rounded bg-muted"></div>
+						<div class="h-4 w-48 animate-pulse rounded bg-muted"></div>
+						<div class="h-4 w-32 animate-pulse rounded bg-muted"></div>
+						<div class="h-4 w-24 animate-pulse rounded bg-muted"></div>
+					</div>
+				{/each}
+			</div>
+		{/if}
 	{:else if error}
 		<div class="flex items-center justify-center rounded-lg border border-dashed border-destructive/50 p-12">
 			<div class="text-center">
@@ -163,11 +244,20 @@
 			</div>
 		</div>
 	{:else if data && data.items.length > 0}
-		<div class="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
-			{#each data.items as book (book.id)}
-				<BookCard {book} />
-			{/each}
-		</div>
+		{#if viewMode === 'grid'}
+			<div class="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
+				{#each data.items as book (book.id)}
+					<BookCard {book} />
+				{/each}
+			</div>
+		{:else}
+			<BookListView
+				books={data.items}
+				sortBy={activeSortBy}
+				sortOrder={activeSortOrder}
+				onSort={handleListSort}
+			/>
+		{/if}
 
 		<Pagination page={data.page} totalPages={data.total_pages} onPageChange={handlePageChange} />
 	{:else}

@@ -46,7 +46,7 @@
 	];
 
 	function isActive(href: string): boolean {
-		if (href === '/') return page.url.pathname === '/';
+		if (href === '/') return page.url.pathname === '/' || page.url.pathname.startsWith('/books');
 		return page.url.pathname.startsWith(href);
 	}
 </script>

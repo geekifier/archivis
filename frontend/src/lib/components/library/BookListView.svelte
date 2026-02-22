@@ -1,0 +1,246 @@
+<script lang="ts">
+	import {
+		createTable,
+		getCoreRowModel,
+		FlexRender,
+		type ColumnDef,
+		type Header
+	} from '@tanstack/svelte-table';
+	import type { BookSummary, SortField, SortOrder } from '$lib/api/index.js';
+
+	interface Props {
+		books: BookSummary[];
+		sortBy: SortField;
+		sortOrder: SortOrder;
+		onSort: (field: SortField, order: SortOrder) => void;
+	}
+
+	let { books, sortBy, sortOrder, onSort }: Props = $props();
+
+	/** Maps TanStack column IDs to API sort fields. */
+	const columnToSortField: Record<string, SortField> = {
+		title: 'title',
+		added_at: 'added_at',
+		metadata_status: 'metadata_status'
+	};
+
+	function handleHeaderClick(headerId: string) {
+		const field = columnToSortField[headerId];
+		if (!field) return;
+		if (sortBy === field) {
+			onSort(field, sortOrder === 'asc' ? 'desc' : 'asc');
+		} else {
+			onSort(field, 'asc');
+		}
+	}
+
+	function sortIndicator(headerId: string): string {
+		const field = columnToSortField[headerId];
+		if (!field || sortBy !== field) return '';
+		return sortOrder === 'asc' ? ' \u2191' : ' \u2193';
+	}
+
+	function formatDate(iso: string): string {
+		return new Date(iso).toLocaleDateString(undefined, {
+			year: 'numeric',
+			month: 'short',
+			day: 'numeric'
+		});
+	}
+
+	function formatAuthors(book: BookSummary): string {
+		return book.authors?.map((a) => a.name).join(', ') ?? '';
+	}
+
+	function formatSeries(book: BookSummary): string {
+		if (!book.series || book.series.length === 0) return '';
+		const s = book.series[0];
+		return s.position != null ? `${s.name} #${s.position}` : s.name;
+	}
+
+	function formatFormats(book: BookSummary): string[] {
+		return book.files?.map((f) => f.format.toUpperCase()) ?? [];
+	}
+
+	const statusConfig: Record<string, { label: string; class: string }> = {
+		identified: { label: 'Identified', class: 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400' },
+		needs_review: { label: 'Needs Review', class: 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400' },
+		unidentified: { label: 'Unidentified', class: 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400' }
+	};
+
+	/** Deterministic hue from book ID for cover placeholder. */
+	function placeholderHue(id: string): number {
+		let hash = 0;
+		for (let i = 0; i < id.length; i++) {
+			hash = (hash * 31 + id.charCodeAt(i)) | 0;
+		}
+		return Math.abs(hash) % 360;
+	}
+
+	const columns: ColumnDef<BookSummary>[] = [
+		{
+			id: 'cover',
+			header: '',
+			size: 50,
+			minSize: 40,
+			maxSize: 60,
+			enableResizing: false,
+			cell: (info) => info.row.original
+		},
+		{
+			id: 'title',
+			accessorKey: 'title',
+			header: 'Title',
+			size: 280,
+			minSize: 120,
+			cell: (info) => info.row.original
+		},
+		{
+			id: 'authors',
+			header: 'Author',
+			size: 200,
+			minSize: 100,
+			cell: (info) => formatAuthors(info.row.original)
+		},
+		{
+			id: 'series',
+			header: 'Series',
+			size: 180,
+			minSize: 80,
+			cell: (info) => formatSeries(info.row.original)
+		},
+		{
+			id: 'formats',
+			header: 'Format',
+			size: 120,
+			minSize: 60,
+			cell: (info) => info.row.original
+		},
+		{
+			id: 'added_at',
+			accessorKey: 'added_at',
+			header: 'Date Added',
+			size: 140,
+			minSize: 100,
+			cell: (info) => formatDate(info.getValue() as string)
+		},
+		{
+			id: 'metadata_status',
+			accessorKey: 'metadata_status',
+			header: 'Status',
+			size: 120,
+			minSize: 80,
+			cell: (info) => info.row.original
+		}
+	];
+
+	const table = createTable({
+		get data() {
+			return books;
+		},
+		columns,
+		getCoreRowModel: getCoreRowModel(),
+		columnResizeMode: 'onChange',
+		enableColumnResizing: true
+	});
+
+	function getHeaderStyle(header: Header<BookSummary, unknown>): string {
+		return `width: ${header.getSize()}px;`;
+	}
+
+	function getCellStyle(size: number): string {
+		return `width: ${size}px;`;
+	}
+</script>
+
+<div class="overflow-x-auto rounded-lg border border-border">
+	<table class="w-full text-sm" style="table-layout: fixed; width: {table.getCenterTotalSize()}px; min-width: 100%;">
+		<thead>
+			{#each table.getHeaderGroups() as headerGroup (headerGroup.id)}
+				<tr class="border-b border-border bg-muted/50">
+					{#each headerGroup.headers as header (header.id)}
+						{@const isSortable = header.id in columnToSortField}
+						<th
+							class="relative px-3 py-2 text-left font-medium text-muted-foreground {isSortable ? 'cursor-pointer select-none hover:text-foreground' : ''}"
+							style={getHeaderStyle(header)}
+							onclick={() => isSortable && handleHeaderClick(header.id)}
+						>
+							<div class="flex items-center truncate">
+								<FlexRender content={header.column.columnDef.header} context={header.getContext()} />
+								{#if isSortable}
+									<span class="ml-1 text-xs">{sortIndicator(header.id)}</span>
+								{/if}
+							</div>
+							{#if header.column.getCanResize()}
+								<!-- svelte-ignore a11y_no_static_element_interactions -->
+								<div
+									class="absolute right-0 top-0 h-full w-1 cursor-col-resize select-none touch-none hover:bg-primary/50 {header.column.getIsResizing() ? 'bg-primary' : ''}"
+									onmousedown={header.getResizeHandler()}
+									ontouchstart={header.getResizeHandler()}
+								></div>
+							{/if}
+						</th>
+					{/each}
+				</tr>
+			{/each}
+		</thead>
+		<tbody>
+			{#each table.getRowModel().rows as row (row.id)}
+				<tr class="border-b border-border transition-colors hover:bg-muted/30">
+					{#each row.getVisibleCells() as cell (cell.id)}
+						<td class="px-3 py-1.5" style={getCellStyle(cell.column.getSize())}>
+							{#if cell.column.id === 'cover'}
+								{@const book = cell.row.original}
+								<a href="/books/{book.id}" class="block h-10 w-7 flex-shrink-0 overflow-hidden rounded">
+									{#if book.has_cover}
+										<img
+											src="/api/books/{book.id}/cover?size=sm"
+											alt=""
+											class="h-full w-full object-cover"
+											loading="lazy"
+										/>
+									{:else}
+										<div
+											class="flex h-full w-full items-center justify-center text-[6px] text-white/70"
+											style="background-color: hsl({placeholderHue(book.id)}, 30%, 25%);"
+										>
+											<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="size-3">
+												<path d="M12 6.042A8.967 8.967 0 0 0 6 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 0 1 6 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 0 1 6-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0 0 18 18a8.967 8.967 0 0 0-6 2.292m0-14.25v14.25" />
+											</svg>
+										</div>
+									{/if}
+								</a>
+							{:else if cell.column.id === 'title'}
+								{@const book = cell.row.original}
+								<a href="/books/{book.id}" class="truncate font-medium text-foreground hover:text-primary hover:underline">
+									{book.title}
+								</a>
+							{:else if cell.column.id === 'formats'}
+								{@const formats = formatFormats(cell.row.original)}
+								<div class="flex flex-wrap gap-1">
+									{#each formats as fmt (fmt)}
+										<span class="inline-flex rounded bg-secondary px-1.5 py-0.5 text-[10px] font-semibold uppercase text-secondary-foreground">
+											{fmt}
+										</span>
+									{/each}
+								</div>
+							{:else if cell.column.id === 'metadata_status'}
+								{@const status = cell.row.original.metadata_status}
+								{@const cfg = statusConfig[status]}
+								{#if cfg}
+									<span class="inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold {cfg.class}">
+										{cfg.label}
+									</span>
+								{/if}
+							{:else}
+								<span class="truncate text-muted-foreground">
+									<FlexRender content={cell.column.columnDef.cell} context={cell.getContext()} />
+								</span>
+							{/if}
+						</td>
+					{/each}
+				</tr>
+			{/each}
+		</tbody>
+	</table>
+</div>
