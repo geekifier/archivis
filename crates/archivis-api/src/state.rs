@@ -5,6 +5,7 @@ use archivis_auth::{AuthService, LocalAuthAdapter};
 use archivis_db::DbPool;
 use archivis_metadata::ProviderRegistry;
 use archivis_storage::local::LocalStorage;
+use archivis_tasks::identify::IdentificationService;
 use archivis_tasks::queue::TaskQueue;
 
 /// API-specific configuration extracted from the application config.
@@ -30,6 +31,7 @@ struct AppStateInner {
     auth_service: AuthService<LocalAuthAdapter>,
     storage: LocalStorage,
     provider_registry: Arc<ProviderRegistry>,
+    identify_service: Arc<IdentificationService<LocalStorage>>,
     config: ApiConfig,
 }
 
@@ -40,6 +42,7 @@ impl AppState {
         auth_service: AuthService<LocalAuthAdapter>,
         storage: LocalStorage,
         provider_registry: Arc<ProviderRegistry>,
+        identify_service: Arc<IdentificationService<LocalStorage>>,
         config: ApiConfig,
     ) -> Self {
         Self {
@@ -49,6 +52,7 @@ impl AppState {
                 auth_service,
                 storage,
                 provider_registry,
+                identify_service,
                 config,
             }),
         }
@@ -72,6 +76,10 @@ impl AppState {
 
     pub fn provider_registry(&self) -> &Arc<ProviderRegistry> {
         &self.inner.provider_registry
+    }
+
+    pub fn identify_service(&self) -> &Arc<IdentificationService<LocalStorage>> {
+        &self.inner.identify_service
     }
 
     pub fn config(&self) -> &ApiConfig {

@@ -2,6 +2,7 @@ pub mod auth;
 pub mod authors;
 pub mod books;
 pub mod errors;
+pub mod identify;
 pub mod import;
 pub mod publishers;
 pub mod series;
@@ -86,6 +87,13 @@ mod openapi {
             super::tasks::handlers::get_task,
             super::tasks::sse::task_progress_sse,
             super::tasks::sse::active_tasks_sse,
+            // Identify
+            super::identify::handlers::identify_book,
+            super::identify::handlers::list_candidates,
+            super::identify::handlers::apply_candidate,
+            super::identify::handlers::reject_candidate,
+            super::identify::handlers::batch_identify,
+            super::identify::handlers::identify_all,
         ),
         components(schemas(
             // Auth
@@ -139,6 +147,13 @@ mod openapi {
             super::import::types::UploadResponse,
             // Tasks
             super::tasks::types::TaskResponse,
+            // Identify
+            super::identify::types::CandidateResponse,
+            super::identify::types::SeriesInfo,
+            super::identify::types::IdentifyResponse,
+            super::identify::types::BatchIdentifyRequest,
+            super::identify::types::IdentifyAllRequest,
+            super::identify::types::IdentifyAllResponse,
         )),
         tags(
             (name = "auth", description = "Authentication and user management"),
@@ -148,6 +163,7 @@ mod openapi {
             (name = "series", description = "Series management"),
             (name = "tags", description = "Tag management"),
             (name = "import", description = "File and directory import"),
+            (name = "identify", description = "Book metadata identification"),
             (name = "tasks", description = "Background task management"),
         )
     )]
@@ -168,7 +184,8 @@ pub fn build_router(state: AppState) -> Router {
         .nest("/publishers", publishers::router())
         .nest("/series", series::router())
         .nest("/tags", tags::router())
-        .nest("/import", import::router());
+        .nest("/import", import::router())
+        .nest("/identify", identify::router());
 
     let mut router = Router::new()
         .merge(SwaggerUi::new("/api/docs").url("/api/openapi.json", openapi::ApiDoc::openapi()))
@@ -228,12 +245,24 @@ mod tests {
 
         let provider_registry = Arc::new(archivis_metadata::ProviderRegistry::new());
 
+        let resolver = Arc::new(archivis_metadata::MetadataResolver::new(
+            Arc::clone(&provider_registry),
+            0.85,
+        ));
+        let identify_service = Arc::new(archivis_tasks::identify::IdentificationService::new(
+            db_pool.clone(),
+            resolver,
+            storage.clone(),
+            dir.to_path_buf(),
+        ));
+
         AppState::new(
             db_pool,
             Arc::new(task_queue),
             auth_service,
             storage,
             provider_registry,
+            identify_service,
             ApiConfig {
                 data_dir: dir.to_path_buf(),
                 frontend_dir,

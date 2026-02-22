@@ -81,7 +81,25 @@ async fn main() {
     let (task_queue, dispatch_rx) = TaskQueue::new(db_pool.clone());
     let task_queue = Arc::new(task_queue);
 
-    let workers = init_workers(&db_pool, &storage, &config, &provider_registry);
+    // Build shared identification service (used by both worker and API handlers)
+    let resolver = Arc::new(MetadataResolver::new(
+        Arc::clone(&provider_registry),
+        config.metadata.auto_identify_threshold,
+    ));
+    let identify_service = Arc::new(IdentificationService::new(
+        db_pool.clone(),
+        Arc::clone(&resolver),
+        storage.clone(),
+        config.data_dir.clone(),
+    ));
+
+    let workers = init_workers(
+        &db_pool,
+        &storage,
+        &config,
+        &provider_registry,
+        &identify_service,
+    );
     let progress = task_queue.progress_sender();
     let dispatcher_pool = db_pool.clone();
     tokio::spawn(async move {
@@ -104,6 +122,7 @@ async fn main() {
         auth_service,
         storage,
         provider_registry,
+        identify_service,
         api_config,
     );
     let router = archivis_api::build_router(state);
@@ -135,7 +154,8 @@ fn init_workers(
     db_pool: &archivis_db::DbPool,
     storage: &LocalStorage,
     config: &AppConfig,
-    provider_registry: &Arc<ProviderRegistry>,
+    _provider_registry: &Arc<ProviderRegistry>,
+    identify_service: &Arc<IdentificationService<LocalStorage>>,
 ) -> HashMap<archivis_core::models::TaskType, Arc<dyn Worker>> {
     let import_config = ImportConfig {
         data_dir: config.data_dir.clone(),
@@ -155,18 +175,6 @@ fn init_workers(
         },
     )));
 
-    // Identification worker
-    let resolver = Arc::new(MetadataResolver::new(
-        Arc::clone(provider_registry),
-        config.metadata.auto_identify_threshold,
-    ));
-    let identify_service = Arc::new(IdentificationService::new(
-        db_pool.clone(),
-        resolver,
-        storage.clone(),
-        config.data_dir.clone(),
-    ));
-
     let mut workers: HashMap<archivis_core::models::TaskType, Arc<dyn Worker>> = HashMap::new();
     workers.insert(
         archivis_core::models::TaskType::ImportFile,
@@ -178,7 +186,7 @@ fn init_workers(
     );
     workers.insert(
         archivis_core::models::TaskType::IdentifyBook,
-        Arc::new(IdentifyWorker::new(identify_service)),
+        Arc::new(IdentifyWorker::new(Arc::clone(identify_service))),
     );
     workers
 }
