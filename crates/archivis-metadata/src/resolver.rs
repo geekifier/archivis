@@ -135,8 +135,8 @@ impl MetadataResolver {
             score_candidate(candidate, query, existing);
         }
 
-        // Phase 4: Cross-provider deduplication and bonuses.
-        apply_cross_provider_bonuses(&mut all_candidates);
+        // Phase 4: Deduplication and cross-provider bonuses.
+        deduplicate_and_boost(&mut all_candidates);
 
         // Phase 5: Sort by score descending.
         all_candidates.sort_by(|a, b| {
@@ -359,12 +359,13 @@ fn candidate_has_isbn(metadata: &ProviderMetadata, isbn: &str) -> bool {
     })
 }
 
-/// Apply cross-provider bonuses and deduplicate.
+/// Deduplicate candidates and apply cross-provider corroboration bonuses.
 ///
-/// If multiple providers returned results for the same book (matched by
-/// ISBN or fuzzy title+author), boost the higher-scored one and merge
-/// unique data.
-fn apply_cross_provider_bonuses(candidates: &mut Vec<ScoredCandidate>) {
+/// If multiple candidates refer to the same book (matched by ISBN or fuzzy
+/// title+author), merge them into the higher-scored one. When the duplicates
+/// come from *different* providers, also apply a corroboration score bonus.
+/// Same-provider duplicates are merged without the bonus.
+fn deduplicate_and_boost(candidates: &mut Vec<ScoredCandidate>) {
     if candidates.len() < 2 {
         return;
     }
@@ -381,18 +382,22 @@ fn apply_cross_provider_bonuses(candidates: &mut Vec<ScoredCandidate>) {
             if merged_indices[j] {
                 continue;
             }
-            // Same provider — skip.
-            if candidates[i].provider_name == candidates[j].provider_name {
-                continue;
-            }
 
             if are_same_book(&candidates[i], &candidates[j]) {
-                // Cross-provider corroboration found.
-                debug!(
-                    provider_a = %candidates[i].provider_name,
-                    provider_b = %candidates[j].provider_name,
-                    "cross-provider match found"
-                );
+                let cross_provider = candidates[i].provider_name != candidates[j].provider_name;
+
+                if cross_provider {
+                    debug!(
+                        provider_a = %candidates[i].provider_name,
+                        provider_b = %candidates[j].provider_name,
+                        "cross-provider match found"
+                    );
+                } else {
+                    debug!(
+                        provider = %candidates[i].provider_name,
+                        "same-provider duplicate found"
+                    );
+                }
 
                 // Boost the higher-scored candidate and merge data.
                 let (winner_idx, loser_idx) = if candidates[i].score >= candidates[j].score {
@@ -406,11 +411,18 @@ fn apply_cross_provider_bonuses(candidates: &mut Vec<ScoredCandidate>) {
                 let loser_name = candidates[loser_idx].provider_name.clone();
                 let loser_metadata = candidates[loser_idx].metadata.clone();
 
-                candidates[winner_idx].score =
-                    (candidates[winner_idx].score + CROSS_PROVIDER_BONUS).min(1.0);
-                candidates[winner_idx]
-                    .match_reasons
-                    .push(format!("Cross-provider match ({loser_name})"));
+                // Only apply the corroboration bonus for cross-provider matches.
+                if cross_provider {
+                    candidates[winner_idx].score =
+                        (candidates[winner_idx].score + CROSS_PROVIDER_BONUS).min(1.0);
+                    candidates[winner_idx]
+                        .match_reasons
+                        .push(format!("Cross-provider match ({loser_name})"));
+                } else {
+                    candidates[winner_idx]
+                        .match_reasons
+                        .push("Same-provider duplicate merged".to_string());
+                }
 
                 // Merge unique data from the loser into the winner.
                 merge_metadata(&mut candidates[winner_idx].metadata, &loser_metadata);
@@ -868,27 +880,27 @@ mod tests {
 
     #[tokio::test]
     async fn candidates_sorted_by_score() {
+        // Use truly different books (different titles AND different authors)
+        // so that dedup does not merge them.
         let ol = StubProvider::new("open_library").with_search_results(vec![
             make_metadata("open_library", "Dune", &["Frank Herbert"], None, 0.5),
-            make_metadata(
-                "open_library",
-                "Dune Messiah",
-                &["Frank Herbert"],
-                None,
-                0.8,
-            ),
+            make_metadata("open_library", "Foundation", &["Isaac Asimov"], None, 0.8),
         ]);
 
         let registry = make_registry(vec![Arc::new(ol)]);
         let resolver = MetadataResolver::with_defaults(registry);
 
         let query = MetadataQuery {
-            title: Some("Dune Messiah".to_string()),
+            title: Some("Foundation".to_string()),
             ..Default::default()
         };
 
         let result = resolver.resolve(&query, None).await;
-        assert!(result.candidates.len() >= 2);
+        assert!(
+            result.candidates.len() >= 2,
+            "expected at least 2 candidates, got {}",
+            result.candidates.len()
+        );
 
         // Verify descending order.
         for window in result.candidates.windows(2) {
@@ -1073,5 +1085,264 @@ mod tests {
             .identifiers
             .iter()
             .any(|id| id.identifier_type == IdentifierType::Hardcover));
+    }
+
+    // ── Same-provider deduplication tests ──
+
+    #[test]
+    fn same_provider_duplicates_are_merged() {
+        // Two candidates from the same provider with matching ISBN.
+        let mut candidates = vec![
+            ScoredCandidate {
+                metadata: make_metadata(
+                    "open_library",
+                    "Dune",
+                    &["Frank Herbert"],
+                    Some("9780441172719"),
+                    0.9,
+                ),
+                score: 0.9,
+                provider_name: "open_library".to_string(),
+                match_reasons: Vec::new(),
+            },
+            ScoredCandidate {
+                metadata: make_metadata(
+                    "open_library",
+                    "Dune",
+                    &["Frank Herbert"],
+                    Some("9780441172719"),
+                    0.7,
+                ),
+                score: 0.7,
+                provider_name: "open_library".to_string(),
+                match_reasons: Vec::new(),
+            },
+        ];
+
+        deduplicate_and_boost(&mut candidates);
+
+        assert_eq!(
+            candidates.len(),
+            1,
+            "same-provider duplicates should be merged into one candidate"
+        );
+    }
+
+    #[test]
+    fn same_provider_merge_keeps_higher_score_without_bonus() {
+        let mut candidates = vec![
+            ScoredCandidate {
+                metadata: make_metadata(
+                    "open_library",
+                    "Dune",
+                    &["Frank Herbert"],
+                    Some("9780441172719"),
+                    0.9,
+                ),
+                score: 0.9,
+                provider_name: "open_library".to_string(),
+                match_reasons: Vec::new(),
+            },
+            ScoredCandidate {
+                metadata: make_metadata(
+                    "open_library",
+                    "Dune",
+                    &["Frank Herbert"],
+                    Some("9780441172719"),
+                    0.7,
+                ),
+                score: 0.7,
+                provider_name: "open_library".to_string(),
+                match_reasons: Vec::new(),
+            },
+        ];
+
+        deduplicate_and_boost(&mut candidates);
+
+        assert_eq!(candidates.len(), 1);
+        let winner = &candidates[0];
+
+        // Score should remain 0.9 — no cross-provider bonus applied.
+        assert!(
+            (winner.score - 0.9).abs() < f32::EPSILON,
+            "same-provider merge should NOT apply corroboration bonus, got {}",
+            winner.score
+        );
+
+        // Should have the same-provider merge reason, not cross-provider.
+        assert!(
+            winner
+                .match_reasons
+                .iter()
+                .any(|r| r.contains("Same-provider duplicate merged")),
+            "expected same-provider merge reason, got: {:?}",
+            winner.match_reasons
+        );
+        assert!(
+            !winner
+                .match_reasons
+                .iter()
+                .any(|r| r.contains("Cross-provider")),
+            "same-provider merge should NOT have cross-provider reason"
+        );
+    }
+
+    #[test]
+    fn cross_provider_merge_still_gets_bonus() {
+        let mut candidates = vec![
+            ScoredCandidate {
+                metadata: make_metadata(
+                    "open_library",
+                    "Dune",
+                    &["Frank Herbert"],
+                    Some("9780441172719"),
+                    0.9,
+                ),
+                score: 0.9,
+                provider_name: "open_library".to_string(),
+                match_reasons: Vec::new(),
+            },
+            ScoredCandidate {
+                metadata: make_metadata(
+                    "hardcover",
+                    "Dune",
+                    &["Frank Herbert"],
+                    Some("9780441172719"),
+                    0.85,
+                ),
+                score: 0.85,
+                provider_name: "hardcover".to_string(),
+                match_reasons: Vec::new(),
+            },
+        ];
+
+        deduplicate_and_boost(&mut candidates);
+
+        assert_eq!(candidates.len(), 1);
+        let winner = &candidates[0];
+
+        // Score should be 0.9 + 0.1 = 1.0 (clamped).
+        assert!(
+            (winner.score - 1.0).abs() < f32::EPSILON,
+            "cross-provider merge should apply bonus, got {}",
+            winner.score
+        );
+        assert!(
+            winner
+                .match_reasons
+                .iter()
+                .any(|r| r.contains("Cross-provider")),
+            "expected cross-provider reason, got: {:?}",
+            winner.match_reasons
+        );
+    }
+
+    #[test]
+    fn same_provider_merge_preserves_data_from_loser() {
+        let mut high_score = make_metadata(
+            "open_library",
+            "Dune",
+            &["Frank Herbert"],
+            Some("9780441172719"),
+            0.9,
+        );
+        high_score.description = None;
+        high_score.publisher = None;
+
+        let mut low_score = make_metadata(
+            "open_library",
+            "Dune",
+            &["Frank Herbert"],
+            Some("9780441172719"),
+            0.7,
+        );
+        low_score.description = Some("A sci-fi classic".to_string());
+        low_score.publisher = Some("Chilton Books".to_string());
+
+        let mut candidates = vec![
+            ScoredCandidate {
+                metadata: high_score,
+                score: 0.9,
+                provider_name: "open_library".to_string(),
+                match_reasons: Vec::new(),
+            },
+            ScoredCandidate {
+                metadata: low_score,
+                score: 0.7,
+                provider_name: "open_library".to_string(),
+                match_reasons: Vec::new(),
+            },
+        ];
+
+        deduplicate_and_boost(&mut candidates);
+
+        assert_eq!(candidates.len(), 1);
+        let winner = &candidates[0];
+
+        // Data from the lower-scored candidate should be merged in.
+        assert_eq!(
+            winner.metadata.description.as_deref(),
+            Some("A sci-fi classic"),
+            "description should be merged from loser"
+        );
+        assert_eq!(
+            winner.metadata.publisher.as_deref(),
+            Some("Chilton Books"),
+            "publisher should be merged from loser"
+        );
+    }
+
+    #[tokio::test]
+    async fn same_provider_duplicates_deduped_in_full_resolve() {
+        // One provider returns two results for the same book (e.g., ISBN
+        // lookup and search both match). They should be deduplicated.
+        let ol = StubProvider::new("open_library").with_isbn_results(vec![
+            make_metadata(
+                "open_library",
+                "Dune",
+                &["Frank Herbert"],
+                Some("9780441172719"),
+                0.95,
+            ),
+            make_metadata(
+                "open_library",
+                "Dune",
+                &["Frank Herbert"],
+                Some("9780441172719"),
+                0.80,
+            ),
+        ]);
+
+        let registry = make_registry(vec![Arc::new(ol)]);
+        let resolver = MetadataResolver::with_defaults(registry);
+
+        let query = MetadataQuery {
+            isbn: Some("9780441172719".to_string()),
+            ..Default::default()
+        };
+        let existing = ExistingBookMetadata {
+            title: Some("Dune".to_string()),
+            authors: vec!["Frank Herbert".to_string()],
+            ..Default::default()
+        };
+
+        let result = resolver.resolve(&query, Some(&existing)).await;
+
+        assert_eq!(
+            result.candidates.len(),
+            1,
+            "same-provider duplicates should be merged, got {} candidates",
+            result.candidates.len()
+        );
+
+        // Should NOT have cross-provider reason.
+        let best = result.best_match.as_ref().unwrap();
+        assert!(
+            !best
+                .match_reasons
+                .iter()
+                .any(|r| r.contains("Cross-provider")),
+            "same-provider merge should not claim cross-provider match"
+        );
     }
 }
