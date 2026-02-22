@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use axum::extract::{Path, Query, State};
+use axum::extract::{Multipart, Path, Query, State};
 use axum::http::header::{
     CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_TYPE, ETAG, IF_NONE_MATCH,
 };
@@ -9,6 +9,8 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use uuid::Uuid;
 use validator::Validate;
+
+use archivis_formats::CoverData;
 
 use archivis_db::{
     AuthorRepository, BookFileRepository, BookFilter, BookRepository, PaginationParams,
@@ -388,6 +390,112 @@ pub async fn get_cover(
                 .into_response())
         }
     }
+}
+
+/// POST /api/books/{id}/cover — upload or replace cover image.
+#[utoipa::path(
+    post,
+    path = "/api/books/{id}/cover",
+    tag = "books",
+    params(("id" = Uuid, Path, description = "Book ID")),
+    responses(
+        (status = 200, description = "Cover uploaded, book updated", body = BookDetail),
+        (status = 400, description = "Invalid image or no file provided"),
+        (status = 404, description = "Book not found"),
+        (status = 401, description = "Not authenticated"),
+    ),
+    security(("bearer" = []))
+)]
+pub async fn upload_cover(
+    State(state): State<AppState>,
+    AuthUser(_user): AuthUser,
+    Path(id): Path<Uuid>,
+    mut multipart: Multipart,
+) -> Result<Json<BookDetail>, ApiError> {
+    let pool = state.db_pool();
+    let bwr = BookRepository::get_with_relations(pool, id).await?;
+    let mut book = bwr.book;
+    let storage = state.storage();
+    let data_dir = &state.config().data_dir;
+
+    // Extract the first file field from the multipart form
+    let field = multipart
+        .next_field()
+        .await
+        .map_err(|e| ApiError::Validation(format!("multipart error: {e}")))?
+        .ok_or_else(|| ApiError::Validation("no file provided".into()))?;
+
+    // Validate content type is an image
+    let content_type = field
+        .content_type()
+        .unwrap_or("application/octet-stream")
+        .to_string();
+
+    if !content_type.starts_with("image/") {
+        return Err(ApiError::Validation(format!(
+            "file must be an image, got: {content_type}"
+        )));
+    }
+
+    let image_bytes = field
+        .bytes()
+        .await
+        .map_err(|e| ApiError::Validation(format!("failed to read upload: {e}")))?;
+
+    if image_bytes.is_empty() {
+        return Err(ApiError::Validation("uploaded file is empty".into()));
+    }
+
+    // Determine the book's storage directory from its first file
+    let book_path_dir = bwr
+        .files
+        .first()
+        .and_then(|f| {
+            let p = &f.storage_path;
+            p.rfind('/').map(|idx| &p[..idx])
+        })
+        .ok_or_else(|| {
+            ApiError::Validation("book has no files; cannot determine storage directory".into())
+        })?
+        .to_string();
+
+    // Delete old cover from storage if present
+    if let Some(ref old_cover_path) = book.cover_path {
+        if let Err(e) = storage.delete(old_cover_path).await {
+            tracing::warn!(path = %old_cover_path, error = %e, "failed to delete old cover from storage");
+        }
+    }
+
+    // Delete old thumbnail cache directory
+    let cache_dir = data_dir.join("covers").join(id.to_string());
+    if cache_dir.exists() {
+        if let Err(e) = tokio::fs::remove_dir_all(&cache_dir).await {
+            tracing::warn!(path = ?cache_dir, error = %e, "failed to remove old thumbnail cache");
+        }
+    }
+
+    // Store new cover via StorageBackend
+    let cover_data = CoverData {
+        bytes: image_bytes.to_vec(),
+        media_type: content_type,
+    };
+
+    let new_cover_path = archivis_tasks::import::store_cover(storage, &book_path_dir, &cover_data)
+        .await
+        .map_err(|e| ApiError::Internal(format!("failed to store cover: {e}")))?;
+
+    // Generate sm + md thumbnails
+    let thumbnail_sizes = archivis_tasks::import::ThumbnailSizes::default();
+    archivis_tasks::import::generate_thumbnails(&cover_data, id, data_dir, &thumbnail_sizes)
+        .await
+        .map_err(|e| ApiError::Internal(format!("thumbnail generation failed: {e}")))?;
+
+    // Update book.cover_path in the database
+    book.cover_path = Some(new_cover_path);
+    BookRepository::update(pool, &book).await?;
+
+    let bwr = BookRepository::get_with_relations(pool, id).await?;
+    Ok(Json(bwr.into()))
 }
 
 /// Serve a local file with ETag/304 support.

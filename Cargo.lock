@@ -104,6 +104,7 @@ dependencies = [
  "archivis-auth",
  "archivis-core",
  "archivis-db",
+ "archivis-formats",
  "archivis-storage",
  "archivis-tasks",
  "axum",

@@ -181,6 +181,40 @@ export const api = {
 		/** Delete a book and all associated files. */
 		delete(id: string): Promise<void> {
 			return request<void>('DELETE', `/books/${encodeURIComponent(id)}`);
+		},
+
+		/** Upload or replace the cover image for a book. */
+		async uploadCover(id: string, file: File): Promise<BookDetail> {
+			const formData = new FormData();
+			formData.append('file', file);
+
+			const headers: Record<string, string> = {
+				Accept: 'application/json'
+			};
+			const token = getSessionToken();
+			if (token) {
+				headers['Authorization'] = `Bearer ${token}`;
+			}
+			// Do NOT set Content-Type — let the browser set the multipart boundary.
+
+			const response = await fetch(
+				`${BASE_URL}/books/${encodeURIComponent(id)}/cover`,
+				{
+					method: 'POST',
+					headers,
+					body: formData
+				}
+			);
+
+			if (!response.ok) {
+				const error = await parseApiError(response);
+				if (error.isUnauthorized) {
+					handleUnauthorized();
+				}
+				throw error;
+			}
+
+			return (await response.json()) as BookDetail;
 		}
 	},
 

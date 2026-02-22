@@ -44,6 +44,7 @@ mod openapi {
             super::books::handlers::update_book,
             super::books::handlers::delete_book,
             super::books::handlers::get_cover,
+            super::books::handlers::upload_cover,
             super::books::handlers::download_file,
             super::books::handlers::set_book_authors,
             super::books::handlers::set_book_series,

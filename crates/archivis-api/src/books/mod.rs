@@ -13,7 +13,10 @@ pub fn router() -> Router<AppState> {
         .route("/{id}", get(handlers::get_book))
         .route("/{id}", put(handlers::update_book))
         .route("/{id}", delete(handlers::delete_book))
-        .route("/{id}/cover", get(handlers::get_cover))
+        .route(
+            "/{id}/cover",
+            get(handlers::get_cover).post(handlers::upload_cover),
+        )
         .route(
             "/{id}/files/{file_id}/download",
             get(handlers::download_file),

@@ -23,10 +23,16 @@
 	let deleteDialogOpen = $state(false);
 	let deleting = $state(false);
 	let deleteError = $state<string | null>(null);
+	let uploadingCover = $state(false);
+	let coverUploadError = $state<string | null>(null);
+	let coverCacheBust = $state(0);
+	let coverFileInput = $state<HTMLInputElement | null>(null);
 
 	const bookId = $derived(page.params.id ?? '');
 	const hue = $derived(placeholderHue(bookId));
-	const coverUrl = $derived(`/api/books/${bookId}/cover?size=lg`);
+	const coverUrl = $derived(
+		`/api/books/${bookId}/cover?size=lg${coverCacheBust ? `&t=${coverCacheBust}` : ''}`
+	);
 
 	const authors = $derived(book?.authors ?? []);
 	const primaryAuthors = $derived(authors.filter((a) => a.role === 'author'));
@@ -90,6 +96,32 @@
 			deleteError = err instanceof Error ? err.message : 'Failed to delete book';
 		} finally {
 			deleting = false;
+		}
+	}
+
+	function triggerCoverUpload() {
+		coverFileInput?.click();
+	}
+
+	async function handleCoverUpload(event: Event) {
+		const input = event.target as HTMLInputElement;
+		const file = input.files?.[0];
+		if (!file) return;
+
+		uploadingCover = true;
+		coverUploadError = null;
+		try {
+			const updated = await api.books.uploadCover(bookId, file);
+			book = updated;
+			coverLoaded = false;
+			coverError = false;
+			coverCacheBust = Date.now();
+		} catch (err) {
+			coverUploadError = err instanceof Error ? err.message : 'Failed to upload cover';
+		} finally {
+			uploadingCover = false;
+			// Reset the input so the same file can be selected again
+			input.value = '';
 		}
 	}
 
@@ -160,6 +192,15 @@
 	}
 </script>
 
+<!-- Hidden file input for cover upload -->
+<input
+	type="file"
+	accept="image/jpeg,image/png,image/webp"
+	class="hidden"
+	bind:this={coverFileInput}
+	onchange={handleCoverUpload}
+/>
+
 <div class="mx-auto max-w-5xl space-y-6">
 	<!-- Back navigation -->
 	<a
@@ -221,7 +262,7 @@
 		<div class="grid gap-8 md:grid-cols-[280px_1fr]">
 			<!-- Left column: Cover -->
 			<div>
-				<div class="relative aspect-[2/3] w-full overflow-hidden rounded-lg bg-muted shadow-md">
+				<div class="group relative aspect-[2/3] w-full overflow-hidden rounded-lg bg-muted shadow-md">
 					{#if book.has_cover && !coverError}
 						{#if !coverLoaded}
 							<div class="absolute inset-0 animate-pulse bg-muted"></div>
@@ -235,17 +276,78 @@
 								? 'opacity-100'
 								: 'opacity-0'}"
 						/>
+						{#if !editing}
+							<div
+								class="absolute inset-x-0 bottom-0 flex items-center justify-center bg-black/60 p-2 opacity-0 transition-opacity group-hover:opacity-100"
+							>
+								<button
+									type="button"
+									class="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-white/20 disabled:opacity-50"
+									onclick={triggerCoverUpload}
+									disabled={uploadingCover}
+								>
+									<svg
+										class="size-3.5"
+										viewBox="0 0 24 24"
+										fill="none"
+										stroke="currentColor"
+										stroke-width="2"
+										stroke-linecap="round"
+										stroke-linejoin="round"
+									>
+										<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+										<polyline points="17 8 12 3 7 8" />
+										<line x1="12" x2="12" y1="3" y2="15" />
+									</svg>
+									{#if uploadingCover}
+										Uploading...
+									{:else}
+										Change Cover
+									{/if}
+								</button>
+							</div>
+						{/if}
 					{:else}
 						<div
-							class="flex h-full w-full items-center justify-center p-6"
+							class="flex h-full w-full flex-col items-center justify-center gap-3 p-6"
 							style="background-color: hsl({hue}, 30%, 25%);"
 						>
 							<span class="line-clamp-6 text-center text-lg font-medium text-white/80">
 								{book.title}
 							</span>
+							{#if !editing}
+								<button
+									type="button"
+									class="inline-flex items-center gap-1.5 rounded-md border border-white/30 px-3 py-1.5 text-xs font-medium text-white/90 transition-colors hover:bg-white/20 disabled:opacity-50"
+									onclick={triggerCoverUpload}
+									disabled={uploadingCover}
+								>
+									<svg
+										class="size-3.5"
+										viewBox="0 0 24 24"
+										fill="none"
+										stroke="currentColor"
+										stroke-width="2"
+										stroke-linecap="round"
+										stroke-linejoin="round"
+									>
+										<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+										<polyline points="17 8 12 3 7 8" />
+										<line x1="12" x2="12" y1="3" y2="15" />
+									</svg>
+									{#if uploadingCover}
+										Uploading...
+									{:else}
+										Add Cover
+									{/if}
+								</button>
+							{/if}
 						</div>
 					{/if}
 				</div>
+				{#if coverUploadError}
+					<p class="mt-2 text-xs text-destructive">{coverUploadError}</p>
+				{/if}
 
 				<!-- Files section (below cover on desktop) -->
 				{#if book.files.length > 0}
