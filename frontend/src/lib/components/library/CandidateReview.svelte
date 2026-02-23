@@ -2,6 +2,7 @@
 	import { api, ApiError } from '$lib/api/index.js';
 	import type { BookDetail, CandidateResponse } from '$lib/api/index.js';
 	import { Button } from '$lib/components/ui/button/index.js';
+	import { scoreColor, formatScore, providerColorClass, hasChange, getExcludedFields } from './candidate-utils.js';
 
 	interface Props {
 		book: BookDetail;
@@ -52,20 +53,11 @@
 		fieldSelections[candidateId][field] = !fieldSelections[candidateId][field];
 	}
 
-	/** Collect excluded field names for a candidate. */
-	function getExcludedFields(candidateId: string): string[] {
-		const sel = fieldSelections[candidateId];
-		if (!sel) return [];
-		return Object.entries(sel)
-			.filter(([, included]) => !included)
-			.map(([field]) => field);
-	}
-
 	async function handleApply(candidateId: string) {
 		applyingId = candidateId;
 		actionError = null;
 		try {
-			const excluded = getExcludedFields(candidateId);
+			const excluded = getExcludedFields(fieldSelections, candidateId);
 			const updated = await api.identify.applyCandidate(
 				book.id,
 				candidateId,
@@ -120,33 +112,6 @@
 		}
 	}
 
-	function providerColorClass(provider: string): string {
-		const lower = provider.toLowerCase();
-		if (lower.includes('open library'))
-			return 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400';
-		if (lower.includes('hardcover'))
-			return 'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-400';
-		return 'bg-muted text-muted-foreground';
-	}
-
-	function scoreColor(score: number): string {
-		if (score >= 0.8) return 'bg-green-500';
-		if (score >= 0.5) return 'bg-amber-500';
-		return 'bg-red-500';
-	}
-
-	function formatScore(score: number): string {
-		return `${Math.round(score * 100)}%`;
-	}
-
-	function hasChange(
-		candidateValue: string | undefined | null,
-		bookValue: string | undefined | null
-	): boolean {
-		const cv = candidateValue ?? '';
-		const bv = bookValue ?? '';
-		return cv !== '' && cv !== bv;
-	}
 </script>
 
 <div class="space-y-4">

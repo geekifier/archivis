@@ -7,6 +7,8 @@
 		type Header
 	} from '@tanstack/svelte-table';
 	import type { BookSummary, SortField, SortOrder } from '$lib/api/index.js';
+	import { columnToSortField, statusConfig, formatDate, formatAuthors, formatSeries, formatFormats } from './book-list-utils.js';
+	import { placeholderHue } from '$lib/utils.js';
 
 	interface Props {
 		books: BookSummary[];
@@ -16,13 +18,6 @@
 	}
 
 	let { books, sortBy, sortOrder, onSort }: Props = $props();
-
-	/** Maps TanStack column IDs to API sort fields. */
-	const columnToSortField: Record<string, SortField> = {
-		title: 'title',
-		added_at: 'added_at',
-		metadata_status: 'metadata_status'
-	};
 
 	function handleHeaderClick(headerId: string) {
 		const field = columnToSortField[headerId];
@@ -38,43 +33,6 @@
 		const field = columnToSortField[headerId];
 		if (!field || sortBy !== field) return '';
 		return sortOrder === 'asc' ? ' \u2191' : ' \u2193';
-	}
-
-	function formatDate(iso: string): string {
-		return new Date(iso).toLocaleDateString(undefined, {
-			year: 'numeric',
-			month: 'short',
-			day: 'numeric'
-		});
-	}
-
-	function formatAuthors(book: BookSummary): string {
-		return book.authors?.map((a) => a.name).join(', ') ?? '';
-	}
-
-	function formatSeries(book: BookSummary): string {
-		if (!book.series || book.series.length === 0) return '';
-		const s = book.series[0];
-		return s.position != null ? `${s.name} #${s.position}` : s.name;
-	}
-
-	function formatFormats(book: BookSummary): string[] {
-		return book.files?.map((f) => f.format.toUpperCase()) ?? [];
-	}
-
-	const statusConfig: Record<string, { label: string; class: string }> = {
-		identified: { label: 'Identified', class: 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400' },
-		needs_review: { label: 'Needs Review', class: 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400' },
-		unidentified: { label: 'Unidentified', class: 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400' }
-	};
-
-	/** Deterministic hue from book ID for cover placeholder. */
-	function placeholderHue(id: string): number {
-		let hash = 0;
-		for (let i = 0; i < id.length; i++) {
-			hash = (hash * 31 + id.charCodeAt(i)) | 0;
-		}
-		return Math.abs(hash) % 360;
 	}
 
 	const columns: ColumnDef<BookSummary>[] = [

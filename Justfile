@@ -64,9 +64,17 @@ dev-frontend:
 dev-backend:
     cargo run --package archivis-server -- --data-dir .local/data
 
-# Run frontend checks (build + lint + typecheck)
+# Run frontend checks (build + lint + typecheck + test)
 check-frontend:
-    cd frontend && npm run build && npm run lint && npm run check
+    cd frontend && npm run build && npm run lint && npm run check && npm test
+
+# Run frontend tests
+test-frontend:
+    cd frontend && npm test
+
+# Run frontend tests in watch mode
+test-frontend-watch:
+    cd frontend && npm run test:watch
 
 # Run CI pipeline locally via act (requires Docker)
 ci-local *args:
