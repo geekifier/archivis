@@ -8,11 +8,10 @@
 	import BookEditForm from '$lib/components/library/BookEditForm.svelte';
 	import CoverUploadDialog from '$lib/components/library/CoverUploadDialog.svelte';
 	import CandidateReview from '$lib/components/library/CandidateReview.svelte';
+	import IdentifierEditor from '$lib/components/library/IdentifierEditor.svelte';
 	import {
 		placeholderHue,
-		formatFileSize,
-		formatIdentifierType,
-		formatMetadataSource
+		formatFileSize
 	} from '$lib/utils.js';
 
 	let book = $state<BookDetail | null>(null);
@@ -235,6 +234,10 @@
 	function handleCandidateUndone(updated: BookDetail) {
 		book = updated;
 		loadCandidates();
+	}
+
+	function handleIdentifierUpdate(updated: BookDetail) {
+		book = updated;
 	}
 
 	// Load candidates when book loads (for books that were already identified)
@@ -793,38 +796,8 @@
 						</div>
 					{/if}
 
-					<!-- Identifiers -->
-					{#if book.identifiers.length > 0}
-						<div>
-							<h3 class="text-sm font-semibold text-muted-foreground">Identifiers</h3>
-							<div class="mt-2 overflow-x-auto">
-								<table class="w-full text-sm">
-									<thead>
-										<tr class="border-b border-border text-left text-xs text-muted-foreground">
-											<th class="pb-2 pr-4 font-medium">Type</th>
-											<th class="pb-2 pr-4 font-medium">Value</th>
-											<th class="pb-2 pr-4 font-medium">Source</th>
-											<th class="pb-2 font-medium">Confidence</th>
-										</tr>
-									</thead>
-									<tbody>
-										{#each book.identifiers as ident (ident.id)}
-											<tr class="border-b border-border/50">
-												<td class="py-2 pr-4 font-medium">
-													{formatIdentifierType(ident.identifier_type)}
-												</td>
-												<td class="py-2 pr-4 font-mono text-xs">{ident.value}</td>
-												<td class="py-2 pr-4 text-muted-foreground">
-													{formatMetadataSource(ident.source)}
-												</td>
-												<td class="py-2">{Math.round(ident.confidence * 100)}%</td>
-											</tr>
-										{/each}
-									</tbody>
-								</table>
-							</div>
-						</div>
-					{/if}
+					<!-- Identifiers (editable) -->
+					<IdentifierEditor {book} onupdate={handleIdentifierUpdate} />
 				{/if}
 			</div>
 		</div>

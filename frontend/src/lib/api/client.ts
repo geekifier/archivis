@@ -1,6 +1,7 @@
 import { goto } from '$app/navigation';
 import { parseApiError } from './errors.js';
 import type {
+	AddIdentifierRequest,
 	AuthorResponse,
 	AuthStatusResponse,
 	BookDetail,
@@ -27,6 +28,7 @@ import type {
 	TaskCreatedResponse,
 	TaskResponse,
 	UpdateBookRequest,
+	UpdateIdentifierRequest,
 	UploadResponse,
 	User
 } from './types.js';
@@ -221,6 +223,38 @@ export const api = {
 			}
 
 			return (await response.json()) as BookDetail;
+		}
+	},
+
+	identifiers: {
+		/** Add a new identifier to a book. */
+		add(bookId: string, data: AddIdentifierRequest): Promise<BookDetail> {
+			return request<BookDetail>(
+				'POST',
+				`/books/${encodeURIComponent(bookId)}/identifiers`,
+				data
+			);
+		},
+
+		/** Update an existing identifier. */
+		update(
+			bookId: string,
+			identifierId: string,
+			data: UpdateIdentifierRequest
+		): Promise<BookDetail> {
+			return request<BookDetail>(
+				'PUT',
+				`/books/${encodeURIComponent(bookId)}/identifiers/${encodeURIComponent(identifierId)}`,
+				data
+			);
+		},
+
+		/** Delete an identifier from a book. */
+		delete(bookId: string, identifierId: string): Promise<void> {
+			return request<void>(
+				'DELETE',
+				`/books/${encodeURIComponent(bookId)}/identifiers/${encodeURIComponent(identifierId)}`
+			);
 		}
 	},
 
@@ -430,6 +464,7 @@ export const api = {
 
 export { ApiError } from './errors.js';
 export type {
+	AddIdentifierRequest,
 	ApiErrorResponse,
 	AuthorEntry,
 	AuthorResponse,
@@ -477,6 +512,7 @@ export type {
 	TaskStatus,
 	TaskType,
 	UpdateBookRequest,
+	UpdateIdentifierRequest,
 	UploadResponse,
 	User,
 	UserRole

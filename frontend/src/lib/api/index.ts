@@ -1,5 +1,6 @@
 export { api, getSessionToken, setSessionToken, ApiError } from './client.js';
 export type {
+	AddIdentifierRequest,
 	ApiErrorResponse,
 	AuthorEntry,
 	AuthorResponse,
@@ -41,6 +42,7 @@ export type {
 	TaskStatus,
 	TaskType,
 	UpdateBookRequest,
+	UpdateIdentifierRequest,
 	UploadResponse,
 	User,
 	UserRole
