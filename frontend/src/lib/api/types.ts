@@ -316,6 +316,18 @@ export interface TaskProgressEvent {
 	error: string | null;
 }
 
+// --- Identifier management types ---
+
+export interface AddIdentifierRequest {
+	identifier_type: string; // "isbn13", "isbn10", "asin", etc.
+	value: string;
+}
+
+export interface UpdateIdentifierRequest {
+	identifier_type?: string;
+	value?: string;
+}
+
 // --- Identification types ---
 
 /** Series information included in a candidate response. */
