@@ -88,6 +88,27 @@ impl BookFileRepository {
         row.map(BookFileRow::into_book_file).transpose()
     }
 
+    /// Reassign all files from one book to another.
+    pub async fn reassign_to_book(
+        pool: &SqlitePool,
+        from_book_id: Uuid,
+        to_book_id: Uuid,
+    ) -> Result<u64, DbError> {
+        let from_str = from_book_id.to_string();
+        let to_str = to_book_id.to_string();
+
+        let result = sqlx::query!(
+            "UPDATE book_files SET book_id = ? WHERE book_id = ?",
+            to_str,
+            from_str,
+        )
+        .execute(pool)
+        .await
+        .map_err(|e| DbError::Query(e.to_string()))?;
+
+        Ok(result.rows_affected())
+    }
+
     pub async fn delete(pool: &SqlitePool, id: Uuid) -> Result<(), DbError> {
         let id_str = id.to_string();
         let result = sqlx::query!("DELETE FROM book_files WHERE id = ?", id_str)

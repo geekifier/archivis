@@ -163,6 +163,17 @@ impl IdentifierRepository {
         Ok(())
     }
 
+    /// Delete all identifiers for a book.
+    pub async fn delete_by_book(pool: &SqlitePool, book_id: Uuid) -> Result<u64, DbError> {
+        let book_id_str = book_id.to_string();
+        let result = sqlx::query!("DELETE FROM identifiers WHERE book_id = ?", book_id_str)
+            .execute(pool)
+            .await
+            .map_err(|e| DbError::Query(e.to_string()))?;
+
+        Ok(result.rows_affected())
+    }
+
     /// Check if an identifier value already exists for a book (to prevent duplicates).
     pub async fn exists_for_book(
         pool: &SqlitePool,

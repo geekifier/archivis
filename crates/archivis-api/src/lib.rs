@@ -1,6 +1,7 @@
 pub mod auth;
 pub mod authors;
 pub mod books;
+pub mod duplicates;
 pub mod errors;
 pub mod identify;
 pub mod import;
@@ -98,6 +99,13 @@ mod openapi {
             super::identify::handlers::undo_candidate,
             super::identify::handlers::batch_identify,
             super::identify::handlers::identify_all,
+            // Duplicates
+            super::duplicates::handlers::list_duplicates,
+            super::duplicates::handlers::count_duplicates,
+            super::duplicates::handlers::get_duplicate,
+            super::duplicates::handlers::merge_duplicate,
+            super::duplicates::handlers::dismiss_duplicate,
+            super::duplicates::handlers::flag_duplicate,
         ),
         components(schemas(
             // Auth
@@ -161,6 +169,12 @@ mod openapi {
             super::identify::types::BatchIdentifyRequest,
             super::identify::types::IdentifyAllRequest,
             super::identify::types::IdentifyAllResponse,
+            // Duplicates
+            super::duplicates::types::DuplicateLinkResponse,
+            super::duplicates::types::PaginatedDuplicates,
+            super::duplicates::types::MergeRequest,
+            super::duplicates::types::FlagDuplicateRequest,
+            super::duplicates::types::DuplicateCountResponse,
         )),
         tags(
             (name = "auth", description = "Authentication and user management"),
@@ -172,6 +186,7 @@ mod openapi {
             (name = "import", description = "File and directory import"),
             (name = "identify", description = "Book metadata identification"),
             (name = "tasks", description = "Background task management"),
+            (name = "duplicates", description = "Duplicate book management and merging"),
         )
     )]
     pub struct ApiDoc;
@@ -192,7 +207,8 @@ pub fn build_router(state: AppState) -> Router {
         .nest("/series", series::router())
         .nest("/tags", tags::router())
         .nest("/import", import::router())
-        .nest("/identify", identify::router());
+        .nest("/identify", identify::router())
+        .nest("/duplicates", duplicates::router());
 
     let mut router = Router::new()
         .merge(SwaggerUi::new("/api/docs").url("/api/openapi.json", openapi::ApiDoc::openapi()))
@@ -263,6 +279,12 @@ mod tests {
             dir.to_path_buf(),
         ));
 
+        let merge_service = Arc::new(archivis_tasks::merge::MergeService::new(
+            db_pool.clone(),
+            storage.clone(),
+            dir.to_path_buf(),
+        ));
+
         AppState::new(
             db_pool,
             Arc::new(task_queue),
@@ -270,6 +292,7 @@ mod tests {
             storage,
             provider_registry,
             identify_service,
+            merge_service,
             ApiConfig {
                 data_dir: dir.to_path_buf(),
                 frontend_dir,
