@@ -54,6 +54,8 @@ mod openapi {
             super::books::handlers::add_identifier,
             super::books::handlers::update_identifier,
             super::books::handlers::delete_identifier,
+            super::books::handlers::batch_update_books,
+            super::books::handlers::batch_set_tags,
             // Authors
             super::authors::handlers::list_authors,
             super::authors::handlers::create_author,
@@ -132,6 +134,13 @@ mod openapi {
             super::books::types::PaginatedBooks,
             super::books::types::AddIdentifierRequest,
             super::books::types::UpdateIdentifierRequest,
+            super::books::types::BatchUpdateBooksRequest,
+            super::books::types::BatchBookFields,
+            super::books::types::BatchSetTagsRequest,
+            super::books::types::BatchTagMode,
+            super::books::types::BatchUpdateResponse,
+            super::books::types::BatchTagsResponse,
+            super::books::types::BatchUpdateError,
             // Authors
             super::authors::types::CreateAuthorRequest,
             super::authors::types::UpdateAuthorRequest,

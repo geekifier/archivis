@@ -27,9 +27,10 @@ use crate::errors::ApiError;
 use crate::state::AppState;
 
 use super::types::{
-    AddIdentifierRequest, BookDetail, BookListParams, BookSummary, CoverParams, PaginatedBooks,
-    SetBookAuthorsRequest, SetBookSeriesRequest, SetBookTagsRequest, UpdateBookRequest,
-    UpdateIdentifierRequest,
+    AddIdentifierRequest, BatchBookFields, BatchSetTagsRequest, BatchTagMode, BatchTagsResponse,
+    BatchUpdateBooksRequest, BatchUpdateError, BatchUpdateResponse, BookDetail, BookListParams,
+    BookSummary, CoverParams, PaginatedBooks, SetBookAuthorsRequest, SetBookSeriesRequest,
+    SetBookTagsRequest, UpdateBookRequest, UpdateIdentifierRequest,
 };
 
 /// GET /api/books — paginated list with sorting, filtering, FTS search.
@@ -917,4 +918,173 @@ pub async fn delete_identifier(
     IdentifierRepository::delete(pool, identifier_id).await?;
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// POST /api/books/batch-update -- batch update scalar fields on multiple books.
+#[utoipa::path(
+    post,
+    path = "/api/books/batch-update",
+    tag = "books",
+    request_body = BatchUpdateBooksRequest,
+    responses(
+        (status = 200, description = "Batch update result", body = BatchUpdateResponse),
+        (status = 400, description = "Validation error (e.g. too many IDs)"),
+        (status = 401, description = "Not authenticated"),
+    ),
+    security(("bearer" = []))
+)]
+pub async fn batch_update_books(
+    State(state): State<AppState>,
+    AuthUser(_user): AuthUser,
+    Json(body): Json<BatchUpdateBooksRequest>,
+) -> Result<Json<BatchUpdateResponse>, ApiError> {
+    body.validate()?;
+
+    if body.book_ids.is_empty() {
+        return Err(ApiError::Validation("book_ids must not be empty".into()));
+    }
+    if body.book_ids.len() > 100 {
+        return Err(ApiError::Validation(
+            "batch update supports at most 100 books per request".into(),
+        ));
+    }
+
+    let pool = state.db_pool();
+    let sanitize_opts = SanitizeOptions::default();
+    let mut updated_count: u32 = 0;
+    let mut errors = Vec::new();
+
+    for &book_id in &body.book_ids {
+        match apply_batch_fields(pool, book_id, &body.updates, &sanitize_opts).await {
+            Ok(()) => updated_count += 1,
+            Err(e) => errors.push(BatchUpdateError {
+                book_id,
+                error: e.to_string(),
+            }),
+        }
+    }
+
+    Ok(Json(BatchUpdateResponse {
+        updated_count,
+        errors,
+    }))
+}
+
+/// Apply batch field updates to a single book. Returns `Ok(())` on success.
+async fn apply_batch_fields(
+    pool: &archivis_db::DbPool,
+    book_id: Uuid,
+    fields: &BatchBookFields,
+    sanitize_opts: &SanitizeOptions,
+) -> Result<(), ApiError> {
+    let mut book = BookRepository::get_by_id(pool, book_id).await?;
+
+    if let Some(ref language) = fields.language {
+        let clean = sanitize_text(language, sanitize_opts).unwrap_or_default();
+        book.language = Some(clean).filter(|s| !s.is_empty());
+    }
+    if let Some(status) = fields.metadata_status {
+        book.metadata_status = status;
+    }
+    if let Some(rating) = fields.rating {
+        book.rating = Some(rating);
+    }
+    if let Some(ref pub_id) = fields.publisher_id {
+        book.publisher_id = *pub_id;
+    }
+
+    BookRepository::update(pool, &book).await?;
+    Ok(())
+}
+
+/// POST /api/books/batch-tags -- batch set or add tags on multiple books.
+#[utoipa::path(
+    post,
+    path = "/api/books/batch-tags",
+    tag = "books",
+    request_body = BatchSetTagsRequest,
+    responses(
+        (status = 200, description = "Batch tag update result", body = BatchTagsResponse),
+        (status = 400, description = "Validation error"),
+        (status = 401, description = "Not authenticated"),
+    ),
+    security(("bearer" = []))
+)]
+pub async fn batch_set_tags(
+    State(state): State<AppState>,
+    AuthUser(_user): AuthUser,
+    Json(body): Json<BatchSetTagsRequest>,
+) -> Result<Json<BatchTagsResponse>, ApiError> {
+    if body.book_ids.is_empty() {
+        return Err(ApiError::Validation("book_ids must not be empty".into()));
+    }
+    if body.book_ids.len() > 100 {
+        return Err(ApiError::Validation(
+            "batch tag update supports at most 100 books per request".into(),
+        ));
+    }
+
+    let pool = state.db_pool();
+
+    // Resolve all tag IDs up front (shared across books).
+    let mut tag_ids = Vec::with_capacity(body.tags.len());
+    for link in &body.tags {
+        let tag_id = if let Some(tid) = link.tag_id {
+            TagRepository::get_by_id(pool, tid).await?;
+            tid
+        } else if let Some(ref name) = link.name {
+            let tag = TagRepository::find_or_create(pool, name, link.category.as_deref()).await?;
+            tag.id
+        } else {
+            return Err(ApiError::Validation(
+                "each tag must have either tag_id or name".into(),
+            ));
+        };
+        tag_ids.push(tag_id);
+    }
+
+    let mut updated_count: u32 = 0;
+    let mut errors = Vec::new();
+
+    for &book_id in &body.book_ids {
+        match apply_batch_tags(pool, book_id, &tag_ids, &body.mode).await {
+            Ok(()) => updated_count += 1,
+            Err(e) => errors.push(BatchUpdateError {
+                book_id,
+                error: e.to_string(),
+            }),
+        }
+    }
+
+    Ok(Json(BatchTagsResponse {
+        updated_count,
+        errors,
+    }))
+}
+
+/// Apply tag changes to a single book. Returns `Ok(())` on success.
+async fn apply_batch_tags(
+    pool: &archivis_db::DbPool,
+    book_id: Uuid,
+    tag_ids: &[Uuid],
+    mode: &BatchTagMode,
+) -> Result<(), ApiError> {
+    // Verify book exists
+    BookRepository::get_by_id(pool, book_id).await?;
+
+    match mode {
+        BatchTagMode::Replace => {
+            BookRepository::clear_tags(pool, book_id).await?;
+            for &tag_id in tag_ids {
+                BookRepository::add_tag(pool, book_id, tag_id).await?;
+            }
+        }
+        BatchTagMode::Add => {
+            for &tag_id in tag_ids {
+                BookRepository::add_tag(pool, book_id, tag_id).await?;
+            }
+        }
+    }
+
+    Ok(())
 }

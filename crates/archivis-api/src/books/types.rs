@@ -148,6 +148,87 @@ pub struct UpdateIdentifierRequest {
     pub value: Option<String>,
 }
 
+/// Request body for `POST /api/books/batch-update`.
+#[derive(Debug, Deserialize, Validate, ToSchema)]
+pub struct BatchUpdateBooksRequest {
+    /// IDs of books to update (max 100).
+    pub book_ids: Vec<Uuid>,
+    /// Fields to update on all selected books.
+    #[validate(nested)]
+    pub updates: BatchBookFields,
+}
+
+/// Fields that can be updated in bulk.
+/// Each field follows the same None/Some/Some(None) pattern as `UpdateBookRequest`:
+/// absent = no change, present with value = set, present with null = clear.
+///
+/// `title` and `description` are intentionally excluded -- setting the same
+/// title on multiple books doesn't make sense.
+#[derive(Debug, Deserialize, Validate, ToSchema)]
+pub struct BatchBookFields {
+    /// Set language for all books.
+    pub language: Option<String>,
+    /// Set metadata status for all books.
+    #[schema(value_type = Option<String>)]
+    pub metadata_status: Option<MetadataStatus>,
+    /// Set rating for all books (0.0 -- 5.0).
+    #[validate(range(min = 0.0, max = 5.0))]
+    pub rating: Option<f32>,
+    /// Set or clear the publisher for all books.
+    #[serde(default, deserialize_with = "deserialize_optional_field")]
+    #[schema(value_type = Option<String>)]
+    #[allow(clippy::option_option)]
+    pub publisher_id: Option<Option<Uuid>>,
+}
+
+/// Request body for `POST /api/books/batch-tags`.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct BatchSetTagsRequest {
+    /// IDs of books to update (max 100).
+    pub book_ids: Vec<Uuid>,
+    /// Tags to set or add.
+    pub tags: Vec<BookTagLink>,
+    /// "replace" (clear existing and set these) or "add" (add without removing existing).
+    pub mode: BatchTagMode,
+}
+
+/// Mode for batch tag operations.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum BatchTagMode {
+    /// Clear all existing tags and set these.
+    Replace,
+    /// Add tags without removing existing ones.
+    Add,
+}
+
+/// Response for batch update operations.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct BatchUpdateResponse {
+    /// Number of books successfully updated.
+    pub updated_count: u32,
+    /// Per-book errors (if any).
+    pub errors: Vec<BatchUpdateError>,
+}
+
+/// Response for batch tag update operations.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct BatchTagsResponse {
+    /// Number of books successfully updated.
+    pub updated_count: u32,
+    /// Per-book errors (if any).
+    pub errors: Vec<BatchUpdateError>,
+}
+
+/// An error that occurred while updating a single book in a batch.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct BatchUpdateError {
+    /// The book ID that failed.
+    pub book_id: Uuid,
+    /// Human-readable error message.
+    pub error: String,
+}
+
 // ── Response Types ──────────────────────────────────────────────
 
 /// Lightweight book summary for list responses.

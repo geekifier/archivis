@@ -12,6 +12,9 @@ use crate::state::AppState;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(handlers::list_books))
+        // Batch routes (no {id} path param)
+        .route("/batch-update", post(handlers::batch_update_books))
+        .route("/batch-tags", post(handlers::batch_set_tags))
         .route("/{id}", get(handlers::get_book))
         .route("/{id}", put(handlers::update_book))
         .route("/{id}", delete(handlers::delete_book))
