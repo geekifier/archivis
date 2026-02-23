@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT COUNT(*) FROM duplicate_links WHERE (book_id_a = ? AND book_id_b = ?) OR (book_id_a = ? AND book_id_b = ?)",
+  "describe": {
+    "columns": [
+      {
+        "name": "COUNT(*)",
+        "ordinal": 0,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "11c19827d5dd75c761933fc07e136a77e191dc0c55fab395628190802874545c"
+}

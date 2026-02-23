@@ -167,6 +167,7 @@ mod tests {
             "book_tags",
             "books",
             "books_fts",
+            "duplicate_links",
             "identification_candidates",
             "identifiers",
             "publishers",

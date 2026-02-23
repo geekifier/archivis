@@ -1,0 +1,56 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id, book_id_a, book_id_b, detection_method, confidence, status, created_at FROM duplicate_links WHERE book_id_a = ? OR book_id_b = ? ORDER BY created_at DESC",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "book_id_a",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "book_id_b",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "detection_method",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "confidence",
+        "ordinal": 4,
+        "type_info": "Float"
+      },
+      {
+        "name": "status",
+        "ordinal": 5,
+        "type_info": "Text"
+      },
+      {
+        "name": "created_at",
+        "ordinal": 6,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "8452ee7f185fca17eae08f599a176908d753b4befd117663bbdaa027524bff77"
+}
