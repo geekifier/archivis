@@ -2,13 +2,16 @@
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import { api, ApiError } from '$lib/api/index.js';
-	import type { BookDetail, CandidateResponse, TaskProgressEvent, TaskStatus } from '$lib/api/index.js';
+	import type { BookDetail, CandidateResponse, DuplicateLinkResponse, TaskProgressEvent, TaskStatus } from '$lib/api/index.js';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import * as AlertDialog from '$lib/components/ui/alert-dialog/index.js';
+	import * as Dialog from '$lib/components/ui/dialog/index.js';
 	import BookEditForm from '$lib/components/library/BookEditForm.svelte';
 	import CoverUploadDialog from '$lib/components/library/CoverUploadDialog.svelte';
 	import CandidateReview from '$lib/components/library/CandidateReview.svelte';
 	import IdentifierEditor from '$lib/components/library/IdentifierEditor.svelte';
+	import MergeDialog from '$lib/components/library/MergeDialog.svelte';
+	import AutocompleteInput from '$lib/components/library/AutocompleteInput.svelte';
 	import {
 		placeholderHue,
 		formatFileSize
@@ -37,6 +40,15 @@
 	let candidates = $state<CandidateResponse[]>([]);
 	let candidatesError = $state<string | null>(null);
 	let candidatesExpanded = $state(false);
+
+	// --- Duplicate state ---
+	let duplicateLinks = $state<DuplicateLinkResponse[]>([]);
+	let dismissingDupId = $state<string | null>(null);
+	let mergeDialogOpen = $state(false);
+	let selectedDupLink = $state<DuplicateLinkResponse | null>(null);
+	let flagDialogOpen = $state(false);
+	let flagging = $state(false);
+	let flagError = $state<string | null>(null);
 
 	const bookId = $derived(page.params.id ?? '');
 	const hue = $derived(placeholderHue(bookId));
@@ -240,10 +252,91 @@
 		book = updated;
 	}
 
-	// Load candidates when book loads (for books that were already identified)
+	// --- Duplicate functions ---
+
+	async function loadDuplicateLinks() {
+		try {
+			duplicateLinks = await api.duplicates.forBook(bookId);
+		} catch {
+			// Silently ignore — duplicates are supplemental info
+			duplicateLinks = [];
+		}
+	}
+
+	async function handleDismissDuplicate(linkId: string) {
+		dismissingDupId = linkId;
+		try {
+			await api.duplicates.dismiss(linkId);
+			duplicateLinks = duplicateLinks.filter((l) => l.id !== linkId);
+		} catch {
+			// Silently ignore
+		} finally {
+			dismissingDupId = null;
+		}
+	}
+
+	function openDupMergeDialog(link: DuplicateLinkResponse) {
+		selectedDupLink = link;
+		mergeDialogOpen = true;
+	}
+
+	function handleDupMergeComplete(merged: BookDetail) {
+		mergeDialogOpen = false;
+		selectedDupLink = null;
+		goto(`/books/${merged.id}`);
+	}
+
+	function handleDupMergeCancel() {
+		mergeDialogOpen = false;
+		selectedDupLink = null;
+	}
+
+	function otherBookInLink(link: DuplicateLinkResponse): { id: string; title: string } {
+		if (link.book_a.id === bookId) {
+			return { id: link.book_b.id, title: link.book_b.title };
+		}
+		return { id: link.book_a.id, title: link.book_a.title };
+	}
+
+	async function handleFlagDuplicate(item: { id: string; label: string }) {
+		flagging = true;
+		flagError = null;
+		flagDialogOpen = false;
+		try {
+			const newLink = await api.duplicates.flag(bookId, item.id);
+			duplicateLinks = [...duplicateLinks, newLink];
+		} catch (err) {
+			flagError =
+				err instanceof ApiError
+					? err.userMessage
+					: err instanceof Error
+						? err.message
+						: 'Failed to flag duplicate';
+		} finally {
+			flagging = false;
+		}
+	}
+
+	async function searchBooksForFlag(query: string): Promise<{ id: string; label: string; sublabel?: string }[]> {
+		try {
+			const result = await api.books.list({ q: query, per_page: 10 });
+			return result.items
+				.filter((b) => b.id !== bookId)
+				.map((b) => ({
+					id: b.id,
+					label: b.title,
+					sublabel: b.authors?.map((a) => a.name).join(', ')
+				}));
+		} catch {
+			return [];
+		}
+	}
+
+	// Load candidates and duplicate links when book loads
 	$effect(() => {
 		if (book && !loading) {
 			loadCandidates();
+			loadDuplicateLinks();
 		}
 
 		return () => {
@@ -370,6 +463,75 @@
 			</div>
 		</div>
 	{:else if book}
+		<!-- Duplicate alert banners -->
+		{#if duplicateLinks.length > 0}
+			<div class="space-y-2">
+				{#each duplicateLinks as dupLink (dupLink.id)}
+					{@const other = otherBookInLink(dupLink)}
+					<div
+						class="flex items-center justify-between rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 dark:border-amber-800 dark:bg-amber-900/20"
+					>
+						<div class="flex items-center gap-2 text-sm">
+							<svg
+								class="size-4 flex-shrink-0 text-amber-600 dark:text-amber-400"
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								stroke-width="2"
+								stroke-linecap="round"
+								stroke-linejoin="round"
+							>
+								<path
+									d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"
+								/>
+								<line x1="12" x2="12" y1="9" y2="13" />
+								<line x1="12" x2="12.01" y1="17" y2="17" />
+							</svg>
+							<span class="text-amber-800 dark:text-amber-300">
+								This book may be a duplicate of
+								<a
+									href="/books/{other.id}"
+									class="font-medium underline transition-colors hover:text-amber-900 dark:hover:text-amber-200"
+								>
+									{other.title}
+								</a>
+							</span>
+						</div>
+						<div class="flex items-center gap-2">
+							<Button
+								size="sm"
+								variant="outline"
+								class="h-7 px-2 text-xs"
+								disabled={dismissingDupId === dupLink.id}
+								onclick={() => handleDismissDuplicate(dupLink.id)}
+							>
+								{#if dismissingDupId === dupLink.id}
+									Dismissing...
+								{:else}
+									Dismiss
+								{/if}
+							</Button>
+							<Button
+								size="sm"
+								class="h-7 px-2 text-xs"
+								onclick={() => openDupMergeDialog(dupLink)}
+							>
+								Review
+							</Button>
+						</div>
+					</div>
+				{/each}
+			</div>
+		{/if}
+
+		{#if flagError}
+			<div
+				class="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+			>
+				{flagError}
+			</div>
+		{/if}
+
 		<div class="grid gap-8 md:grid-cols-[280px_1fr]">
 			<!-- Left column: Cover -->
 			<div>
@@ -505,6 +667,26 @@
 										<path d="m15 5 4 4" />
 									</svg>
 									Edit
+								</Button>
+								<Button
+									size="sm"
+									variant="outline"
+									onclick={() => (flagDialogOpen = !flagDialogOpen)}
+									disabled={flagging}
+								>
+									<svg
+										class="size-4"
+										viewBox="0 0 24 24"
+										fill="none"
+										stroke="currentColor"
+										stroke-width="2"
+										stroke-linecap="round"
+										stroke-linejoin="round"
+									>
+										<path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z" />
+										<line x1="4" x2="4" y1="22" y2="15" />
+									</svg>
+									Flag Duplicate
 								</Button>
 								<Button
 									size="sm"
@@ -844,4 +1026,35 @@
 			</AlertDialog.Footer>
 		</AlertDialog.Content>
 	</AlertDialog.Root>
+{/if}
+
+<!-- Flag as duplicate dialog -->
+{#if book}
+	<Dialog.Root bind:open={flagDialogOpen}>
+		<Dialog.Content class="sm:max-w-md">
+			<Dialog.Header>
+				<Dialog.Title>Flag as Duplicate</Dialog.Title>
+				<Dialog.Description>
+					Search for the other book that is a duplicate of <strong>{book.title}</strong>.
+				</Dialog.Description>
+			</Dialog.Header>
+			<div class="py-2">
+				<AutocompleteInput
+					placeholder="Search for a book..."
+					search={searchBooksForFlag}
+					onselect={handleFlagDuplicate}
+				/>
+			</div>
+		</Dialog.Content>
+	</Dialog.Root>
+{/if}
+
+<!-- Merge dialog for duplicate review -->
+{#if selectedDupLink}
+	<MergeDialog
+		link={selectedDupLink}
+		bind:open={mergeDialogOpen}
+		onmerge={handleDupMergeComplete}
+		oncancel={handleDupMergeCancel}
+	/>
 {/if}
