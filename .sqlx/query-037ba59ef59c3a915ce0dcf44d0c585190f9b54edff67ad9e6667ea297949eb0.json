@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE identifiers SET value = ?, identifier_type = ? WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "037ba59ef59c3a915ce0dcf44d0c585190f9b54edff67ad9e6667ea297949eb0"
+}

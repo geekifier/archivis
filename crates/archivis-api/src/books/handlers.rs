@@ -13,9 +13,12 @@ use validator::Validate;
 use archivis_formats::sanitize::{sanitize_text, SanitizeOptions};
 use archivis_formats::CoverData;
 
+use archivis_core::isbn::validate_isbn;
+use archivis_core::models::{Identifier, IdentifierType, MetadataSource};
+
 use archivis_db::{
-    AuthorRepository, BookFileRepository, BookFilter, BookRepository, PaginationParams,
-    SeriesRepository, SortOrder, TagRepository,
+    AuthorRepository, BookFileRepository, BookFilter, BookRepository, IdentifierRepository,
+    PaginationParams, SeriesRepository, SortOrder, TagRepository,
 };
 use archivis_storage::StorageBackend;
 
@@ -24,8 +27,9 @@ use crate::errors::ApiError;
 use crate::state::AppState;
 
 use super::types::{
-    BookDetail, BookListParams, BookSummary, CoverParams, PaginatedBooks, SetBookAuthorsRequest,
-    SetBookSeriesRequest, SetBookTagsRequest, UpdateBookRequest,
+    AddIdentifierRequest, BookDetail, BookListParams, BookSummary, CoverParams, PaginatedBooks,
+    SetBookAuthorsRequest, SetBookSeriesRequest, SetBookTagsRequest, UpdateBookRequest,
+    UpdateIdentifierRequest,
 };
 
 /// GET /api/books — paginated list with sorting, filtering, FTS search.
@@ -742,4 +746,175 @@ pub async fn set_book_tags(
 
     let bwr = BookRepository::get_with_relations(pool, id).await?;
     Ok(Json(bwr.into()))
+}
+
+/// POST /api/books/{id}/identifiers — add a new identifier to a book.
+#[utoipa::path(
+    post,
+    path = "/api/books/{id}/identifiers",
+    tag = "books",
+    params(("id" = Uuid, Path, description = "Book ID")),
+    request_body = AddIdentifierRequest,
+    responses(
+        (status = 200, description = "Identifier added, updated book returned", body = BookDetail),
+        (status = 400, description = "Validation error (e.g. invalid ISBN checksum)"),
+        (status = 404, description = "Book not found"),
+        (status = 409, description = "Duplicate identifier"),
+        (status = 401, description = "Not authenticated"),
+    ),
+    security(("bearer" = []))
+)]
+pub async fn add_identifier(
+    State(state): State<AppState>,
+    AuthUser(_user): AuthUser,
+    Path(id): Path<Uuid>,
+    Json(body): Json<AddIdentifierRequest>,
+) -> Result<Json<BookDetail>, ApiError> {
+    body.validate()?;
+
+    let pool = state.db_pool();
+
+    // Verify book exists
+    BookRepository::get_by_id(pool, id).await?;
+
+    let identifier_type = body.identifier_type;
+    let mut value = body.value.trim().to_string();
+
+    // For ISBN types: validate checksum and normalize
+    if matches!(
+        identifier_type,
+        IdentifierType::Isbn13 | IdentifierType::Isbn10
+    ) {
+        let validation = validate_isbn(&value);
+        if !validation.valid {
+            return Err(ApiError::Validation(validation.message));
+        }
+        value = validation.normalized;
+    }
+
+    // Serialize the identifier type to its DB string form
+    let type_str = serde_json::to_value(identifier_type)
+        .ok()
+        .and_then(|v| v.as_str().map(String::from))
+        .unwrap_or_default();
+
+    // Check for duplicates
+    if IdentifierRepository::exists_for_book(pool, id, &type_str, &value).await? {
+        return Err(ApiError::Validation(format!(
+            "identifier {type_str}:{value} already exists for this book"
+        )));
+    }
+
+    // Create the identifier with source: User and confidence: 1.0
+    let identifier = Identifier::new(id, identifier_type, &value, MetadataSource::User, 1.0);
+    IdentifierRepository::create(pool, &identifier).await?;
+
+    let bwr = BookRepository::get_with_relations(pool, id).await?;
+    Ok(Json(bwr.into()))
+}
+
+/// `PUT /api/books/{id}/identifiers/{identifier_id}` — update an existing identifier.
+#[utoipa::path(
+    put,
+    path = "/api/books/{id}/identifiers/{identifier_id}",
+    tag = "books",
+    params(
+        ("id" = Uuid, Path, description = "Book ID"),
+        ("identifier_id" = Uuid, Path, description = "Identifier ID"),
+    ),
+    request_body = UpdateIdentifierRequest,
+    responses(
+        (status = 200, description = "Identifier updated, updated book returned", body = BookDetail),
+        (status = 400, description = "Validation error"),
+        (status = 404, description = "Book or identifier not found"),
+        (status = 401, description = "Not authenticated"),
+    ),
+    security(("bearer" = []))
+)]
+pub async fn update_identifier(
+    State(state): State<AppState>,
+    AuthUser(_user): AuthUser,
+    Path((book_id, identifier_id)): Path<(Uuid, Uuid)>,
+    Json(body): Json<UpdateIdentifierRequest>,
+) -> Result<Json<BookDetail>, ApiError> {
+    body.validate()?;
+
+    let pool = state.db_pool();
+
+    // Verify book exists
+    BookRepository::get_by_id(pool, book_id).await?;
+
+    // Load identifier and verify it belongs to this book
+    let existing = IdentifierRepository::get_by_id(pool, identifier_id).await?;
+    if existing.book_id != book_id {
+        return Err(ApiError::NotFound(
+            "identifier not found for this book".into(),
+        ));
+    }
+
+    let new_type = body.identifier_type.unwrap_or(existing.identifier_type);
+    let new_value = body
+        .value
+        .map(|v| v.trim().to_string())
+        .unwrap_or(existing.value);
+
+    // Validate ISBN if the type is an ISBN type
+    let final_value = if matches!(new_type, IdentifierType::Isbn13 | IdentifierType::Isbn10) {
+        let validation = validate_isbn(&new_value);
+        if !validation.valid {
+            return Err(ApiError::Validation(validation.message));
+        }
+        validation.normalized
+    } else {
+        new_value
+    };
+
+    let type_str = serde_json::to_value(new_type)
+        .ok()
+        .and_then(|v| v.as_str().map(String::from))
+        .unwrap_or_default();
+
+    IdentifierRepository::update(pool, identifier_id, &final_value, &type_str).await?;
+
+    let bwr = BookRepository::get_with_relations(pool, book_id).await?;
+    Ok(Json(bwr.into()))
+}
+
+/// `DELETE /api/books/{id}/identifiers/{identifier_id}` — remove an identifier.
+#[utoipa::path(
+    delete,
+    path = "/api/books/{id}/identifiers/{identifier_id}",
+    tag = "books",
+    params(
+        ("id" = Uuid, Path, description = "Book ID"),
+        ("identifier_id" = Uuid, Path, description = "Identifier ID"),
+    ),
+    responses(
+        (status = 204, description = "Identifier deleted"),
+        (status = 404, description = "Book or identifier not found"),
+        (status = 401, description = "Not authenticated"),
+    ),
+    security(("bearer" = []))
+)]
+pub async fn delete_identifier(
+    State(state): State<AppState>,
+    AuthUser(_user): AuthUser,
+    Path((book_id, identifier_id)): Path<(Uuid, Uuid)>,
+) -> Result<StatusCode, ApiError> {
+    let pool = state.db_pool();
+
+    // Verify book exists
+    BookRepository::get_by_id(pool, book_id).await?;
+
+    // Load identifier and verify it belongs to this book
+    let existing = IdentifierRepository::get_by_id(pool, identifier_id).await?;
+    if existing.book_id != book_id {
+        return Err(ApiError::NotFound(
+            "identifier not found for this book".into(),
+        ));
+    }
+
+    IdentifierRepository::delete(pool, identifier_id).await?;
+
+    Ok(StatusCode::NO_CONTENT)
 }

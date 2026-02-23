@@ -25,6 +25,12 @@ pub fn router() -> Router<AppState> {
         .route("/{id}/authors", post(handlers::set_book_authors))
         .route("/{id}/series", post(handlers::set_book_series))
         .route("/{id}/tags", post(handlers::set_book_tags))
+        // Identifier management routes
+        .route("/{id}/identifiers", post(handlers::add_identifier))
+        .route(
+            "/{id}/identifiers/{identifier_id}",
+            put(handlers::update_identifier).delete(handlers::delete_identifier),
+        )
         // Identification routes
         .route("/{id}/identify", post(identify_handlers::identify_book))
         .route("/{id}/candidates", get(identify_handlers::list_candidates))
