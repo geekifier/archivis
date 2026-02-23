@@ -11,7 +11,7 @@ use archivis_storage::StorageBackend;
 use crate::import::{
     BulkImportResult, BulkImportService, FileOutcome, ImportProgress, ImportService,
 };
-use crate::queue::{ProgressSender, Worker};
+use crate::queue::{ProgressSender, TaskQueue, Worker};
 
 // ---------------------------------------------------------------------------
 // ImportFileWorker
@@ -20,11 +20,25 @@ use crate::queue::{ProgressSender, Worker};
 /// Worker that imports a single ebook file via [`ImportService`].
 pub struct ImportFileWorker<S: StorageBackend> {
     import_service: Arc<ImportService<S>>,
+    task_queue: Option<Arc<TaskQueue>>,
+    isbn_scan_on_import: bool,
 }
 
 impl<S: StorageBackend> ImportFileWorker<S> {
     pub fn new(import_service: Arc<ImportService<S>>) -> Self {
-        Self { import_service }
+        Self {
+            import_service,
+            task_queue: None,
+            isbn_scan_on_import: false,
+        }
+    }
+
+    /// Enable automatic ISBN scanning after successful imports.
+    #[must_use]
+    pub fn with_isbn_scan(mut self, task_queue: Arc<TaskQueue>, enabled: bool) -> Self {
+        self.task_queue = Some(task_queue);
+        self.isbn_scan_on_import = enabled;
+        self
     }
 }
 
@@ -59,6 +73,31 @@ impl<S: StorageBackend + 'static> Worker for ImportFileWorker<S> {
                 .send_progress(100, Some("Import complete".into()))
                 .await;
 
+            // Enqueue ISBN content scan if enabled
+            if self.isbn_scan_on_import {
+                if let Some(queue) = &self.task_queue {
+                    let scan_payload = serde_json::json!({
+                        "book_id": result.book_id.to_string(),
+                    });
+                    match queue.enqueue(TaskType::ScanIsbn, scan_payload).await {
+                        Ok(task_id) => {
+                            tracing::debug!(
+                                %task_id,
+                                book_id = %result.book_id,
+                                "enqueued ISBN scan after import",
+                            );
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                book_id = %result.book_id,
+                                error = %e,
+                                "failed to enqueue ISBN scan after import",
+                            );
+                        }
+                    }
+                }
+            }
+
             let json = serde_json::json!({
                 "book_id": result.book_id.to_string(),
                 "book_file_id": result.book_file_id.to_string(),
@@ -79,13 +118,25 @@ impl<S: StorageBackend + 'static> Worker for ImportFileWorker<S> {
 /// Worker that bulk-imports a directory of ebook files via [`BulkImportService`].
 pub struct ImportDirectoryWorker<S: StorageBackend> {
     bulk_import_service: Arc<BulkImportService<S>>,
+    task_queue: Option<Arc<TaskQueue>>,
+    isbn_scan_on_import: bool,
 }
 
 impl<S: StorageBackend> ImportDirectoryWorker<S> {
     pub fn new(bulk_import_service: Arc<BulkImportService<S>>) -> Self {
         Self {
             bulk_import_service,
+            task_queue: None,
+            isbn_scan_on_import: false,
         }
+    }
+
+    /// Enable automatic ISBN scanning after successful bulk imports.
+    #[must_use]
+    pub fn with_isbn_scan(mut self, task_queue: Arc<TaskQueue>, enabled: bool) -> Self {
+        self.task_queue = Some(task_queue);
+        self.isbn_scan_on_import = enabled;
+        self
     }
 }
 
@@ -121,6 +172,36 @@ impl<S: StorageBackend + 'static> Worker for ImportDirectoryWorker<S> {
             progress
                 .send_progress(100, Some("Directory import complete".into()))
                 .await;
+
+            // Enqueue batch ISBN content scan for all successfully imported books
+            if self.isbn_scan_on_import && !result.imported.is_empty() {
+                if let Some(queue) = &self.task_queue {
+                    let book_ids: Vec<String> = result
+                        .imported
+                        .iter()
+                        .map(|r| r.book_id.to_string())
+                        .collect();
+                    let scan_payload = serde_json::json!({
+                        "book_ids": book_ids,
+                    });
+                    match queue.enqueue(TaskType::ScanIsbn, scan_payload).await {
+                        Ok(task_id) => {
+                            tracing::debug!(
+                                %task_id,
+                                count = book_ids.len(),
+                                "enqueued batch ISBN scan after directory import",
+                            );
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                count = result.imported.len(),
+                                error = %e,
+                                "failed to enqueue batch ISBN scan after directory import",
+                            );
+                        }
+                    }
+                }
+            }
 
             let json = serde_json::json!({
                 "imported": result.imported.len(),

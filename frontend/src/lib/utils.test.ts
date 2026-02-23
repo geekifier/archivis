@@ -108,6 +108,10 @@ describe('formatMetadataSource', () => {
 		expect(formatMetadataSource({ type: 'user' })).toBe('User');
 	});
 
+	it('formats content_scan source', () => {
+		expect(formatMetadataSource({ type: 'content_scan' })).toBe('Content Scan');
+	});
+
 	it('falls back to type string for unknown types', () => {
 		expect(formatMetadataSource({ type: 'unknown' })).toBe('unknown');
 	});

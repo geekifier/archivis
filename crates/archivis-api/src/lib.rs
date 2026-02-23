@@ -5,6 +5,7 @@ pub mod duplicates;
 pub mod errors;
 pub mod identify;
 pub mod import;
+pub mod isbn_scan;
 pub mod publishers;
 pub mod series;
 pub mod state;
@@ -101,6 +102,9 @@ mod openapi {
             super::identify::handlers::undo_candidate,
             super::identify::handlers::batch_identify,
             super::identify::handlers::identify_all,
+            // ISBN Scan
+            super::isbn_scan::handlers::scan_book_isbn,
+            super::isbn_scan::handlers::batch_scan_isbn,
             // Duplicates
             super::duplicates::handlers::list_duplicates,
             super::duplicates::handlers::count_duplicates,
@@ -178,6 +182,10 @@ mod openapi {
             super::identify::types::BatchIdentifyRequest,
             super::identify::types::IdentifyAllRequest,
             super::identify::types::IdentifyAllResponse,
+            // ISBN Scan
+            super::isbn_scan::types::IsbnScanResponse,
+            super::isbn_scan::types::BatchIsbnScanRequest,
+            super::isbn_scan::types::BatchIsbnScanResponse,
             // Duplicates
             super::duplicates::types::DuplicateLinkResponse,
             super::duplicates::types::PaginatedDuplicates,
@@ -194,6 +202,7 @@ mod openapi {
             (name = "tags", description = "Tag management"),
             (name = "import", description = "File and directory import"),
             (name = "identify", description = "Book metadata identification"),
+            (name = "isbn-scan", description = "ISBN content scanning"),
             (name = "tasks", description = "Background task management"),
             (name = "duplicates", description = "Duplicate book management and merging"),
         )
@@ -217,6 +226,7 @@ pub fn build_router(state: AppState) -> Router {
         .nest("/tags", tags::router())
         .nest("/import", import::router())
         .nest("/identify", identify::router())
+        .nest("/isbn-scan", isbn_scan::router())
         .nest("/duplicates", duplicates::router());
 
     let mut router = Router::new()

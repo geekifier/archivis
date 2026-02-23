@@ -12,6 +12,7 @@ pub enum TaskType {
     ImportFile,
     ImportDirectory,
     IdentifyBook,
+    ScanIsbn,
 }
 
 impl fmt::Display for TaskType {
@@ -20,6 +21,7 @@ impl fmt::Display for TaskType {
             Self::ImportFile => write!(f, "import_file"),
             Self::ImportDirectory => write!(f, "import_directory"),
             Self::IdentifyBook => write!(f, "identify_book"),
+            Self::ScanIsbn => write!(f, "scan_isbn"),
         }
     }
 }
@@ -32,6 +34,7 @@ impl FromStr for TaskType {
             "import_file" => Ok(Self::ImportFile),
             "import_directory" => Ok(Self::ImportDirectory),
             "identify_book" => Ok(Self::IdentifyBook),
+            "scan_isbn" => Ok(Self::ScanIsbn),
             other => Err(format!("unknown task type: {other}")),
         }
     }
@@ -129,6 +132,7 @@ mod tests {
         assert_eq!(TaskType::ImportFile.to_string(), "import_file");
         assert_eq!(TaskType::ImportDirectory.to_string(), "import_directory");
         assert_eq!(TaskType::IdentifyBook.to_string(), "identify_book");
+        assert_eq!(TaskType::ScanIsbn.to_string(), "scan_isbn");
         assert_eq!(
             "import_file".parse::<TaskType>().unwrap(),
             TaskType::ImportFile,
@@ -141,6 +145,7 @@ mod tests {
             "identify_book".parse::<TaskType>().unwrap(),
             TaskType::IdentifyBook,
         );
+        assert_eq!("scan_isbn".parse::<TaskType>().unwrap(), TaskType::ScanIsbn,);
         assert!("bogus".parse::<TaskType>().is_err());
     }
 
@@ -157,6 +162,12 @@ mod tests {
         assert_eq!(json2, r#""identify_book""#);
         let deserialized2: TaskType = serde_json::from_str(&json2).unwrap();
         assert_eq!(deserialized2, tt2);
+
+        let tt3 = TaskType::ScanIsbn;
+        let json3 = serde_json::to_string(&tt3).unwrap();
+        assert_eq!(json3, r#""scan_isbn""#);
+        let deserialized3: TaskType = serde_json::from_str(&json3).unwrap();
+        assert_eq!(deserialized3, tt3);
     }
 
     #[test]

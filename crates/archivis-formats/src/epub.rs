@@ -54,7 +54,9 @@ pub fn extract_epub_metadata(data: &[u8]) -> Result<ExtractedMetadata, FormatErr
 // ── Container / OPF location ─────────────────────────────────────────
 
 /// Read `META-INF/container.xml` and return the `full-path` of the root OPF file.
-fn find_opf_path(archive: &mut zip::ZipArchive<Cursor<&[u8]>>) -> Result<String, FormatError> {
+pub(crate) fn find_opf_path(
+    archive: &mut zip::ZipArchive<Cursor<&[u8]>>,
+) -> Result<String, FormatError> {
     let xml = read_zip_entry(archive, "META-INF/container.xml")?;
     let mut reader = Reader::from_str(&xml);
 
@@ -94,7 +96,7 @@ fn find_opf_path(archive: &mut zip::ZipArchive<Cursor<&[u8]>>) -> Result<String,
 }
 
 /// Return the directory portion of the OPF path (for resolving relative references).
-fn opf_directory(opf_path: &str) -> String {
+pub(crate) fn opf_directory(opf_path: &str) -> String {
     opf_path
         .rfind('/')
         .map_or_else(String::new, |pos| format!("{}/", &opf_path[..pos]))
@@ -594,14 +596,14 @@ fn parse_manifest_item(e: &quick_xml::events::BytesStart<'_>) -> Option<Manifest
 // ── Helpers ──────────────────────────────────────────────────────────
 
 /// Return the local name of an XML element (strip namespace prefix).
-fn local_name(full: &[u8]) -> &[u8] {
+pub(crate) fn local_name(full: &[u8]) -> &[u8] {
     full.iter()
         .position(|&b| b == b':')
         .map_or(full, |pos| &full[pos + 1..])
 }
 
 /// Find an attribute by local name on an XML element, returning its decoded value.
-fn find_attr(e: &quick_xml::events::BytesStart<'_>, key: &[u8]) -> Option<String> {
+pub(crate) fn find_attr(e: &quick_xml::events::BytesStart<'_>, key: &[u8]) -> Option<String> {
     e.attributes().flatten().find_map(|attr| {
         if local_name(attr.key.as_ref()) == key {
             Some(String::from_utf8_lossy(&attr.value).into_owned())
@@ -612,7 +614,7 @@ fn find_attr(e: &quick_xml::events::BytesStart<'_>, key: &[u8]) -> Option<String
 }
 
 /// Read a file from the ZIP archive as a UTF-8 string.
-fn read_zip_entry(
+pub(crate) fn read_zip_entry(
     archive: &mut zip::ZipArchive<Cursor<&[u8]>>,
     path: &str,
 ) -> Result<String, FormatError> {

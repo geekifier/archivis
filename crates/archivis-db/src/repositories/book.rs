@@ -872,6 +872,7 @@ impl IdentifierRow {
             "filename" => MetadataSource::Filename,
             "user" => MetadataSource::User,
             "provider" => MetadataSource::Provider(self.source_name.unwrap_or_default()),
+            "content_scan" => MetadataSource::ContentScan,
             other => {
                 return Err(DbError::Query(format!("unknown source_type: {other}")));
             }

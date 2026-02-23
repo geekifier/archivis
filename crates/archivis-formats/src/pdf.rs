@@ -8,10 +8,13 @@
 //! because XMP is richer and more standardised.
 
 use archivis_core::errors::FormatError;
-use archivis_core::models::{IdentifierType, MetadataSource};
+use archivis_core::models::MetadataSource;
+// `IdentifierType` is used by tests (via `use super::*`).
+#[cfg(test)]
+use archivis_core::models::IdentifierType;
 use lopdf::{Document, Object};
-use regex::Regex;
 
+use crate::isbn_scan;
 use crate::{ExtractedIdentifier, ExtractedMetadata};
 
 // ---------------------------------------------------------------------------
@@ -372,6 +375,8 @@ fn parse_pdf_date(raw: &str) -> Option<String> {
 
 /// Scan title, description, and existing identifiers for ISBN patterns and
 /// add any new ones to the metadata.
+///
+/// Delegates to the shared [`isbn_scan`] module.
 fn scan_for_isbns(meta: &mut ExtractedMetadata) {
     let mut texts = Vec::new();
     if let Some(ref t) = meta.title {
@@ -401,56 +406,20 @@ fn scan_for_isbns(meta: &mut ExtractedMetadata) {
 }
 
 /// Look for ISBN-13 and ISBN-10 patterns in a text string.
+///
+/// Delegates to [`isbn_scan::scan_text_for_isbns`] with `require_checksum = false`
+/// (matching the original behaviour of accepting any pattern-matched ISBN
+/// regardless of checksum validity).
 fn extract_isbn_from_text(text: &str, out: &mut Vec<ExtractedIdentifier>) {
-    use std::sync::LazyLock;
+    let scanned = isbn_scan::scan_text_for_isbns(text, false);
+    let extracted = isbn_scan::to_extracted_identifiers(&scanned);
 
-    // ISBN-13: starts with 978 or 979, 13 digits total.
-    // Hyphens allowed but NOT spaces (to avoid greedy matches across adjacent ISBNs).
-    static ISBN13_RE: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"(97[89][\d\-]{10,16}\d)").expect("valid regex"));
-
-    // ISBN-10: 9 digits + check (digit or X).
-    // Only hyphens as separators (no spaces), to avoid greedy cross-matching.
-    static ISBN10_RE: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"(\d[\d\-]{8,12}[\dXx])").expect("valid regex"));
-
-    for cap in ISBN13_RE.captures_iter(text) {
-        let raw = &cap[1];
-        let normalized: String = raw.chars().filter(char::is_ascii_digit).collect();
-        if normalized.len() == 13 {
-            let already = out
-                .iter()
-                .any(|e| e.identifier_type == IdentifierType::Isbn13 && e.value == normalized);
-            if !already {
-                out.push(ExtractedIdentifier {
-                    identifier_type: IdentifierType::Isbn13,
-                    value: normalized,
-                });
-            }
-        }
-    }
-
-    for cap in ISBN10_RE.captures_iter(text) {
-        let raw = &cap[1];
-        let normalized: String = raw
-            .chars()
-            .filter(|c| c.is_ascii_digit() || *c == 'X' || *c == 'x')
-            .collect::<String>()
-            .to_uppercase();
-        if normalized.len() == 10
-            && normalized[..9].chars().all(|c| c.is_ascii_digit())
-            && !normalized.starts_with("978")
-            && !normalized.starts_with("979")
-        {
-            let already = out
-                .iter()
-                .any(|e| e.identifier_type == IdentifierType::Isbn10 && e.value == normalized);
-            if !already {
-                out.push(ExtractedIdentifier {
-                    identifier_type: IdentifierType::Isbn10,
-                    value: normalized,
-                });
-            }
+    for id in extracted {
+        let already = out
+            .iter()
+            .any(|e| e.identifier_type == id.identifier_type && e.value == id.value);
+        if !already {
+            out.push(id);
         }
     }
 }

@@ -257,6 +257,8 @@
 				return 'File Import';
 			case 'import_directory':
 				return 'Directory Import';
+			case 'scan_isbn':
+				return 'ISBN Scan';
 			default:
 				return taskType;
 		}
@@ -438,6 +440,33 @@
 				{#if uploadError}
 					<p class="mt-3 text-sm text-destructive">{uploadError}</p>
 				{/if}
+
+				<!-- ISBN scan note -->
+				<div class="mt-4 flex items-start gap-2 rounded-md border border-border bg-muted/50 px-3 py-2.5">
+					<svg
+						class="mt-0.5 size-4 shrink-0 text-muted-foreground"
+						viewBox="0 0 24 24"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="2"
+						stroke-linecap="round"
+						stroke-linejoin="round"
+					>
+						<circle cx="12" cy="12" r="10" />
+						<path d="M12 16v-4" />
+						<path d="M12 8h.01" />
+					</svg>
+					<div class="text-xs text-muted-foreground">
+						<p>
+							<strong class="font-medium text-foreground">Scan book content for ISBNs after import</strong>
+						</p>
+						<p class="mt-0.5">
+							Controlled by the <code class="rounded bg-muted px-1 py-0.5 text-xs">scan_on_import</code>
+							setting in the server's <code class="rounded bg-muted px-1 py-0.5 text-xs">[isbn_scan]</code> config section.
+							When enabled, imported books are automatically scanned for ISBNs embedded in their content.
+						</p>
+					</div>
+				</div>
 
 				<div class="mt-4">
 					<Button

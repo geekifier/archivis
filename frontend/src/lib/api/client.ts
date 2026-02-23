@@ -4,6 +4,7 @@ import type {
 	AddIdentifierRequest,
 	AuthorResponse,
 	AuthStatusResponse,
+	BatchIsbnScanResponse,
 	BatchSetTagsRequest,
 	BatchUpdateBooksRequest,
 	BatchUpdateResponse,
@@ -17,6 +18,7 @@ import type {
 	FlagDuplicateRequest,
 	IdentifyAllResponse,
 	IdentifyResponse,
+	IsbnScanResponse,
 	LoginRequest,
 	LoginResponse,
 	MergeRequest,
@@ -541,6 +543,23 @@ export const api = {
 				max_books: maxBooks
 			});
 		}
+	},
+
+	isbnScan: {
+		/** Trigger ISBN content scan for a single book. */
+		scanBook(id: string): Promise<IsbnScanResponse> {
+			return request<IsbnScanResponse>(
+				'POST',
+				`/isbn-scan/book/${encodeURIComponent(id)}`
+			);
+		},
+
+		/** Trigger ISBN content scan for multiple books. */
+		scanBatch(bookIds: string[]): Promise<BatchIsbnScanResponse> {
+			return request<BatchIsbnScanResponse>('POST', '/isbn-scan/batch', {
+				book_ids: bookIds
+			});
+		}
 	}
 } as const;
 
@@ -551,6 +570,7 @@ export type {
 	AuthorEntry,
 	AuthorResponse,
 	AuthStatusResponse,
+	BatchIsbnScanResponse,
 	BatchSetTagsRequest,
 	BatchUpdateBooksRequest,
 	BatchUpdateResponse,
@@ -573,6 +593,7 @@ export type {
 	IdentifierEntry,
 	IdentifyAllResponse,
 	IdentifyResponse,
+	IsbnScanResponse,
 	LoginRequest,
 	LoginResponse,
 	MergeRequest,

@@ -52,6 +52,8 @@ export function formatMetadataSource(source: { type: string; name?: string }): s
 			return source.name ?? 'Provider';
 		case 'user':
 			return 'User';
+		case 'content_scan':
+			return 'Content Scan';
 		default:
 			return source.type;
 	}

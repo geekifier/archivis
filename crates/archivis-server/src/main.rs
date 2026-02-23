@@ -12,9 +12,12 @@ use archivis_metadata::{
 use archivis_storage::local::LocalStorage;
 use archivis_tasks::identify::IdentificationService;
 use archivis_tasks::import::{BulkImportService, ImportConfig, ImportService};
+use archivis_tasks::isbn_scan::{IsbnScanConfig as TaskIsbnScanConfig, IsbnScanService};
 use archivis_tasks::merge::MergeService;
 use archivis_tasks::queue::{self, TaskQueue, Worker};
-use archivis_tasks::workers::{IdentifyWorker, ImportDirectoryWorker, ImportFileWorker};
+use archivis_tasks::workers::{
+    IdentifyWorker, ImportDirectoryWorker, ImportFileWorker, IsbnScanWorker,
+};
 use clap::Parser;
 use config::{AppConfig, Cli};
 use tokio::net::TcpListener;
@@ -134,6 +137,7 @@ async fn init_services_and_router(
         config,
         &provider_registry,
         &identify_service,
+        &task_queue,
     );
     let progress = task_queue.progress_sender();
     let dispatcher_pool = db_pool.clone();
@@ -177,6 +181,7 @@ fn init_workers(
     config: &AppConfig,
     _provider_registry: &Arc<ProviderRegistry>,
     identify_service: &Arc<IdentificationService<LocalStorage>>,
+    task_queue: &Arc<TaskQueue>,
 ) -> HashMap<archivis_core::models::TaskType, Arc<dyn Worker>> {
     let import_config = ImportConfig {
         data_dir: config.data_dir.clone(),
@@ -196,19 +201,45 @@ fn init_workers(
         },
     )));
 
+    let isbn_scan_on_import = config.isbn_scan.scan_on_import;
+
     let mut workers: HashMap<archivis_core::models::TaskType, Arc<dyn Worker>> = HashMap::new();
     workers.insert(
         archivis_core::models::TaskType::ImportFile,
-        Arc::new(ImportFileWorker::new(Arc::clone(&import_service))),
+        Arc::new(
+            ImportFileWorker::new(Arc::clone(&import_service))
+                .with_isbn_scan(Arc::clone(task_queue), isbn_scan_on_import),
+        ),
     );
     workers.insert(
         archivis_core::models::TaskType::ImportDirectory,
-        Arc::new(ImportDirectoryWorker::new(Arc::clone(&bulk_import_service))),
+        Arc::new(
+            ImportDirectoryWorker::new(Arc::clone(&bulk_import_service))
+                .with_isbn_scan(Arc::clone(task_queue), isbn_scan_on_import),
+        ),
     );
     workers.insert(
         archivis_core::models::TaskType::IdentifyBook,
         Arc::new(IdentifyWorker::new(Arc::clone(identify_service))),
     );
+
+    // ISBN content-scan worker
+    let isbn_scan_config = TaskIsbnScanConfig::from_app_config(
+        config.isbn_scan.confidence,
+        config.isbn_scan.skip_threshold,
+        config.isbn_scan.epub_spine_items,
+        config.isbn_scan.pdf_pages,
+    );
+    let isbn_scan_service = Arc::new(IsbnScanService::new(
+        db_pool.clone(),
+        storage.clone(),
+        isbn_scan_config,
+    ));
+    workers.insert(
+        archivis_core::models::TaskType::ScanIsbn,
+        Arc::new(IsbnScanWorker::new(isbn_scan_service)),
+    );
+
     workers
 }
 

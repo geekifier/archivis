@@ -71,6 +71,9 @@ pub struct AppConfig {
     /// Metadata provider configuration.
     #[serde(default)]
     pub metadata: MetadataConfig,
+    /// ISBN content-scan configuration.
+    #[serde(default)]
+    pub isbn_scan: IsbnScanConfig,
 }
 
 /// Configuration for metadata provider lookups.
@@ -146,6 +149,34 @@ impl Default for HardcoverConfig {
     }
 }
 
+/// Configuration for ISBN content-scan feature.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct IsbnScanConfig {
+    /// Automatically scan imported books for ISBNs in their content.
+    pub scan_on_import: bool,
+    /// Confidence value assigned to ISBNs found via content scanning (0.0-1.0).
+    pub confidence: f32,
+    /// Skip scanning if any existing ISBN has confidence >= this threshold.
+    pub skip_threshold: f32,
+    /// Number of EPUB spine items to read from front and back.
+    pub epub_spine_items: usize,
+    /// Number of PDF pages to read from front and back.
+    pub pdf_pages: usize,
+}
+
+impl Default for IsbnScanConfig {
+    fn default() -> Self {
+        Self {
+            scan_on_import: false,
+            confidence: 0.85,
+            skip_threshold: 0.95,
+            epub_spine_items: 3,
+            pdf_pages: 5,
+        }
+    }
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
@@ -157,6 +188,7 @@ impl Default for AppConfig {
             frontend_dir: None,
             log_level: "info".to_owned(),
             metadata: MetadataConfig::default(),
+            isbn_scan: IsbnScanConfig::default(),
         }
     }
 }

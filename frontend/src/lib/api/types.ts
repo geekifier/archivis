@@ -106,7 +106,8 @@ export type MetadataSource =
 	| { type: 'embedded' }
 	| { type: 'filename' }
 	| { type: 'provider'; name: string }
-	| { type: 'user' };
+	| { type: 'user' }
+	| { type: 'content_scan' };
 
 export interface IdentifierEntry {
 	id: string;
@@ -270,7 +271,7 @@ export interface CreateAuthorRequest {
 
 // --- Import types ---
 
-export type TaskType = 'import_file' | 'import_directory' | 'identify_book';
+export type TaskType = 'import_file' | 'import_directory' | 'identify_book' | 'scan_isbn';
 export type TaskStatus = 'pending' | 'running' | 'completed' | 'failed';
 
 export interface TaskCreatedResponse {
@@ -419,4 +420,16 @@ export interface IdentifyResponse {
 export interface IdentifyAllResponse {
 	count: number;
 	task_ids: string[];
+}
+
+// --- ISBN content scan types ---
+
+/** Response from triggering an ISBN content scan for a book. */
+export interface IsbnScanResponse {
+	task_id: string;
+}
+
+/** Response from batch ISBN content scanning. */
+export interface BatchIsbnScanResponse {
+	tasks: IsbnScanResponse[];
 }

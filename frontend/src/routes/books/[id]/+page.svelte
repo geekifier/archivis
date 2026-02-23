@@ -41,6 +41,12 @@
 	let candidatesError = $state<string | null>(null);
 	let candidatesExpanded = $state(false);
 
+	// --- ISBN content scan state ---
+	let scanning = $state(false);
+	let scanError = $state<string | null>(null);
+	let scanProgress = $state<TaskProgressEvent | null>(null);
+	let scanEventSource: EventSource | null = null;
+
 	// --- Duplicate state ---
 	let duplicateLinks = $state<DuplicateLinkResponse[]>([]);
 	let dismissingDupId = $state<string | null>(null);
@@ -215,6 +221,77 @@
 		};
 	}
 
+	// --- ISBN Content Scan ---
+
+	async function handleScanIsbn() {
+		scanning = true;
+		scanError = null;
+		scanProgress = null;
+
+		try {
+			const response = await api.isbnScan.scanBook(bookId);
+			subscribeToScanProgress(response.task_id);
+		} catch (err) {
+			scanError =
+				err instanceof ApiError
+					? err.userMessage
+					: err instanceof Error
+						? err.message
+						: 'Failed to start ISBN scan';
+			scanning = false;
+		}
+	}
+
+	function subscribeToScanProgress(taskId: string) {
+		if (scanEventSource) {
+			scanEventSource.close();
+		}
+
+		const es = new EventSource(`/api/tasks/${encodeURIComponent(taskId)}/progress`);
+		scanEventSource = es;
+
+		es.addEventListener('task:progress', (event: MessageEvent) => {
+			try {
+				scanProgress = JSON.parse(event.data) as TaskProgressEvent;
+			} catch {
+				// Ignore malformed events
+			}
+		});
+
+		es.addEventListener('task:complete', (event: MessageEvent) => {
+			try {
+				const data = JSON.parse(event.data) as TaskProgressEvent;
+				scanProgress = { ...data, status: 'completed' as TaskStatus, progress: 100 };
+			} catch {
+				// Ignore malformed events
+			}
+			es.close();
+			scanEventSource = null;
+			scanning = false;
+			// Reload book to pick up newly found identifiers
+			fetchBook();
+		});
+
+		es.addEventListener('task:error', (event: MessageEvent) => {
+			try {
+				const data = JSON.parse(event.data) as TaskProgressEvent;
+				scanProgress = { ...data, status: 'failed' as TaskStatus };
+				scanError = data.error ?? 'ISBN scan failed';
+			} catch {
+				scanError = 'ISBN scan failed';
+			}
+			es.close();
+			scanEventSource = null;
+			scanning = false;
+		});
+
+		es.onerror = () => {
+			es.close();
+			scanEventSource = null;
+			scanning = false;
+		};
+	}
+
 	async function loadCandidates() {
 		candidatesError = null;
 		try {
@@ -344,6 +421,10 @@
 			if (identifyEventSource) {
 				identifyEventSource.close();
 				identifyEventSource = null;
+			}
+			if (scanEventSource) {
+				scanEventSource.close();
+				scanEventSource = null;
 			}
 		};
 	});
@@ -978,7 +1059,84 @@
 						</div>
 					{/if}
 
-					<!-- Identifiers (editable) -->
+					<!-- Identifiers (editable) + ISBN scan -->
+					<div class="space-y-4">
+						<div class="flex items-center justify-between">
+							<h3 class="text-sm font-semibold text-muted-foreground">Identifiers</h3>
+							<Button
+								size="sm"
+								variant="outline"
+								onclick={handleScanIsbn}
+								disabled={scanning || identifying}
+								class="h-7 px-2 text-xs"
+							>
+								{#if scanning}
+									<svg
+										class="size-3 animate-spin"
+										xmlns="http://www.w3.org/2000/svg"
+										fill="none"
+										viewBox="0 0 24 24"
+									>
+										<circle
+											class="opacity-25"
+											cx="12"
+											cy="12"
+											r="10"
+											stroke="currentColor"
+											stroke-width="4"
+										></circle>
+										<path
+											class="opacity-75"
+											fill="currentColor"
+											d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+										></path>
+									</svg>
+									Scanning...
+								{:else}
+									<svg
+										class="size-3"
+										viewBox="0 0 24 24"
+										fill="none"
+										stroke="currentColor"
+										stroke-width="2"
+										stroke-linecap="round"
+										stroke-linejoin="round"
+									>
+										<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" />
+										<path d="M14 2v4a2 2 0 0 0 2 2h4" />
+										<circle cx="11.5" cy="14.5" r="2.5" />
+										<path d="M13.3 16.3 15 18" />
+									</svg>
+									Scan for ISBNs
+								{/if}
+							</Button>
+						</div>
+
+						{#if scanning && scanProgress}
+							<div class="rounded-lg border border-border p-3">
+								<div class="flex items-center justify-between text-sm">
+									<span class="font-medium">Scanning book content...</span>
+									<span class="text-xs text-muted-foreground">{scanProgress.progress}%</span>
+								</div>
+								<div class="mt-2 h-2 w-full overflow-hidden rounded-full bg-muted">
+									<div
+										class="h-full rounded-full bg-primary transition-all duration-300"
+										style="width: {scanProgress.progress}%"
+									></div>
+								</div>
+								{#if scanProgress.message}
+									<p class="mt-1.5 text-xs text-muted-foreground">{scanProgress.message}</p>
+								{/if}
+							</div>
+						{/if}
+
+						{#if scanError}
+							<div class="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+								{scanError}
+							</div>
+						{/if}
+					</div>
+
 					<IdentifierEditor {book} onupdate={handleIdentifierUpdate} />
 				{/if}
 			</div>

@@ -21,6 +21,7 @@ impl IdentifierRepository {
             MetadataSource::Filename => ("filename", None),
             MetadataSource::User => ("user", None),
             MetadataSource::Provider(name) => ("provider", Some(name.as_str())),
+            MetadataSource::ContentScan => ("content_scan", None),
         };
 
         sqlx::query!(

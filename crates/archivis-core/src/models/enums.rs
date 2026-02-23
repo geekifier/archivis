@@ -173,6 +173,8 @@ pub enum MetadataSource {
     Provider(String),
     /// Manually entered or edited by a user.
     User,
+    /// Found by scanning the book's content (e.g. ISBN detection via OCR or text extraction).
+    ContentScan,
 }
 
 impl fmt::Display for MetadataSource {
@@ -182,6 +184,7 @@ impl fmt::Display for MetadataSource {
             Self::Filename => write!(f, "Filename"),
             Self::Provider(name) => write!(f, "Provider: {name}"),
             Self::User => write!(f, "User"),
+            Self::ContentScan => write!(f, "Content Scan"),
         }
     }
 }
@@ -318,6 +321,7 @@ mod tests {
             "Provider: Hardcover",
         );
         assert_eq!(MetadataSource::User.to_string(), "User");
+        assert_eq!(MetadataSource::ContentScan.to_string(), "Content Scan");
     }
 
     #[test]
@@ -334,6 +338,15 @@ mod tests {
         let source = MetadataSource::Provider("Hardcover".into());
         let json = serde_json::to_string(&source).unwrap();
         assert_eq!(json, r#"{"type":"provider","name":"Hardcover"}"#);
+        let deserialized: MetadataSource = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, source);
+    }
+
+    #[test]
+    fn metadata_source_serde_content_scan_variant() {
+        let source = MetadataSource::ContentScan;
+        let json = serde_json::to_string(&source).unwrap();
+        assert_eq!(json, r#"{"type":"content_scan"}"#);
         let deserialized: MetadataSource = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized, source);
     }
