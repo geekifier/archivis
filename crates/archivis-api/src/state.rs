@@ -6,6 +6,7 @@ use archivis_db::DbPool;
 use archivis_metadata::ProviderRegistry;
 use archivis_storage::local::LocalStorage;
 use archivis_tasks::identify::IdentificationService;
+use archivis_tasks::merge::MergeService;
 use archivis_tasks::queue::TaskQueue;
 
 /// API-specific configuration extracted from the application config.
@@ -32,10 +33,12 @@ struct AppStateInner {
     storage: LocalStorage,
     provider_registry: Arc<ProviderRegistry>,
     identify_service: Arc<IdentificationService<LocalStorage>>,
+    merge_service: Arc<MergeService<LocalStorage>>,
     config: ApiConfig,
 }
 
 impl AppState {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         db_pool: DbPool,
         task_queue: Arc<TaskQueue>,
@@ -43,6 +46,7 @@ impl AppState {
         storage: LocalStorage,
         provider_registry: Arc<ProviderRegistry>,
         identify_service: Arc<IdentificationService<LocalStorage>>,
+        merge_service: Arc<MergeService<LocalStorage>>,
         config: ApiConfig,
     ) -> Self {
         Self {
@@ -53,6 +57,7 @@ impl AppState {
                 storage,
                 provider_registry,
                 identify_service,
+                merge_service,
                 config,
             }),
         }
@@ -80,6 +85,10 @@ impl AppState {
 
     pub fn identify_service(&self) -> &Arc<IdentificationService<LocalStorage>> {
         &self.inner.identify_service
+    }
+
+    pub fn merge_service(&self) -> &Arc<MergeService<LocalStorage>> {
+        &self.inner.merge_service
     }
 
     pub fn config(&self) -> &ApiConfig {

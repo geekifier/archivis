@@ -12,6 +12,7 @@ use archivis_metadata::{
 use archivis_storage::local::LocalStorage;
 use archivis_tasks::identify::IdentificationService;
 use archivis_tasks::import::{BulkImportService, ImportConfig, ImportService};
+use archivis_tasks::merge::MergeService;
 use archivis_tasks::queue::{self, TaskQueue, Worker};
 use archivis_tasks::workers::{IdentifyWorker, ImportDirectoryWorker, ImportFileWorker};
 use clap::Parser;
@@ -77,57 +78,11 @@ async fn main() {
     // 4. Metadata providers
     let provider_registry = init_metadata_providers(&config.metadata);
 
-    // 5. Task queue + workers
-    let (task_queue, dispatch_rx) = TaskQueue::new(db_pool.clone());
-    let task_queue = Arc::new(task_queue);
+    // 5. Task queue, workers, and services
+    let router =
+        init_services_and_router(db_pool, storage, auth_service, provider_registry, &config).await;
 
-    // Build shared identification service (used by both worker and API handlers)
-    let resolver = Arc::new(MetadataResolver::new(
-        Arc::clone(&provider_registry),
-        config.metadata.auto_identify_threshold,
-    ));
-    let identify_service = Arc::new(IdentificationService::new(
-        db_pool.clone(),
-        Arc::clone(&resolver),
-        storage.clone(),
-        config.data_dir.clone(),
-    ));
-
-    let workers = init_workers(
-        &db_pool,
-        &storage,
-        &config,
-        &provider_registry,
-        &identify_service,
-    );
-    let progress = task_queue.progress_sender();
-    let dispatcher_pool = db_pool.clone();
-    tokio::spawn(async move {
-        queue::run_dispatcher(dispatch_rx, workers, progress, dispatcher_pool).await;
-    });
-
-    // Recover interrupted tasks from previous run
-    if let Err(err) = queue::recover_tasks(&db_pool, &task_queue.dispatch_sender()).await {
-        tracing::warn!(%err, "Failed to recover interrupted tasks");
-    }
-
-    // 6. Build application state and router
-    let api_config = ApiConfig {
-        data_dir: config.data_dir.clone(),
-        frontend_dir: config.frontend_dir.clone(),
-    };
-    let state = AppState::new(
-        db_pool,
-        task_queue,
-        auth_service,
-        storage,
-        provider_registry,
-        identify_service,
-        api_config,
-    );
-    let router = archivis_api::build_router(state);
-
-    // 7. Bind and serve
+    // 6. Bind and serve
     let bind_addr = config.bind_address();
     let listener = match TcpListener::bind(&bind_addr).await {
         Ok(l) => l,
@@ -147,6 +102,72 @@ async fn main() {
     }
 
     tracing::info!("Archivis stopped");
+}
+
+/// Initialize the task queue, background workers, and all application services,
+/// then build the Axum router.
+async fn init_services_and_router(
+    db_pool: archivis_db::DbPool,
+    storage: LocalStorage,
+    auth_service: AuthService<LocalAuthAdapter>,
+    provider_registry: Arc<ProviderRegistry>,
+    config: &AppConfig,
+) -> axum::Router {
+    let (task_queue, dispatch_rx) = TaskQueue::new(db_pool.clone());
+    let task_queue = Arc::new(task_queue);
+
+    // Build shared identification service (used by both worker and API handlers)
+    let resolver = Arc::new(MetadataResolver::new(
+        Arc::clone(&provider_registry),
+        config.metadata.auto_identify_threshold,
+    ));
+    let identify_service = Arc::new(IdentificationService::new(
+        db_pool.clone(),
+        Arc::clone(&resolver),
+        storage.clone(),
+        config.data_dir.clone(),
+    ));
+
+    let workers = init_workers(
+        &db_pool,
+        &storage,
+        config,
+        &provider_registry,
+        &identify_service,
+    );
+    let progress = task_queue.progress_sender();
+    let dispatcher_pool = db_pool.clone();
+    tokio::spawn(async move {
+        queue::run_dispatcher(dispatch_rx, workers, progress, dispatcher_pool).await;
+    });
+
+    // Recover interrupted tasks from previous run
+    if let Err(err) = queue::recover_tasks(&db_pool, &task_queue.dispatch_sender()).await {
+        tracing::warn!(%err, "Failed to recover interrupted tasks");
+    }
+
+    // Build merge service
+    let merge_service = Arc::new(MergeService::new(
+        db_pool.clone(),
+        storage.clone(),
+        config.data_dir.clone(),
+    ));
+
+    let api_config = ApiConfig {
+        data_dir: config.data_dir.clone(),
+        frontend_dir: config.frontend_dir.clone(),
+    };
+    let state = AppState::new(
+        db_pool,
+        task_queue,
+        auth_service,
+        storage,
+        provider_registry,
+        identify_service,
+        merge_service,
+        api_config,
+    );
+    archivis_api::build_router(state)
 }
 
 /// Create and register background task workers.

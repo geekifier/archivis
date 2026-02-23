@@ -4,6 +4,7 @@ pub mod types;
 use axum::routing::{delete, get, post, put};
 use axum::Router;
 
+use crate::duplicates::handlers as duplicate_handlers;
 use crate::identify::handlers as identify_handlers;
 use crate::state::AppState;
 
@@ -31,6 +32,8 @@ pub fn router() -> Router<AppState> {
             "/{id}/identifiers/{identifier_id}",
             put(handlers::update_identifier).delete(handlers::delete_identifier),
         )
+        // Duplicate flagging route
+        .route("/{id}/duplicates", post(duplicate_handlers::flag_duplicate))
         // Identification routes
         .route("/{id}/identify", post(identify_handlers::identify_book))
         .route("/{id}/candidates", get(identify_handlers::list_candidates))
