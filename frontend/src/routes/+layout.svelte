@@ -45,11 +45,15 @@
 
 	const navItems = [
 		{ href: '/', label: 'Library', icon: 'library' },
-		{ href: '/import', label: 'Import', icon: 'import' }
+		{ href: '/import', label: 'Import', icon: 'import' },
+		{ href: '/duplicates', label: 'Duplicates', icon: 'duplicates' }
 	];
+
+	let duplicateCount = $state<number | null>(null);
 
 	function isActive(href: string): boolean {
 		if (href === '/') return page.url.pathname === '/' || page.url.pathname.startsWith('/books');
+		if (href === '/duplicates') return page.url.pathname.startsWith('/duplicates');
 		return page.url.pathname.startsWith(href);
 	}
 
@@ -71,6 +75,20 @@
 		{ value: 'needs_review', label: 'Needs Review', colorClass: 'bg-amber-500' },
 		{ value: 'unidentified', label: 'Unidentified', colorClass: 'bg-gray-400' }
 	];
+
+	// Fetch duplicate count when authenticated
+	$effect(() => {
+		if (auth.isAuthenticated) {
+			api.duplicates
+				.count()
+				.then((result) => {
+					duplicateCount = result.count;
+				})
+				.catch(() => {
+					// Silently ignore count fetch errors
+				});
+		}
+	});
 
 	// Fetch needs_review and unidentified counts when authenticated and on library page
 	$effect(() => {
@@ -176,8 +194,18 @@
 								<path d="m8 11 4 4 4-4" />
 								<path d="M8 5H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-4" />
 							</svg>
+						{:else if item.icon === 'duplicates'}
+							<svg class="size-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+								<rect x="8" y="2" width="13" height="13" rx="2" />
+								<path d="M5 8H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2v-1" />
+							</svg>
 						{/if}
-						{item.label}
+						<span class="flex-1">{item.label}</span>
+						{#if item.icon === 'duplicates' && duplicateCount != null && duplicateCount > 0}
+							<span class="min-w-5 rounded-full bg-amber-500/15 px-1.5 py-0.5 text-center text-xs font-medium text-amber-600 dark:text-amber-400">
+								{duplicateCount}
+							</span>
+						{/if}
 					</a>
 				{/each}
 

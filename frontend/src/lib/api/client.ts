@@ -9,12 +9,17 @@ import type {
 	CandidateResponse,
 	CreateAuthorRequest,
 	CreatePublisherRequest,
+	DuplicateCountResponse,
+	DuplicateLinkResponse,
+	FlagDuplicateRequest,
 	IdentifyAllResponse,
 	IdentifyResponse,
 	LoginRequest,
 	LoginResponse,
+	MergeRequest,
 	PaginatedAuthors,
 	PaginatedBooks,
+	PaginatedDuplicates,
 	PaginatedPublishers,
 	PaginatedSeries,
 	PaginatedTags,
@@ -258,6 +263,70 @@ export const api = {
 		}
 	},
 
+	duplicates: {
+		/** List pending duplicate pairs with pagination. */
+		list(params?: { page?: number; per_page?: number }): Promise<PaginatedDuplicates> {
+			const searchParams = new URLSearchParams();
+			if (params) {
+				for (const [key, value] of Object.entries(params)) {
+					if (value !== undefined && value !== null) {
+						searchParams.set(key, String(value));
+					}
+				}
+			}
+			const qs = searchParams.toString();
+			return request<PaginatedDuplicates>('GET', `/duplicates${qs ? `?${qs}` : ''}`);
+		},
+
+		/** Get a single duplicate link by ID. */
+		get(id: string): Promise<DuplicateLinkResponse> {
+			return request<DuplicateLinkResponse>(
+				'GET',
+				`/duplicates/${encodeURIComponent(id)}`
+			);
+		},
+
+		/** Merge a duplicate pair. */
+		merge(id: string, data: MergeRequest): Promise<BookDetail> {
+			return request<BookDetail>(
+				'POST',
+				`/duplicates/${encodeURIComponent(id)}/merge`,
+				data
+			);
+		},
+
+		/** Dismiss a duplicate pair. */
+		dismiss(id: string): Promise<void> {
+			return request<void>(
+				'POST',
+				`/duplicates/${encodeURIComponent(id)}/dismiss`
+			);
+		},
+
+		/** Manually flag a book as a duplicate of another. */
+		flag(bookId: string, otherBookId: string): Promise<DuplicateLinkResponse> {
+			const body: FlagDuplicateRequest = { other_book_id: otherBookId };
+			return request<DuplicateLinkResponse>(
+				'POST',
+				`/books/${encodeURIComponent(bookId)}/duplicates`,
+				body
+			);
+		},
+
+		/** Get the count of pending duplicates. */
+		count(): Promise<DuplicateCountResponse> {
+			return request<DuplicateCountResponse>('GET', '/duplicates/count');
+		},
+
+		/** Find duplicate links for a specific book. */
+		forBook(bookId: string): Promise<DuplicateLinkResponse[]> {
+			return request<DuplicateLinkResponse[]>(
+				'GET',
+				`/books/${encodeURIComponent(bookId)}/duplicates`
+			);
+		}
+	},
+
 	authors: {
 		/** Fetch author detail by ID. */
 		get(id: string): Promise<AuthorResponse> {
@@ -480,17 +549,22 @@ export type {
 	CandidateSeriesInfo,
 	CreateAuthorRequest,
 	CreatePublisherRequest,
+	DuplicateCountResponse,
+	DuplicateLinkResponse,
 	FileEntry,
+	FlagDuplicateRequest,
 	FormatSummary,
 	IdentifierEntry,
 	IdentifyAllResponse,
 	IdentifyResponse,
 	LoginRequest,
 	LoginResponse,
+	MergeRequest,
 	MetadataSource,
 	MetadataStatus,
 	PaginatedAuthors,
 	PaginatedBooks,
+	PaginatedDuplicates,
 	PaginatedPublishers,
 	PaginatedSeries,
 	PaginatedTags,

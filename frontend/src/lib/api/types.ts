@@ -328,6 +328,40 @@ export interface UpdateIdentifierRequest {
 	value?: string;
 }
 
+// --- Duplicate types ---
+
+export interface DuplicateLinkResponse {
+	id: string;
+	book_a: BookSummary;
+	book_b: BookSummary;
+	detection_method: string;
+	confidence: number;
+	status: string;
+	created_at: string;
+}
+
+export interface PaginatedDuplicates {
+	items: DuplicateLinkResponse[];
+	total: number;
+	page: number;
+	per_page: number;
+	total_pages: number;
+}
+
+export interface MergeRequest {
+	primary_id: string;
+	secondary_id: string;
+	prefer_metadata_from?: string;
+}
+
+export interface FlagDuplicateRequest {
+	other_book_id: string;
+}
+
+export interface DuplicateCountResponse {
+	count: number;
+}
+
 // --- Identification types ---
 
 /** Series information included in a candidate response. */
