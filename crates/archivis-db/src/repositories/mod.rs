@@ -2,6 +2,7 @@ mod author;
 mod book;
 mod book_file;
 mod candidate;
+mod duplicate;
 mod identifier;
 mod publisher;
 mod series;
@@ -17,6 +18,7 @@ pub use book::{
 };
 pub use book_file::BookFileRepository;
 pub use candidate::CandidateRepository;
+pub use duplicate::DuplicateRepository;
 pub use identifier::IdentifierRepository;
 pub use publisher::PublisherRepository;
 pub use series::SeriesRepository;

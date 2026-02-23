@@ -1,10 +1,12 @@
 use std::fmt::Write as _;
 use std::path::Path;
 
-use archivis_core::models::{Book, BookFile, BookFormat, Identifier, MetadataSource, Series};
+use archivis_core::models::{
+    Book, BookFile, BookFormat, DuplicateLink, Identifier, MetadataSource, Series,
+};
 use archivis_db::{
-    AuthorRepository, BookFileRepository, BookRepository, DbPool, IdentifierRepository,
-    SeriesRepository, TagRepository,
+    AuthorRepository, BookFileRepository, BookRepository, DbPool, DuplicateRepository,
+    IdentifierRepository, SeriesRepository, TagRepository,
 };
 use archivis_formats::sanitize::sanitize_text;
 use archivis_formats::{ExtractedMetadata, ParsedFilename};
@@ -126,6 +128,10 @@ impl<S: StorageBackend> ImportService<S> {
 
         info!(book_id = %book_id, format = %format, status = %score.status, "imported file");
 
+        // Record fuzzy duplicate relationship for later review
+        self.record_fuzzy_duplicate(fuzzy_duplicate.as_ref(), book_id)
+            .await?;
+
         Ok(ImportResult {
             book_id,
             book_file_id: book_file,
@@ -134,6 +140,27 @@ impl<S: StorageBackend> ImportService<S> {
             duplicate: fuzzy_duplicate,
             cover_extracted: embedded.cover_image.is_some(),
         })
+    }
+
+    /// If a fuzzy duplicate was detected, create a `DuplicateLink` record for later review.
+    async fn record_fuzzy_duplicate(
+        &self,
+        fuzzy_duplicate: Option<&DuplicateInfo>,
+        book_id: uuid::Uuid,
+    ) -> Result<(), ImportError> {
+        if let Some(DuplicateInfo::FuzzyMatch {
+            existing_book_id,
+            title_similarity,
+            author_similarity,
+        }) = fuzzy_duplicate
+        {
+            let confidence = (title_similarity + author_similarity) / 2.0;
+            if !DuplicateRepository::exists(&self.db_pool, *existing_book_id, book_id).await? {
+                let link = DuplicateLink::new(*existing_book_id, book_id, "fuzzy", confidence);
+                DuplicateRepository::create(&self.db_pool, &link).await?;
+            }
+        }
+        Ok(())
     }
 
     /// Store the book file and its cover image (if present) in the storage backend.

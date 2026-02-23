@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO duplicate_links (id, book_id_a, book_id_b, detection_method, confidence, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": []
+  },
+  "hash": "7b04518e1267aae1ed7cca6280396d63bc67d4cb396581bd436910248fba2fa6"
+}
