@@ -97,4 +97,90 @@ impl IdentifierRepository {
             .map(IdentifierRow::into_identifier)
             .collect()
     }
+
+    /// Get a single identifier by its ID.
+    pub async fn get_by_id(pool: &SqlitePool, id: Uuid) -> Result<Identifier, DbError> {
+        let id_str = id.to_string();
+        let row = sqlx::query_as!(
+            IdentifierRow,
+            "SELECT id, book_id, identifier_type, value, source_type, source_name, confidence FROM identifiers WHERE id = ?",
+            id_str,
+        )
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| DbError::Query(e.to_string()))?
+        .ok_or(DbError::NotFound {
+            entity: "identifier",
+            id: id_str,
+        })?;
+
+        row.into_identifier()
+    }
+
+    /// Update an existing identifier's value and/or type.
+    pub async fn update(
+        pool: &SqlitePool,
+        id: Uuid,
+        value: &str,
+        identifier_type: &str,
+    ) -> Result<(), DbError> {
+        let id_str = id.to_string();
+        let result = sqlx::query!(
+            "UPDATE identifiers SET value = ?, identifier_type = ? WHERE id = ?",
+            value,
+            identifier_type,
+            id_str,
+        )
+        .execute(pool)
+        .await
+        .map_err(|e| DbError::Query(e.to_string()))?;
+
+        if result.rows_affected() == 0 {
+            return Err(DbError::NotFound {
+                entity: "identifier",
+                id: id_str,
+            });
+        }
+
+        Ok(())
+    }
+
+    /// Delete a single identifier by ID.
+    pub async fn delete(pool: &SqlitePool, id: Uuid) -> Result<(), DbError> {
+        let id_str = id.to_string();
+        let result = sqlx::query!("DELETE FROM identifiers WHERE id = ?", id_str)
+            .execute(pool)
+            .await
+            .map_err(|e| DbError::Query(e.to_string()))?;
+
+        if result.rows_affected() == 0 {
+            return Err(DbError::NotFound {
+                entity: "identifier",
+                id: id_str,
+            });
+        }
+
+        Ok(())
+    }
+
+    /// Check if an identifier value already exists for a book (to prevent duplicates).
+    pub async fn exists_for_book(
+        pool: &SqlitePool,
+        book_id: Uuid,
+        identifier_type: &str,
+        value: &str,
+    ) -> Result<bool, DbError> {
+        let book_id_str = book_id.to_string();
+        let row = sqlx::query_scalar!(
+            "SELECT COUNT(*) as count FROM identifiers WHERE book_id = ? AND identifier_type = ? AND value = ?",
+            book_id_str,
+            identifier_type,
+            value,
+        )
+        .fetch_one(pool)
+        .await
+        .map_err(|e| DbError::Query(e.to_string()))?;
+
+        Ok(row > 0)
+    }
 }

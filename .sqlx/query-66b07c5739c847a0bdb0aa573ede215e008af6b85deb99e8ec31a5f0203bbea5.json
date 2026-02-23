@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT COUNT(*) as count FROM identifiers WHERE book_id = ? AND identifier_type = ? AND value = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "count",
+        "ordinal": 0,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "66b07c5739c847a0bdb0aa573ede215e008af6b85deb99e8ec31a5f0203bbea5"
+}

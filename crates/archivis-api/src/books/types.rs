@@ -128,6 +128,26 @@ pub struct SetBookTagsRequest {
     pub tags: Vec<BookTagLink>,
 }
 
+/// Request body for `POST /api/books/{id}/identifiers`.
+#[derive(Debug, Deserialize, Validate, ToSchema)]
+pub struct AddIdentifierRequest {
+    /// The type of identifier (e.g. isbn13, isbn10, asin).
+    #[schema(value_type = String)]
+    pub identifier_type: IdentifierType,
+    /// The identifier value.
+    pub value: String,
+}
+
+/// Request body for `PUT /api/books/{id}/identifiers/{identifier_id}`.
+#[derive(Debug, Deserialize, Validate, ToSchema)]
+pub struct UpdateIdentifierRequest {
+    /// Updated identifier type.
+    #[schema(value_type = Option<String>)]
+    pub identifier_type: Option<IdentifierType>,
+    /// Updated identifier value.
+    pub value: Option<String>,
+}
+
 // ── Response Types ──────────────────────────────────────────────
 
 /// Lightweight book summary for list responses.

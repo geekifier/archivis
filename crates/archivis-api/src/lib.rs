@@ -50,6 +50,9 @@ mod openapi {
             super::books::handlers::set_book_authors,
             super::books::handlers::set_book_series,
             super::books::handlers::set_book_tags,
+            super::books::handlers::add_identifier,
+            super::books::handlers::update_identifier,
+            super::books::handlers::delete_identifier,
             // Authors
             super::authors::handlers::list_authors,
             super::authors::handlers::create_author,
@@ -119,6 +122,8 @@ mod openapi {
             super::books::types::FileEntry,
             super::books::types::IdentifierEntry,
             super::books::types::PaginatedBooks,
+            super::books::types::AddIdentifierRequest,
+            super::books::types::UpdateIdentifierRequest,
             // Authors
             super::authors::types::CreateAuthorRequest,
             super::authors::types::UpdateAuthorRequest,
