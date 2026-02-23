@@ -15,9 +15,12 @@
 		sortBy: SortField;
 		sortOrder: SortOrder;
 		onSort: (field: SortField, order: SortOrder) => void;
+		selectionMode?: boolean;
+		selectedIds?: Set<string>;
+		onselect?: (bookId: string, event: MouseEvent) => void;
 	}
 
-	let { books, sortBy, sortOrder, onSort }: Props = $props();
+	let { books, sortBy, sortOrder, onSort, selectionMode = false, selectedIds = new Set(), onselect }: Props = $props();
 
 	function handleHeaderClick(headerId: string) {
 		const field = columnToSortField[headerId];
@@ -109,13 +112,24 @@
 	function getCellStyle(size: number): string {
 		return `width: ${size}px;`;
 	}
+
+	function handleRowClick(bookId: string, event: MouseEvent) {
+		if (selectionMode && onselect) {
+			onselect(bookId, event);
+		}
+	}
 </script>
 
 <div class="overflow-x-auto rounded-lg border border-border">
-	<table class="w-full text-sm" style="table-layout: fixed; width: {table.getCenterTotalSize()}px; min-width: 100%;">
+	<table class="w-full text-sm" style="table-layout: fixed; width: {table.getCenterTotalSize() + (selectionMode ? 40 : 0)}px; min-width: 100%;">
 		<thead>
 			{#each table.getHeaderGroups() as headerGroup (headerGroup.id)}
 				<tr class="border-b border-border bg-muted/50">
+					{#if selectionMode}
+						<th class="w-10 px-2 py-2 text-center" style="width: 40px;">
+							<!-- Header for checkbox column -->
+						</th>
+					{/if}
 					{#each headerGroup.headers as header (header.id)}
 						{@const isSortable = header.id in columnToSortField}
 						<th
@@ -144,35 +158,80 @@
 		</thead>
 		<tbody>
 			{#each table.getRowModel().rows as row (row.id)}
-				<tr class="border-b border-border transition-colors hover:bg-muted/30">
+				{@const isSelected = selectedIds.has(row.original.id)}
+				<tr
+					class="border-b border-border transition-colors {selectionMode ? 'cursor-pointer' : ''} {isSelected ? 'bg-primary/10' : 'hover:bg-muted/30'}"
+					onclick={(e) => handleRowClick(row.original.id, e)}
+				>
+					{#if selectionMode}
+						<td class="px-2 py-1.5 text-center" style="width: 40px;">
+							<div
+								class="mx-auto flex size-4 items-center justify-center rounded border transition-colors {isSelected ? 'border-primary bg-primary' : 'border-muted-foreground/50'}"
+							>
+								{#if isSelected}
+									<svg class="size-3 text-primary-foreground" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+										<polyline points="20 6 9 17 4 12" />
+									</svg>
+								{/if}
+							</div>
+						</td>
+					{/if}
 					{#each row.getVisibleCells() as cell (cell.id)}
 						<td class="px-3 py-1.5" style={getCellStyle(cell.column.getSize())}>
 							{#if cell.column.id === 'cover'}
 								{@const book = cell.row.original}
-								<a href="/books/{book.id}" class="block h-10 w-7 flex-shrink-0 overflow-hidden rounded">
-									{#if book.has_cover}
-										<img
-											src="/api/books/{book.id}/cover?size=sm"
-											alt=""
-											class="h-full w-full object-cover"
-											loading="lazy"
-										/>
-									{:else}
-										<div
-											class="flex h-full w-full items-center justify-center text-[6px] text-white/70"
-											style="background-color: hsl({placeholderHue(book.id)}, 30%, 25%);"
-										>
-											<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="size-3">
-												<path d="M12 6.042A8.967 8.967 0 0 0 6 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 0 1 6 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 0 1 6-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0 0 18 18a8.967 8.967 0 0 0-6 2.292m0-14.25v14.25" />
-											</svg>
-										</div>
-									{/if}
-								</a>
+								{#if selectionMode}
+									<div class="block h-10 w-7 flex-shrink-0 overflow-hidden rounded">
+										{#if book.has_cover}
+											<img
+												src="/api/books/{book.id}/cover?size=sm"
+												alt=""
+												class="h-full w-full object-cover"
+												loading="lazy"
+											/>
+										{:else}
+											<div
+												class="flex h-full w-full items-center justify-center text-[6px] text-white/70"
+												style="background-color: hsl({placeholderHue(book.id)}, 30%, 25%);"
+											>
+												<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="size-3">
+													<path d="M12 6.042A8.967 8.967 0 0 0 6 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 0 1 6 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 0 1 6-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0 0 18 18a8.967 8.967 0 0 0-6 2.292m0-14.25v14.25" />
+												</svg>
+											</div>
+										{/if}
+									</div>
+								{:else}
+									<a href="/books/{book.id}" class="block h-10 w-7 flex-shrink-0 overflow-hidden rounded">
+										{#if book.has_cover}
+											<img
+												src="/api/books/{book.id}/cover?size=sm"
+												alt=""
+												class="h-full w-full object-cover"
+												loading="lazy"
+											/>
+										{:else}
+											<div
+												class="flex h-full w-full items-center justify-center text-[6px] text-white/70"
+												style="background-color: hsl({placeholderHue(book.id)}, 30%, 25%);"
+											>
+												<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="size-3">
+													<path d="M12 6.042A8.967 8.967 0 0 0 6 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 0 1 6 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 0 1 6-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0 0 18 18a8.967 8.967 0 0 0-6 2.292m0-14.25v14.25" />
+												</svg>
+											</div>
+										{/if}
+									</a>
+								{/if}
 							{:else if cell.column.id === 'title'}
 								{@const book = cell.row.original}
-								<a href="/books/{book.id}" class="truncate font-medium text-foreground hover:text-primary hover:underline">
-									{book.title}
-								</a>
+								{#if selectionMode}
+									<span class="truncate font-medium text-foreground">
+										{book.title}
+									</span>
+								{:else}
+									<a href="/books/{book.id}" class="truncate font-medium text-foreground hover:text-primary hover:underline">
+										{book.title}
+									</a>
+								{/if}
 							{:else if cell.column.id === 'formats'}
 								{@const formats = formatFormats(cell.row.original)}
 								<div class="flex flex-wrap gap-1">

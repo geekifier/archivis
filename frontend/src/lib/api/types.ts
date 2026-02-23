@@ -362,6 +362,29 @@ export interface DuplicateCountResponse {
 	count: number;
 }
 
+// --- Batch update types ---
+
+export interface BatchUpdateBooksRequest {
+	book_ids: string[];
+	updates: {
+		language?: string;
+		metadata_status?: string;
+		rating?: number;
+		publisher_id?: string | null;
+	};
+}
+
+export interface BatchSetTagsRequest {
+	book_ids: string[];
+	tags: BookTagLink[];
+	mode: 'replace' | 'add';
+}
+
+export interface BatchUpdateResponse {
+	updated_count: number;
+	errors: Array<{ book_id: string; error: string }>;
+}
+
 // --- Identification types ---
 
 /** Series information included in a candidate response. */
