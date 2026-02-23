@@ -10,6 +10,7 @@ use axum::Json;
 use uuid::Uuid;
 use validator::Validate;
 
+use archivis_formats::sanitize::{sanitize_text, SanitizeOptions};
 use archivis_formats::CoverData;
 
 use archivis_db::{
@@ -177,14 +178,18 @@ pub async fn update_book(
     let pool = state.db_pool();
     let mut book = BookRepository::get_by_id(pool, id).await?;
 
-    if let Some(title) = body.title {
-        if title.is_empty() {
+    // Always strip dangerous content from user-submitted text
+    let sanitize_opts = SanitizeOptions::default();
+
+    if let Some(ref title) = body.title {
+        let clean = sanitize_text(title, &sanitize_opts).unwrap_or_default();
+        if clean.is_empty() {
             return Err(ApiError::Validation("title must not be empty".into()));
         }
-        book.set_title(title);
+        book.set_title(clean);
     }
-    if let Some(description) = body.description {
-        book.description = Some(description).filter(|s| !s.is_empty());
+    if let Some(ref description) = body.description {
+        book.description = sanitize_text(description, &sanitize_opts);
     }
     if let Some(language) = body.language {
         book.language = Some(language).filter(|s| !s.is_empty());

@@ -11,6 +11,7 @@ use archivis_db::{
     AuthorRepository, BookRepository, CandidateRepository, DbPool, IdentifierRepository,
     SeriesRepository,
 };
+use archivis_formats::sanitize::{sanitize_text, SanitizeOptions};
 use archivis_metadata::{
     ExistingBookMetadata, MetadataQuery, MetadataResolver, ProviderIdentifier, ProviderMetadata,
     ResolverResult, ScoredCandidate,
@@ -604,26 +605,27 @@ impl<S: StorageBackend> IdentificationService<S> {
 /// sources. User-edited fields are never overwritten.
 ///
 /// Fields listed in `exclude_fields` are skipped entirely.
+/// Provider text fields are sanitized before applying.
 fn merge_book_fields(
     book: &mut Book,
     provider_meta: &ProviderMetadata,
     exclude_fields: &HashSet<String>,
 ) {
-    // Title: overwrite with provider data
+    let sanitize_opts = SanitizeOptions::default();
+
+    // Title: overwrite with provider data (sanitized)
     if !exclude_fields.contains("title") {
         if let Some(ref title) = provider_meta.title {
-            if !title.is_empty() {
-                book.set_title(title);
+            if let Some(clean_title) = sanitize_text(title, &sanitize_opts) {
+                book.set_title(clean_title);
             }
         }
     }
 
-    // Description: fill if empty
+    // Description: fill if empty (sanitized)
     if !exclude_fields.contains("description") && book.description.is_none() {
         if let Some(ref desc) = provider_meta.description {
-            if !desc.is_empty() {
-                book.description = Some(desc.clone());
-            }
+            book.description = sanitize_text(desc, &sanitize_opts);
         }
     }
 

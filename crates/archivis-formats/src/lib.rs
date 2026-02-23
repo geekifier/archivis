@@ -2,6 +2,7 @@ pub mod detect;
 pub mod epub;
 pub mod filename;
 pub mod pdf;
+pub mod sanitize;
 pub mod scoring;
 pub mod similarity;
 
