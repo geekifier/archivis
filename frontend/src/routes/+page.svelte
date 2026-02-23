@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { SvelteSet } from 'svelte/reactivity';
 	import { api, type PaginatedBooks } from '$lib/api/index.js';
 	import type { SortField, SortOrder } from '$lib/api/index.js';
 	import { Button } from '$lib/components/ui/button/index.js';
@@ -8,6 +9,7 @@
 	import BookCard from '$lib/components/library/BookCard.svelte';
 	import BookListView from '$lib/components/library/BookListView.svelte';
 	import Pagination from '$lib/components/library/Pagination.svelte';
+	import BatchEditPanel from '$lib/components/library/BatchEditPanel.svelte';
 
 	const PER_PAGE = 24;
 	const DEBOUNCE_MS = 300;
@@ -49,6 +51,15 @@
 	let identifyAllCompleted = $state(0);
 	let identifyAllTotal = $state(0);
 	let identifyAllEventSources: EventSource[] = [];
+
+	// --- Selection mode state ---
+	let selectionMode = $state(false);
+	let selectedIds = new SvelteSet<string>();
+	let lastClickedId = $state<string | null>(null);
+	let batchEditOpen = $state(false);
+
+	const selectedCount = $derived(selectedIds.size);
+	const selectedArray = $derived(Array.from(selectedIds));
 
 	const sortBy = $derived(sortOptions[sortIndex].field);
 	const sortOrder = $derived(sortOptions[sortIndex].order);
@@ -100,6 +111,69 @@
 		// Sync dropdown if it matches a preset
 		const idx = sortOptions.findIndex((o) => o.field === field && o.order === order);
 		if (idx >= 0) sortIndex = idx;
+	}
+
+	// --- Selection mode ---
+
+	function toggleSelectionMode() {
+		selectionMode = !selectionMode;
+		if (!selectionMode) {
+			selectedIds.clear();
+			lastClickedId = null;
+		}
+	}
+
+	function exitSelectionMode() {
+		selectionMode = false;
+		selectedIds.clear();
+		lastClickedId = null;
+	}
+
+	function handleBookSelect(bookId: string, event?: MouseEvent) {
+		if (event?.shiftKey && lastClickedId && data) {
+			// Range selection: select all books between lastClickedId and bookId
+			const items = data.items;
+			const lastIdx = items.findIndex((b) => b.id === lastClickedId);
+			const currentIdx = items.findIndex((b) => b.id === bookId);
+			if (lastIdx >= 0 && currentIdx >= 0) {
+				const start = Math.min(lastIdx, currentIdx);
+				const end = Math.max(lastIdx, currentIdx);
+				for (let i = start; i <= end; i++) {
+					selectedIds.add(items[i].id);
+				}
+			}
+		} else {
+			// Toggle single selection
+			if (selectedIds.has(bookId)) {
+				selectedIds.delete(bookId);
+			} else {
+				selectedIds.add(bookId);
+			}
+		}
+
+		lastClickedId = bookId;
+	}
+
+	function handleCardSelect(bookId: string, event: MouseEvent) {
+		handleBookSelect(bookId, event);
+	}
+
+	function selectAll() {
+		if (!data) return;
+		for (const book of data.items) {
+			selectedIds.add(book.id);
+		}
+	}
+
+	function deselectAll() {
+		selectedIds.clear();
+	}
+
+	function handleBatchApply() {
+		// Refresh the book list and exit selection mode
+		exitSelectionMode();
+		// Trigger refresh by reassigning currentPage
+		currentPage = currentPage;
 	}
 
 	// Reset to page 1 when search, sort, or filters change
@@ -312,6 +386,27 @@
 				</Button>
 			{/if}
 
+			<!-- Selection mode toggle -->
+			<Button
+				size="sm"
+				variant={selectionMode ? 'default' : 'outline'}
+				onclick={toggleSelectionMode}
+			>
+				{#if selectionMode}
+					<svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+						<path d="M18 6 6 18" />
+						<path d="m6 6 12 12" />
+					</svg>
+					Exit Select
+				{:else}
+					<svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+						<polyline points="9 11 12 14 22 4" />
+						<path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
+					</svg>
+					Select
+				{/if}
+			</Button>
+
 			<!-- View toggle -->
 			<div class="flex rounded-md border border-input shadow-xs">
 				<Button
@@ -354,6 +449,35 @@
 			</select>
 		</div>
 	</div>
+
+	<!-- Selection toolbar -->
+	{#if selectionMode}
+		<div class="flex items-center gap-3 rounded-lg border border-primary/30 bg-primary/5 px-4 py-2">
+			<span class="text-sm font-medium">
+				{selectedCount} selected
+			</span>
+			<div class="flex items-center gap-1.5">
+				<Button size="sm" variant="ghost" class="h-7 text-xs" onclick={selectAll}>
+					Select All
+				</Button>
+				<Button size="sm" variant="ghost" class="h-7 text-xs" onclick={deselectAll} disabled={selectedCount === 0}>
+					Deselect All
+				</Button>
+			</div>
+			<div class="flex-1"></div>
+			<Button
+				size="sm"
+				onclick={() => (batchEditOpen = true)}
+				disabled={selectedCount === 0}
+			>
+				<svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+					<path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+					<path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+				</svg>
+				Edit Selected
+			</Button>
+		</div>
+	{/if}
 
 	<!-- Identify All progress -->
 	{#if identifyingAll || (identifyAllTotal > 0 && identifyAllCompleted > 0)}
@@ -491,7 +615,12 @@
 		{#if viewMode === 'grid'}
 			<div class="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
 				{#each data.items as book (book.id)}
-					<BookCard {book} />
+					<BookCard
+						{book}
+						{selectionMode}
+						selected={selectedIds.has(book.id)}
+						onselect={handleCardSelect}
+					/>
 				{/each}
 			</div>
 		{:else}
@@ -500,6 +629,9 @@
 				sortBy={activeSortBy}
 				sortOrder={activeSortOrder}
 				onSort={handleListSort}
+				{selectionMode}
+				{selectedIds}
+				onselect={(bookId, event) => handleBookSelect(bookId, event)}
 			/>
 		{/if}
 
@@ -549,3 +681,13 @@
 		</AlertDialog.Footer>
 	</AlertDialog.Content>
 </AlertDialog.Root>
+
+<!-- Batch edit panel -->
+{#if selectionMode && selectedArray.length > 0}
+	<BatchEditPanel
+		bookIds={selectedArray}
+		bind:open={batchEditOpen}
+		onclose={() => (batchEditOpen = false)}
+		onapply={handleBatchApply}
+	/>
+{/if}

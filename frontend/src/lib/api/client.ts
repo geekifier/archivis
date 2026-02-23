@@ -4,6 +4,9 @@ import type {
 	AddIdentifierRequest,
 	AuthorResponse,
 	AuthStatusResponse,
+	BatchSetTagsRequest,
+	BatchUpdateBooksRequest,
+	BatchUpdateResponse,
 	BookDetail,
 	BookListParams,
 	CandidateResponse,
@@ -194,6 +197,16 @@ export const api = {
 		/** Delete a book and all associated files. */
 		delete(id: string): Promise<void> {
 			return request<void>('DELETE', `/books/${encodeURIComponent(id)}`);
+		},
+
+		/** Batch update scalar fields across multiple books. */
+		batchUpdate(data: BatchUpdateBooksRequest): Promise<BatchUpdateResponse> {
+			return request<BatchUpdateResponse>('POST', '/books/batch-update', data);
+		},
+
+		/** Batch update tags across multiple books. */
+		batchTags(data: BatchSetTagsRequest): Promise<BatchUpdateResponse> {
+			return request<BatchUpdateResponse>('POST', '/books/batch-tags', data);
 		},
 
 		/** Upload or replace the cover image for a book. */
@@ -538,6 +551,9 @@ export type {
 	AuthorEntry,
 	AuthorResponse,
 	AuthStatusResponse,
+	BatchSetTagsRequest,
+	BatchUpdateBooksRequest,
+	BatchUpdateResponse,
 	BookAuthorLink,
 	BookDetail,
 	BookFormat,
