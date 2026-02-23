@@ -6,6 +6,7 @@ use archivis_db::{
     AuthorRepository, BookFileRepository, BookRepository, DbPool, IdentifierRepository,
     SeriesRepository, TagRepository,
 };
+use archivis_formats::sanitize::sanitize_text;
 use archivis_formats::{ExtractedMetadata, ParsedFilename};
 use archivis_storage::StorageBackend;
 use sha2::{Digest, Sha256};
@@ -205,9 +206,18 @@ impl<S: StorageBackend> ImportService<S> {
         let book_file_id = book_file.id;
 
         if is_new_book {
-            let mut book = Book::new(title);
+            // Sanitize text fields from embedded metadata
+            let sanitize_opts = &self.config.sanitize_options;
+            let clean_title =
+                sanitize_text(title, sanitize_opts).unwrap_or_else(|| title.to_string());
+            let clean_description = embedded
+                .description
+                .as_deref()
+                .and_then(|d| sanitize_text(d, sanitize_opts));
+
+            let mut book = Book::new(&clean_title);
             book.id = book_id;
-            book.description.clone_from(&embedded.description);
+            book.description = clean_description;
             book.language.clone_from(&embedded.language);
             book.page_count = embedded.page_count;
             book.metadata_status = score.status;
@@ -218,8 +228,9 @@ impl<S: StorageBackend> ImportService<S> {
             BookFileRepository::create(&self.db_pool, &book_file).await?;
             self.create_authors(book_id, embedded, parsed).await?;
             self.create_identifiers(book_id, embedded).await?;
-            self.create_tags(book_id, embedded).await?;
-            self.create_series(book_id, embedded, parsed).await?;
+            self.create_tags(book_id, embedded, sanitize_opts).await?;
+            self.create_series(book_id, embedded, parsed, sanitize_opts)
+                .await?;
         } else {
             BookFileRepository::create(&self.db_pool, &book_file).await?;
         }
@@ -397,10 +408,13 @@ impl<S: StorageBackend> ImportService<S> {
         &self,
         book_id: uuid::Uuid,
         embedded: &ExtractedMetadata,
+        sanitize_opts: &archivis_formats::sanitize::SanitizeOptions,
     ) -> Result<(), ImportError> {
         for subject in &embedded.subjects {
-            let tag =
-                TagRepository::find_or_create(&self.db_pool, subject, Some("subject")).await?;
+            let clean_subject =
+                sanitize_text(subject, sanitize_opts).unwrap_or_else(|| subject.clone());
+            let tag = TagRepository::find_or_create(&self.db_pool, &clean_subject, Some("subject"))
+                .await?;
             BookRepository::add_tag(&self.db_pool, book_id, tag.id).await?;
         }
         Ok(())
@@ -411,11 +425,13 @@ impl<S: StorageBackend> ImportService<S> {
         book_id: uuid::Uuid,
         embedded: &ExtractedMetadata,
         parsed: &ParsedFilename,
+        sanitize_opts: &archivis_formats::sanitize::SanitizeOptions,
     ) -> Result<(), ImportError> {
         let series_name = embedded.series.as_deref().or(parsed.series.as_deref());
 
         if let Some(name) = series_name {
-            let series = Series::new(name);
+            let clean_name = sanitize_text(name, sanitize_opts).unwrap_or_else(|| name.to_string());
+            let series = Series::new(&clean_name);
             SeriesRepository::create(&self.db_pool, &series).await?;
 
             let position = embedded

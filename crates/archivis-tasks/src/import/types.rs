@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use archivis_core::errors::{DbError, FormatError, StorageError};
+use archivis_formats::sanitize::SanitizeOptions;
 use uuid::Uuid;
 
 /// Configuration for the import service.
@@ -10,6 +11,8 @@ pub struct ImportConfig {
     pub data_dir: PathBuf,
     /// Thumbnail size targets.
     pub thumbnail_sizes: ThumbnailSizes,
+    /// Options for sanitizing metadata text fields during import.
+    pub sanitize_options: SanitizeOptions,
 }
 
 impl Default for ImportConfig {
@@ -17,6 +20,7 @@ impl Default for ImportConfig {
         Self {
             data_dir: PathBuf::from(".local"),
             thumbnail_sizes: ThumbnailSizes::default(),
+            sanitize_options: SanitizeOptions::default(),
         }
     }
 }
