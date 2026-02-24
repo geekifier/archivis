@@ -177,7 +177,7 @@
 						</td>
 					{/if}
 					{#each row.getVisibleCells() as cell (cell.id)}
-						<td class="px-3 py-1.5" style={getCellStyle(cell.column.getSize())}>
+						<td class="overflow-hidden px-3 py-1.5" style={getCellStyle(cell.column.getSize())}>
 							{#if cell.column.id === 'cover'}
 								{@const book = cell.row.original}
 								{#if selectionMode}
@@ -224,11 +224,11 @@
 							{:else if cell.column.id === 'title'}
 								{@const book = cell.row.original}
 								{#if selectionMode}
-									<span class="truncate font-medium text-foreground">
+									<span class="block truncate font-medium text-foreground">
 										{book.title}
 									</span>
 								{:else}
-									<a href="/books/{book.id}" class="truncate font-medium text-foreground hover:text-primary hover:underline">
+									<a href="/books/{book.id}" class="block truncate font-medium text-foreground hover:text-primary hover:underline">
 										{book.title}
 									</a>
 								{/if}
@@ -250,7 +250,7 @@
 									</span>
 								{/if}
 							{:else}
-								<span class="truncate text-muted-foreground">
+								<span class="block truncate text-muted-foreground">
 									<FlexRender content={cell.column.columnDef.cell} context={cell.getContext()} />
 								</span>
 							{/if}
