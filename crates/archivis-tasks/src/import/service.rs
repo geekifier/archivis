@@ -485,6 +485,11 @@ fn extract_metadata(format: BookFormat, data: &[u8]) -> ExtractedMetadata {
             warn!("PDF metadata extraction failed: {e}");
             ExtractedMetadata::default()
         }),
+        BookFormat::Mobi | BookFormat::Azw3 => archivis_formats::mobi::extract_mobi_metadata(data)
+            .unwrap_or_else(|e| {
+                warn!("MOBI metadata extraction failed: {e}");
+                ExtractedMetadata::default()
+            }),
         _ => ExtractedMetadata::default(),
     }
 }

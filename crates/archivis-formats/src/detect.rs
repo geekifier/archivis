@@ -46,6 +46,13 @@ pub fn detect(data: &[u8]) -> Result<BookFormat, FormatError> {
     if data.len() > PDB_TYPE_OFFSET + MOBI_MAGIC.len()
         && data[PDB_TYPE_OFFSET..].starts_with(MOBI_MAGIC)
     {
+        // Use mobi-book to distinguish KF8 (AZW3) from legacy MOBI
+        if let Ok(book) = mobi_book::MobiBook::new(data) {
+            if book.kf8_info().is_kf8 {
+                debug!("detected AZW3 (KF8) via mobi-book");
+                return Ok(BookFormat::Azw3);
+            }
+        }
         debug!("detected MOBI via PDB header magic");
         return Ok(BookFormat::Mobi);
     }

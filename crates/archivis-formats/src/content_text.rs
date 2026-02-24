@@ -31,6 +31,9 @@ pub struct ContentScanConfig {
     pub fb2_sections: usize,
     /// Bytes to read from front and back of TXT files (default: 4000).
     pub txt_bytes: usize,
+    /// Bytes to read from front and back of MOBI/AZW3 text (default: 8000).
+    /// Higher than TXT because MOBI text may contain HTML markup that inflates size.
+    pub mobi_bytes: usize,
 }
 
 impl Default for ContentScanConfig {
@@ -40,6 +43,7 @@ impl Default for ContentScanConfig {
             pdf_pages: 5,
             fb2_sections: 3,
             txt_bytes: 4000,
+            mobi_bytes: 8000,
         }
     }
 }
@@ -52,7 +56,7 @@ impl Default for ContentScanConfig {
 ///
 /// Reads a limited portion of the book (front and back) as configured.
 /// Returns `Ok(None)` for formats that are not supported for content scanning
-/// (MOBI, AZW3, CBZ, DJVU, Unknown).
+/// (CBZ, DJVU, Unknown).
 ///
 /// # Errors
 ///
@@ -67,11 +71,10 @@ pub fn extract_content_text(
         BookFormat::Pdf => extract_pdf_text(data, config).map(Some),
         BookFormat::Fb2 => extract_fb2_text(data, config).map(Some),
         BookFormat::Txt => Ok(Some(extract_txt_text(data, config))),
-        BookFormat::Mobi
-        | BookFormat::Azw3
-        | BookFormat::Cbz
-        | BookFormat::Djvu
-        | BookFormat::Unknown => Ok(None),
+        BookFormat::Mobi | BookFormat::Azw3 => {
+            crate::mobi::extract_mobi_text(data, config.mobi_bytes).map(Some)
+        }
+        BookFormat::Cbz | BookFormat::Djvu | BookFormat::Unknown => Ok(None),
     }
 }
 
@@ -464,11 +467,6 @@ mod tests {
     #[test]
     fn unsupported_format_returns_none() {
         let config = ContentScanConfig::default();
-        let result = extract_content_text(b"data", BookFormat::Mobi, &config).unwrap();
-        assert!(result.is_none());
-
-        let result = extract_content_text(b"data", BookFormat::Azw3, &config).unwrap();
-        assert!(result.is_none());
 
         let result = extract_content_text(b"data", BookFormat::Cbz, &config).unwrap();
         assert!(result.is_none());

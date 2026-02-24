@@ -3,6 +3,7 @@ pub mod detect;
 pub mod epub;
 pub mod filename;
 pub mod isbn_scan;
+pub mod mobi;
 pub mod pdf;
 pub mod sanitize;
 pub mod scoring;

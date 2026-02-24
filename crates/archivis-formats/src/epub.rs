@@ -375,7 +375,7 @@ fn parse_identifier(raw: &str, scheme: Option<&str>, meta: &mut ExtractedMetadat
 }
 
 /// Attempt to classify a normalised string as ISBN-13 or ISBN-10.
-fn classify_isbn(normalized: &str) -> Option<ExtractedIdentifier> {
+pub(crate) fn classify_isbn(normalized: &str) -> Option<ExtractedIdentifier> {
     // ISBN-13: exactly 13 digits, starts with 978 or 979.
     if normalized.len() == 13
         && normalized.chars().all(|c| c.is_ascii_digit())
