@@ -578,7 +578,7 @@
 	{#if loading}
 		{#if viewMode === 'grid'}
 			<!-- Skeleton grid -->
-			<div class="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
+			<div class="grid grid-cols-[repeat(auto-fill,minmax(150px,200px))] justify-center gap-4">
 				{#each skeletonIds as id (id)}
 					<div>
 						<div class="aspect-[2/3] w-full animate-pulse rounded-lg bg-muted"></div>
@@ -613,7 +613,7 @@
 		</div>
 	{:else if data && data.items.length > 0}
 		{#if viewMode === 'grid'}
-			<div class="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
+			<div class="grid grid-cols-[repeat(auto-fill,minmax(150px,200px))] justify-center gap-4">
 				{#each data.items as book (book.id)}
 					<BookCard
 						{book}
