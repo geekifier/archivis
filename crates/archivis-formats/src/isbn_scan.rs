@@ -217,4 +217,23 @@ mod tests {
         let results = scan_text_for_isbns("This is a normal sentence with no ISBNs.", false);
         assert!(results.is_empty());
     }
+
+    /// MOBI `filepos` byte offsets must not survive HTML tag stripping.
+    #[test]
+    fn mobi_filepos_not_matched_after_html_strip() {
+        use crate::content_text::strip_html_tags;
+
+        let mobi_html = concat!(
+            r#"<a filepos=0000116858><u>Chapter Four</u></a>"#,
+            r#"<a filepos=0000321046><u>Chapter Five</u></a>"#,
+        );
+        let mut stripped = String::new();
+        strip_html_tags(mobi_html, &mut stripped);
+
+        let results = scan_text_for_isbns(&stripped, true);
+        assert!(
+            results.is_empty(),
+            "filepos values must not appear after stripping: {stripped:?}"
+        );
+    }
 }

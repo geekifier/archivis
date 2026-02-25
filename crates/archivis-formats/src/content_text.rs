@@ -72,7 +72,10 @@ pub fn extract_content_text(
         BookFormat::Fb2 => extract_fb2_text(data, config).map(Some),
         BookFormat::Txt => Ok(Some(extract_txt_text(data, config))),
         BookFormat::Mobi | BookFormat::Azw3 => {
-            crate::mobi::extract_mobi_text(data, config.mobi_bytes).map(Some)
+            let raw = crate::mobi::extract_mobi_text(data, config.mobi_bytes)?;
+            let mut text = String::new();
+            strip_html_tags(&raw, &mut text);
+            Ok(Some(text))
         }
         BookFormat::Cbz | BookFormat::Djvu | BookFormat::Unknown => Ok(None),
     }
@@ -213,7 +216,7 @@ fn parse_spine_hrefs(opf_xml: &str, opf_dir: &str) -> Result<Vec<String>, Format
 }
 
 /// Strip HTML/XHTML tags from content, collecting only text nodes.
-fn strip_html_tags(html: &str, out: &mut String) {
+pub(crate) fn strip_html_tags(html: &str, out: &mut String) {
     let mut reader = Reader::from_str(html);
     loop {
         match reader.read_event() {
