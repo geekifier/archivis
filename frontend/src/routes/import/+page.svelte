@@ -1,11 +1,6 @@
 <script lang="ts">
 	import { api } from '$lib/api/index.js';
-	import type {
-		ScanManifestResponse,
-		TaskResponse,
-		TaskProgressEvent,
-		TaskStatus
-	} from '$lib/api/index.js';
+	import type { ScanManifestResponse, TaskResponse } from '$lib/api/index.js';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
 	import { Label } from '$lib/components/ui/label/index.js';
@@ -17,7 +12,15 @@
 		CardTitle
 	} from '$lib/components/ui/card/index.js';
 	import PathPicker from '$lib/components/library/PathPicker.svelte';
+	import ActiveTaskPanel from '$lib/components/tasks/ActiveTaskPanel.svelte';
+	import TaskStatusBadge from '$lib/components/tasks/TaskStatusBadge.svelte';
+	import {
+		taskTypeLabel,
+		formatRelativeTime,
+		isTerminalStatus
+	} from '$lib/components/tasks/task-utils.js';
 	import { formatFileSize } from '$lib/utils.js';
+	import { SvelteSet } from 'svelte/reactivity';
 
 	// --- Mode selection ---
 	type ImportMode = 'upload' | 'scan';
@@ -41,27 +44,33 @@
 
 	// --- Task progress state ---
 	let activeTaskIds = $state<string[]>([]);
-	let taskProgressMap = $state<Record<string, TaskProgressEvent>>({});
-	let eventSources: EventSource[] = [];
 
 	// --- Recent tasks ---
 	let recentTasks = $state<TaskResponse[]>([]);
 	let loadingTasks = $state(true);
 	let tasksError = $state<string | null>(null);
 
-	// Derived: are we tracking any tasks?
-	const hasActiveTasks = $derived(activeTaskIds.length > 0);
+	// Exclude tasks already shown in the ActiveTaskPanel, sort running first
+	const activeIdSet = $derived(new Set(activeTaskIds));
+	const sortedRecentTasks = $derived(
+		recentTasks
+			.filter((t) => !activeIdSet.has(t.id))
+			.sort((a, b) => {
+				const termA = isTerminalStatus(a.status) ? 1 : 0;
+				const termB = isTerminalStatus(b.status) ? 1 : 0;
+				if (termA !== termB) return termA - termB;
+				return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+			})
+	);
+
+	// Expandable recent task children
+	let expandedTaskIds = new SvelteSet<string>();
+	let taskChildrenMap = $state<Record<string, TaskResponse[]>>({});
+	let loadingChildren = new SvelteSet<string>();
 
 	// --- Load recent tasks on mount ---
 	$effect(() => {
 		loadRecentTasks();
-		return () => {
-			// Cleanup all SSE connections on unmount
-			for (const es of eventSources) {
-				es.close();
-			}
-			eventSources = [];
-		};
 	});
 
 	async function loadRecentTasks() {
@@ -69,6 +78,18 @@
 		tasksError = null;
 		try {
 			recentTasks = await api.tasks.list();
+			// Auto-detect running/pending tasks and add them to activeTaskIds
+			// so the ActiveTaskPanel picks them up after navigation
+			const runningIds = recentTasks
+				.filter((t) => !isTerminalStatus(t.status))
+				.map((t) => t.id);
+			if (runningIds.length > 0) {
+				const existing = new Set(activeTaskIds);
+				const newIds = runningIds.filter((id) => !existing.has(id));
+				if (newIds.length > 0) {
+					activeTaskIds = [...activeTaskIds, ...newIds];
+				}
+			}
 		} catch (err) {
 			tasksError = err instanceof Error ? err.message : 'Failed to load tasks';
 		} finally {
@@ -89,7 +110,6 @@
 		if (input.files) {
 			addFiles(Array.from(input.files));
 		}
-		// Reset input so the same file can be selected again
 		input.value = '';
 	}
 
@@ -132,7 +152,7 @@
 			const response = await api.import.upload(selectedFiles);
 			const taskIds = response.tasks.map((t) => t.task_id);
 			selectedFiles = [];
-			startTrackingTasks(taskIds);
+			activeTaskIds = [...activeTaskIds, ...taskIds];
 		} catch (err) {
 			uploadError = err instanceof Error ? err.message : 'Upload failed';
 		} finally {
@@ -166,7 +186,7 @@
 		try {
 			const response = await api.import.startImport(scanPath.trim());
 			manifest = null;
-			startTrackingTasks([response.task_id]);
+			activeTaskIds = [...activeTaskIds, response.task_id];
 		} catch (err) {
 			scanError = err instanceof Error ? err.message : 'Failed to start import';
 		} finally {
@@ -174,126 +194,27 @@
 		}
 	}
 
-	// --- SSE task progress tracking ---
-	function startTrackingTasks(taskIds: string[]) {
-		activeTaskIds = [...activeTaskIds, ...taskIds];
-
-		for (const taskId of taskIds) {
-			const es = new EventSource(`/api/tasks/${encodeURIComponent(taskId)}/progress`);
-
-			es.addEventListener('task:progress', (event: MessageEvent) => {
-				try {
-					const data = JSON.parse(event.data) as TaskProgressEvent;
-					taskProgressMap = { ...taskProgressMap, [taskId]: data };
-				} catch {
-					// Ignore malformed events
-				}
-			});
-
-			es.addEventListener('task:complete', (event: MessageEvent) => {
-				try {
-					const data = JSON.parse(event.data) as TaskProgressEvent;
-					taskProgressMap = {
-						...taskProgressMap,
-						[taskId]: { ...data, status: 'completed' as TaskStatus, progress: 100 }
-					};
-				} catch {
-					// Ignore malformed events
-				}
-				es.close();
-				removeEventSource(es);
-				loadRecentTasks();
-			});
-
-			es.addEventListener('task:error', (event: MessageEvent) => {
-				try {
-					const data = JSON.parse(event.data) as TaskProgressEvent;
-					taskProgressMap = {
-						...taskProgressMap,
-						[taskId]: { ...data, status: 'failed' as TaskStatus }
-					};
-				} catch {
-					// Ignore malformed events
-				}
-				es.close();
-				removeEventSource(es);
-				loadRecentTasks();
-			});
-
-			es.onerror = () => {
-				es.close();
-				removeEventSource(es);
-			};
-
-			eventSources.push(es);
+	// --- Expand/collapse recent task children ---
+	async function toggleChildren(taskId: string) {
+		if (expandedTaskIds.has(taskId)) {
+			expandedTaskIds.delete(taskId);
+			return;
 		}
-	}
 
-	function removeEventSource(es: EventSource) {
-		eventSources = eventSources.filter((e) => e !== es);
-	}
-
-	function dismissTask(taskId: string) {
-		activeTaskIds = activeTaskIds.filter((id) => id !== taskId);
-		const updated = { ...taskProgressMap };
-		delete updated[taskId];
-		taskProgressMap = updated;
-	}
-
-	function taskStatusLabel(status: TaskStatus): string {
-		switch (status) {
-			case 'pending':
-				return 'Pending';
-			case 'running':
-				return 'Running';
-			case 'completed':
-				return 'Completed';
-			case 'failed':
-				return 'Failed';
-			default:
-				return status;
+		// Load children if not cached
+		if (!taskChildrenMap[taskId]) {
+			loadingChildren.add(taskId);
+			try {
+				const children = await api.tasks.children(taskId);
+				taskChildrenMap = { ...taskChildrenMap, [taskId]: children };
+			} catch {
+				// Silently fail
+			} finally {
+				loadingChildren.delete(taskId);
+			}
 		}
-	}
 
-	function taskTypeLabel(taskType: string): string {
-		switch (taskType) {
-			case 'import_file':
-				return 'File Import';
-			case 'import_directory':
-				return 'Directory Import';
-			case 'scan_isbn':
-				return 'ISBN Scan';
-			default:
-				return taskType;
-		}
-	}
-
-	function formatRelativeTime(dateStr: string): string {
-		const date = new Date(dateStr);
-		const now = new Date();
-		const diffMs = now.getTime() - date.getTime();
-		const diffSec = Math.floor(diffMs / 1000);
-
-		if (diffSec < 60) return 'just now';
-		const diffMin = Math.floor(diffSec / 60);
-		if (diffMin < 60) return `${diffMin}m ago`;
-		const diffHr = Math.floor(diffMin / 60);
-		if (diffHr < 24) return `${diffHr}h ago`;
-		const diffDay = Math.floor(diffHr / 24);
-		return `${diffDay}d ago`;
-	}
-
-	function statusColorClass(status: TaskStatus | string): string {
-		switch (status) {
-			case 'completed':
-				return 'text-green-600 dark:text-green-400';
-			case 'failed':
-				return 'text-destructive';
-			case 'running':
-				return 'text-blue-600 dark:text-blue-400';
-			default:
-				return 'text-muted-foreground';
-		}
+		expandedTaskIds.add(taskId);
 	}
 </script>
 
@@ -638,149 +559,14 @@
 		</Card>
 	{/if}
 
-	<!-- Active task progress -->
-	{#if hasActiveTasks}
-		<Card>
-			<CardHeader>
-				<CardTitle>Import Progress</CardTitle>
-			</CardHeader>
-			<CardContent class="space-y-3">
-				{#each activeTaskIds as taskId (taskId)}
-					{@const progress = taskProgressMap[taskId]}
-					<div class="rounded-lg border border-border p-3">
-						<div class="flex items-center justify-between">
-							<span class="text-sm font-medium">
-								Task {taskId.slice(0, 8)}...
-							</span>
-							<div class="flex items-center gap-2">
-								{#if progress}
-									<span class="text-xs {statusColorClass(progress.status)}">
-										{taskStatusLabel(progress.status)}
-									</span>
-								{:else}
-									<span class="text-xs text-muted-foreground">Connecting...</span>
-								{/if}
-								{#if progress?.status === 'completed' || progress?.status === 'failed'}
-									<Button
-										variant="ghost"
-										size="icon-sm"
-										class="size-6"
-										onclick={() => dismissTask(taskId)}
-										aria-label="Dismiss"
-									>
-										<svg
-											class="size-3"
-											xmlns="http://www.w3.org/2000/svg"
-											viewBox="0 0 24 24"
-											fill="none"
-											stroke="currentColor"
-											stroke-width="2"
-											stroke-linecap="round"
-											stroke-linejoin="round"
-										>
-											<path d="M18 6 6 18" />
-											<path d="m6 6 12 12" />
-										</svg>
-									</Button>
-								{/if}
-							</div>
-						</div>
+	<!-- Active task progress (using new component) -->
+	<ActiveTaskPanel bind:taskIds={activeTaskIds} onAllDone={loadRecentTasks} />
 
-						<!-- Progress bar -->
-						<div class="mt-2 h-2 w-full overflow-hidden rounded-full bg-muted">
-							<div
-								class="h-full rounded-full transition-all duration-300
-								{progress?.status === 'failed' ? 'bg-destructive' : 'bg-primary'}"
-								style="width: {progress?.progress ?? 0}%"
-							></div>
-						</div>
-
-						<div class="mt-1.5 flex items-center justify-between text-xs text-muted-foreground">
-							<span>
-								{#if progress?.message}
-									{progress.message}
-								{:else if progress?.status === 'completed'}
-									Import complete
-								{:else if progress?.status === 'failed'}
-									{progress?.error ?? 'Import failed'}
-								{:else}
-									Waiting for progress...
-								{/if}
-							</span>
-							<span>{progress?.progress ?? 0}%</span>
-						</div>
-
-						<!-- Error details -->
-						{#if progress?.status === 'failed' && progress.error}
-							<p class="mt-2 text-xs text-destructive">{progress.error}</p>
-						{/if}
-
-						<!-- Completion result -->
-						{#if progress?.status === 'completed' && progress.result}
-							<div class="mt-2 rounded bg-muted/50 p-2 text-xs">
-								{#if progress.result.imported !== undefined}
-									<!-- Directory import result summary -->
-									<div class="flex flex-wrap gap-3">
-										<span>
-											<span class="font-semibold text-green-600 dark:text-green-400">{progress.result.imported}</span>
-											<span class="text-muted-foreground"> imported</span>
-										</span>
-										{#if Number(progress.result.skipped) > 0}
-											<span>
-												<span class="font-semibold text-amber-600 dark:text-amber-400">{progress.result.skipped}</span>
-												<span class="text-muted-foreground"> skipped</span>
-											</span>
-										{/if}
-										{#if Number(progress.result.failed) > 0}
-											<span>
-												<span class="font-semibold text-red-600 dark:text-red-400">{progress.result.failed}</span>
-												<span class="text-muted-foreground"> failed</span>
-											</span>
-										{/if}
-									</div>
-								{:else if progress.result.book_id}
-									<!-- Single file import result -->
-									<div class="flex items-center justify-between">
-										<span class="text-muted-foreground">Book imported successfully</span>
-										<a
-											href="/books/{progress.result.book_id}"
-											class="font-medium text-primary hover:underline"
-										>
-											View Book
-										</a>
-									</div>
-								{:else}
-									{#each Object.entries(progress.result) as [key, value] (key)}
-										<div class="flex justify-between">
-											<span class="text-muted-foreground">{key}:</span>
-											<span class="font-medium">{value}</span>
-										</div>
-									{/each}
-								{/if}
-							</div>
-							<div class="mt-2">
-								<a
-									href="/"
-									class="inline-flex items-center gap-1.5 text-xs font-medium text-primary hover:underline"
-								>
-									<svg class="size-3.5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-										<path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H19a1 1 0 0 1 1 1v18a1 1 0 0 1-1 1H6.5a1 1 0 0 1 0-5H20" />
-									</svg>
-									View Library
-								</a>
-							</div>
-						{/if}
-					</div>
-				{/each}
-			</CardContent>
-		</Card>
-	{/if}
-
-	<!-- Recent imports -->
+	<!-- Recent Activity -->
 	<Card>
 		<CardHeader>
 			<div class="flex items-center justify-between">
-				<CardTitle>Recent Imports</CardTitle>
+				<CardTitle>Recent Activity</CardTitle>
 				<Button variant="ghost" size="sm" onclick={loadRecentTasks}>
 					<svg
 						class="size-4"
@@ -820,38 +606,87 @@
 						</Button>
 					</div>
 				</div>
-			{:else if recentTasks.length === 0}
+			{:else if sortedRecentTasks.length === 0}
 				<div class="flex items-center justify-center rounded-lg border border-dashed border-border p-6">
-					<p class="text-sm text-muted-foreground">No import tasks yet.</p>
+					<p class="text-sm text-muted-foreground">No tasks yet.</p>
 				</div>
 			{:else}
 				<div class="space-y-2">
-					{#each recentTasks as task (task.id)}
-						<div class="flex items-center gap-3 rounded-md border border-border px-3 py-2 text-sm">
-							<span class="shrink-0 font-medium">
-								{taskTypeLabel(task.task_type)}
-							</span>
-							<span class="shrink-0 {statusColorClass(task.status)}">
-								{taskStatusLabel(task.status)}
-							</span>
-							{#if task.status === 'running'}
-								<div class="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
-									<div
-										class="h-full rounded-full bg-primary transition-all duration-300"
-										style="width: {task.progress}%"
-									></div>
+					{#each sortedRecentTasks as task (task.id)}
+						<div>
+							<div class="flex items-center gap-3 rounded-md border border-border px-3 py-2 text-sm">
+								<span class="shrink-0 font-medium">
+									{taskTypeLabel(task.task_type)}
+								</span>
+								<TaskStatusBadge status={task.status} />
+								{#if task.status === 'running'}
+									<div class="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
+										<div
+											class="h-full rounded-full bg-primary transition-all duration-300"
+											style="width: {task.progress}%"
+										></div>
+									</div>
+									<span class="shrink-0 text-xs text-muted-foreground">{task.progress}%</span>
+								{:else if task.message}
+									<span class="flex-1 truncate text-muted-foreground">{task.message}</span>
+								{:else if task.error_message}
+									<span class="flex-1 truncate text-destructive">{task.error_message}</span>
+								{:else}
+									<span class="flex-1"></span>
+								{/if}
+								<span class="shrink-0 text-xs text-muted-foreground">
+									{formatRelativeTime(task.created_at)}
+								</span>
+								<!-- Children indicator -->
+								{#if task.children_summary && task.children_summary.total > 0}
+									<button
+										class="shrink-0 text-xs text-muted-foreground hover:text-foreground"
+										onclick={() => toggleChildren(task.id)}
+										aria-label="Toggle subtasks"
+									>
+										<span class="inline-flex items-center gap-1">
+											{task.children_summary.total} subtask{task.children_summary.total === 1 ? '' : 's'}
+											<svg
+												class="size-3 transition-transform {expandedTaskIds.has(task.id) ? 'rotate-180' : ''}"
+												xmlns="http://www.w3.org/2000/svg"
+												viewBox="0 0 24 24"
+												fill="none"
+												stroke="currentColor"
+												stroke-width="2"
+												stroke-linecap="round"
+												stroke-linejoin="round"
+											>
+												<path d="m6 9 6 6 6-6" />
+											</svg>
+										</span>
+									</button>
+								{/if}
+							</div>
+							<!-- Expanded children -->
+							{#if expandedTaskIds.has(task.id)}
+								<div class="ml-4 mt-1 space-y-1 border-l-2 border-border pl-3">
+									{#if loadingChildren.has(task.id)}
+										<div class="py-2 text-xs text-muted-foreground">Loading subtasks...</div>
+									{:else if taskChildrenMap[task.id]}
+										{#each taskChildrenMap[task.id] as child (child.id)}
+											<div class="flex items-center gap-2 rounded px-2 py-1 text-xs">
+												<span class="shrink-0 font-medium">{taskTypeLabel(child.task_type)}</span>
+												<TaskStatusBadge status={child.status} />
+												{#if child.message}
+													<span class="flex-1 truncate text-muted-foreground">{child.message}</span>
+												{:else if child.error_message}
+													<span class="flex-1 truncate text-destructive">{child.error_message}</span>
+												{:else}
+													<span class="flex-1"></span>
+												{/if}
+												<span class="shrink-0 text-muted-foreground">
+													{formatRelativeTime(child.created_at)}
+												</span>
+											</div>
+										{/each}
+									{/if}
 								</div>
-								<span class="shrink-0 text-xs text-muted-foreground">{task.progress}%</span>
-							{:else if task.message}
-								<span class="flex-1 truncate text-muted-foreground">{task.message}</span>
-							{:else if task.error_message}
-								<span class="flex-1 truncate text-destructive">{task.error_message}</span>
-							{:else}
-								<span class="flex-1"></span>
 							{/if}
-							<span class="shrink-0 text-xs text-muted-foreground">
-								{formatRelativeTime(task.created_at)}
-							</span>
 						</div>
 					{/each}
 				</div>

@@ -57,6 +57,10 @@ pub trait ImportProgress: Send + Sync {
     fn on_file_start(&self, _index: usize, _path: &Path) {}
     fn on_file_complete(&self, _index: usize, _path: &Path, _outcome: &FileOutcome) {}
     fn on_import_complete(&self, _result: &BulkImportResult) {}
+    /// Check if the import should be cancelled. Default: never cancel.
+    fn should_cancel(&self) -> bool {
+        false
+    }
 }
 
 /// No-op progress reporter.

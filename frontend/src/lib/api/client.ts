@@ -486,7 +486,7 @@ export const api = {
 	},
 
 	tasks: {
-		/** List recent tasks. */
+		/** List recent top-level tasks. */
 		list(): Promise<TaskResponse[]> {
 			return request<TaskResponse[]>('GET', '/tasks');
 		},
@@ -494,6 +494,16 @@ export const api = {
 		/** Get a single task by ID. */
 		get(id: string): Promise<TaskResponse> {
 			return request<TaskResponse>('GET', `/tasks/${encodeURIComponent(id)}`);
+		},
+
+		/** List child tasks of a parent. */
+		children(id: string): Promise<TaskResponse[]> {
+			return request<TaskResponse[]>('GET', `/tasks/${encodeURIComponent(id)}/children`);
+		},
+
+		/** Cancel a running or pending task. */
+		cancel(id: string): Promise<TaskResponse> {
+			return request<TaskResponse>('POST', `/tasks/${encodeURIComponent(id)}/cancel`);
 		}
 	},
 
@@ -596,6 +606,7 @@ export type {
 	BrowseResponse,
 	CandidateResponse,
 	CandidateSeriesInfo,
+	ChildrenSummary,
 	CreateAuthorRequest,
 	CreatePublisherRequest,
 	DuplicateCountResponse,

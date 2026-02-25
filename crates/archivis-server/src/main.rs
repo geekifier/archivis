@@ -141,8 +141,16 @@ async fn init_services_and_router(
     );
     let progress = task_queue.progress_sender();
     let dispatcher_pool = db_pool.clone();
+    let cancellation_registry = Arc::clone(task_queue.cancellation_registry());
     tokio::spawn(async move {
-        queue::run_dispatcher(dispatch_rx, workers, progress, dispatcher_pool).await;
+        queue::run_dispatcher(
+            dispatch_rx,
+            workers,
+            progress,
+            dispatcher_pool,
+            cancellation_registry,
+        )
+        .await;
     });
 
     // Recover interrupted tasks from previous run

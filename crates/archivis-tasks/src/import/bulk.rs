@@ -171,6 +171,18 @@ impl<S: StorageBackend> BulkImportService<S> {
         let mut failed = Vec::new();
 
         for (index, entry) in manifest.files.iter().enumerate() {
+            // Check for cancellation before processing each file
+            if progress.should_cancel() {
+                info!(
+                    imported = imported.len(),
+                    skipped = skipped.len(),
+                    failed = failed.len(),
+                    remaining = manifest.files.len() - index,
+                    "bulk import cancelled"
+                );
+                break;
+            }
+
             progress.on_file_start(index, &entry.path);
 
             let outcome = match self.import_service.import_file(&entry.path).await {

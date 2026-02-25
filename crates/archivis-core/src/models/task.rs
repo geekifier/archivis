@@ -48,6 +48,7 @@ pub enum TaskStatus {
     Running,
     Completed,
     Failed,
+    Cancelled,
 }
 
 impl fmt::Display for TaskStatus {
@@ -57,6 +58,7 @@ impl fmt::Display for TaskStatus {
             Self::Running => write!(f, "running"),
             Self::Completed => write!(f, "completed"),
             Self::Failed => write!(f, "failed"),
+            Self::Cancelled => write!(f, "cancelled"),
         }
     }
 }
@@ -70,8 +72,16 @@ impl FromStr for TaskStatus {
             "running" => Ok(Self::Running),
             "completed" => Ok(Self::Completed),
             "failed" => Ok(Self::Failed),
+            "cancelled" => Ok(Self::Cancelled),
             other => Err(format!("unknown task status: {other}")),
         }
+    }
+}
+
+impl TaskStatus {
+    /// Returns `true` if the task is in a terminal state (completed, failed, or cancelled).
+    pub fn is_terminal(self) -> bool {
+        matches!(self, Self::Completed | Self::Failed | Self::Cancelled)
     }
 }
 
@@ -89,6 +99,7 @@ pub struct Task {
     pub started_at: Option<DateTime<Utc>>,
     pub completed_at: Option<DateTime<Utc>>,
     pub error_message: Option<String>,
+    pub parent_task_id: Option<Uuid>,
 }
 
 impl Task {
@@ -106,7 +117,15 @@ impl Task {
             started_at: None,
             completed_at: None,
             error_message: None,
+            parent_task_id: None,
         }
+    }
+
+    /// Create a new pending child task linked to a parent.
+    pub fn new_child(task_type: TaskType, payload: serde_json::Value, parent_id: Uuid) -> Self {
+        let mut task = Self::new(task_type, payload);
+        task.parent_task_id = Some(parent_id);
+        task
     }
 }
 
@@ -121,6 +140,12 @@ pub struct TaskProgress {
     pub result: Option<serde_json::Value>,
     /// Present only on failure.
     pub error: Option<String>,
+    /// Parent task ID for hierarchy grouping.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_task_id: Option<Uuid>,
+    /// Structured progress data (e.g. import counters).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data: Option<serde_json::Value>,
 }
 
 #[cfg(test)]
@@ -176,6 +201,7 @@ mod tests {
         assert_eq!(TaskStatus::Running.to_string(), "running");
         assert_eq!(TaskStatus::Completed.to_string(), "completed");
         assert_eq!(TaskStatus::Failed.to_string(), "failed");
+        assert_eq!(TaskStatus::Cancelled.to_string(), "cancelled");
         assert_eq!(
             "pending".parse::<TaskStatus>().unwrap(),
             TaskStatus::Pending,
@@ -183,6 +209,10 @@ mod tests {
         assert_eq!(
             "running".parse::<TaskStatus>().unwrap(),
             TaskStatus::Running,
+        );
+        assert_eq!(
+            "cancelled".parse::<TaskStatus>().unwrap(),
+            TaskStatus::Cancelled,
         );
         assert!("unknown".parse::<TaskStatus>().is_err());
     }
@@ -194,6 +224,21 @@ mod tests {
         assert_eq!(json, r#""completed""#);
         let deserialized: TaskStatus = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized, ts);
+
+        let ts2 = TaskStatus::Cancelled;
+        let json2 = serde_json::to_string(&ts2).unwrap();
+        assert_eq!(json2, r#""cancelled""#);
+        let deserialized2: TaskStatus = serde_json::from_str(&json2).unwrap();
+        assert_eq!(deserialized2, ts2);
+    }
+
+    #[test]
+    fn task_status_is_terminal() {
+        assert!(!TaskStatus::Pending.is_terminal());
+        assert!(!TaskStatus::Running.is_terminal());
+        assert!(TaskStatus::Completed.is_terminal());
+        assert!(TaskStatus::Failed.is_terminal());
+        assert!(TaskStatus::Cancelled.is_terminal());
     }
 
     #[test]
@@ -210,5 +255,18 @@ mod tests {
         assert!(task.started_at.is_none());
         assert!(task.completed_at.is_none());
         assert!(task.error_message.is_none());
+        assert!(task.parent_task_id.is_none());
+    }
+
+    #[test]
+    fn new_child_task_has_parent() {
+        let parent_id = Uuid::new_v4();
+        let task = Task::new_child(
+            TaskType::ScanIsbn,
+            serde_json::json!({"book_id": "abc"}),
+            parent_id,
+        );
+        assert_eq!(task.parent_task_id, Some(parent_id));
+        assert_eq!(task.task_type, TaskType::ScanIsbn);
     }
 }

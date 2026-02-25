@@ -1,5 +1,7 @@
+pub mod cancellation;
 mod worker;
 
+pub use cancellation::CancellationRegistry;
 pub use worker::{ProgressSender, Worker};
 
 use std::collections::HashMap;
@@ -19,6 +21,7 @@ pub struct TaskQueue {
     db_pool: DbPool,
     dispatch_tx: mpsc::Sender<Task>,
     progress_tx: broadcast::Sender<TaskProgress>,
+    cancellation_registry: Arc<CancellationRegistry>,
 }
 
 impl TaskQueue {
@@ -34,6 +37,7 @@ impl TaskQueue {
             db_pool,
             dispatch_tx,
             progress_tx,
+            cancellation_registry: Arc::new(CancellationRegistry::new()),
         };
 
         (queue, dispatch_rx)
@@ -61,6 +65,29 @@ impl TaskQueue {
         Ok(task_id)
     }
 
+    /// Enqueue a child task linked to a parent. Persists it and sends for dispatch.
+    pub async fn enqueue_child(
+        &self,
+        task_type: TaskType,
+        payload: serde_json::Value,
+        parent_id: uuid::Uuid,
+    ) -> Result<uuid::Uuid, TaskError> {
+        let task = Task::new_child(task_type, payload, parent_id);
+        let task_id = task.id;
+
+        TaskRepository::create(&self.db_pool, &task)
+            .await
+            .map_err(|e| TaskError::Internal(e.to_string()))?;
+
+        self.dispatch_tx
+            .send(task)
+            .await
+            .map_err(|_| TaskError::QueueFull)?;
+
+        tracing::info!(%task_id, %task_type, %parent_id, "child task enqueued");
+        Ok(task_id)
+    }
+
     /// Subscribe to progress updates for all tasks.
     pub fn subscribe_all(&self) -> broadcast::Receiver<TaskProgress> {
         self.progress_tx.subscribe()
@@ -80,6 +107,11 @@ impl TaskQueue {
     pub fn dispatch_sender(&self) -> mpsc::Sender<Task> {
         self.dispatch_tx.clone()
     }
+
+    /// Get the cancellation registry.
+    pub fn cancellation_registry(&self) -> &Arc<CancellationRegistry> {
+        &self.cancellation_registry
+    }
 }
 
 /// Run the task dispatcher loop.
@@ -91,12 +123,19 @@ pub async fn run_dispatcher<S: ::std::hash::BuildHasher>(
     workers: HashMap<TaskType, Arc<dyn Worker>, S>,
     progress: ProgressSender,
     db_pool: DbPool,
+    cancellation_registry: Arc<CancellationRegistry>,
 ) {
     tracing::info!(worker_count = workers.len(), "task dispatcher started",);
 
     while let Some(task) = rx.recv().await {
         let task_id = task.id;
         let task_type = task.task_type;
+
+        // Skip cancelled tasks (e.g. pending children that were cancelled before dispatch)
+        if task.status == TaskStatus::Cancelled {
+            tracing::debug!(%task_id, "skipping already-cancelled task");
+            continue;
+        }
 
         let Some(worker) = workers.get(&task_type) else {
             tracing::error!(%task_id, %task_type, "no worker registered for task type");
@@ -114,20 +153,36 @@ pub async fn run_dispatcher<S: ::std::hash::BuildHasher>(
         };
 
         let worker = Arc::clone(worker);
-        let progress = progress.for_task(task_id);
+        let token = cancellation_registry.register(task_id);
+        let progress = progress
+            .for_task(task_id)
+            .with_parent(task.parent_task_id)
+            .with_cancellation_token(token);
         let pool = db_pool.clone();
+        let registry = Arc::clone(&cancellation_registry);
 
         tokio::spawn(async move {
-            dispatch_task(task_id, task.payload, &*worker, progress, &pool).await;
+            dispatch_task(
+                task_id,
+                task.parent_task_id,
+                task.payload,
+                &*worker,
+                progress,
+                &pool,
+            )
+            .await;
+            registry.remove(task_id);
         });
     }
 
     tracing::info!("task dispatcher stopped");
 }
 
-/// Execute a single task: mark running, call worker, mark completed/failed.
+/// Execute a single task: mark running, call worker, mark completed/failed/cancelled.
+#[allow(clippy::too_many_lines)]
 async fn dispatch_task(
     task_id: uuid::Uuid,
+    parent_task_id: Option<uuid::Uuid>,
     payload: serde_json::Value,
     worker: &dyn Worker,
     progress: ProgressSender,
@@ -177,10 +232,48 @@ async fn dispatch_task(
                 message: None,
                 result: Some(result),
                 error: None,
+                parent_task_id,
+                data: None,
             };
             let _ = progress.tx.send(update);
 
             tracing::info!(%task_id, "task completed");
+        }
+        Err(TaskError::Cancelled) => {
+            let completed_at = Utc::now();
+            if let Err(db_err) = TaskRepository::update_status(
+                pool,
+                task_id,
+                TaskStatus::Cancelled,
+                None,
+                Some(completed_at),
+                None,
+                None,
+            )
+            .await
+            {
+                tracing::error!(%task_id, error = %db_err, "failed to mark task as cancelled");
+            }
+
+            // Cancel pending children
+            if let Err(e) = TaskRepository::cancel_pending_children(pool, task_id).await {
+                tracing::warn!(%task_id, error = %e, "failed to cancel pending children");
+            }
+
+            // Broadcast cancellation
+            let update = TaskProgress {
+                task_id,
+                status: TaskStatus::Cancelled,
+                progress: 0,
+                message: Some("Task cancelled".into()),
+                result: None,
+                error: None,
+                parent_task_id,
+                data: None,
+            };
+            let _ = progress.tx.send(update);
+
+            tracing::info!(%task_id, "task cancelled");
         }
         Err(e) => {
             let completed_at = Utc::now();
@@ -207,6 +300,8 @@ async fn dispatch_task(
                 message: None,
                 result: None,
                 error: Some(error_msg.clone()),
+                parent_task_id,
+                data: None,
             };
             let _ = progress.tx.send(update);
 

@@ -73,18 +73,21 @@ impl<S: StorageBackend + 'static> Worker for ImportFileWorker<S> {
                 .send_progress(100, Some("Import complete".into()))
                 .await;
 
-            // Enqueue ISBN content scan if enabled
+            // Enqueue ISBN content scan as a child task if enabled
             if self.isbn_scan_on_import {
                 if let Some(queue) = &self.task_queue {
                     let scan_payload = serde_json::json!({
                         "book_id": result.book_id.to_string(),
                     });
-                    match queue.enqueue(TaskType::ScanIsbn, scan_payload).await {
+                    match queue
+                        .enqueue_child(TaskType::ScanIsbn, scan_payload, progress.task_id())
+                        .await
+                    {
                         Ok(task_id) => {
                             tracing::debug!(
                                 %task_id,
                                 book_id = %result.book_id,
-                                "enqueued ISBN scan after import",
+                                "enqueued ISBN scan as child of import",
                             );
                         }
                         Err(e) => {
@@ -169,11 +172,16 @@ impl<S: StorageBackend + 'static> Worker for ImportDirectoryWorker<S> {
                 .await
                 .map_err(|e| TaskError::Failed(e.to_string()))?;
 
+            // Check if we were cancelled mid-import
+            if progress.is_cancelled() {
+                return Err(TaskError::Cancelled);
+            }
+
             progress
                 .send_progress(100, Some("Directory import complete".into()))
                 .await;
 
-            // Enqueue batch ISBN content scan for all successfully imported books
+            // Enqueue batch ISBN content scan as a child task for all successfully imported books
             if self.isbn_scan_on_import && !result.imported.is_empty() {
                 if let Some(queue) = &self.task_queue {
                     let book_ids: Vec<String> = result
@@ -184,12 +192,15 @@ impl<S: StorageBackend + 'static> Worker for ImportDirectoryWorker<S> {
                     let scan_payload = serde_json::json!({
                         "book_ids": book_ids,
                     });
-                    match queue.enqueue(TaskType::ScanIsbn, scan_payload).await {
+                    match queue
+                        .enqueue_child(TaskType::ScanIsbn, scan_payload, progress.task_id())
+                        .await
+                    {
                         Ok(task_id) => {
                             tracing::debug!(
                                 %task_id,
                                 count = book_ids.len(),
-                                "enqueued batch ISBN scan after directory import",
+                                "enqueued batch ISBN scan as child of directory import",
                             );
                         }
                         Err(e) => {
@@ -224,6 +235,9 @@ impl<S: StorageBackend + 'static> Worker for ImportDirectoryWorker<S> {
 struct BroadcastProgress {
     sender: ProgressSender,
     total_files: AtomicUsize,
+    imported: AtomicUsize,
+    skipped: AtomicUsize,
+    failed: AtomicUsize,
 }
 
 impl BroadcastProgress {
@@ -231,6 +245,9 @@ impl BroadcastProgress {
         Self {
             sender,
             total_files: AtomicUsize::new(0),
+            imported: AtomicUsize::new(0),
+            skipped: AtomicUsize::new(0),
+            failed: AtomicUsize::new(0),
         }
     }
 }
@@ -257,17 +274,43 @@ impl ImportProgress for BroadcastProgress {
         });
     }
 
-    fn on_file_complete(&self, index: usize, _path: &std::path::Path, _outcome: &FileOutcome) {
+    fn on_file_complete(&self, index: usize, _path: &std::path::Path, outcome: &FileOutcome) {
+        // Update counters
+        match outcome {
+            FileOutcome::Imported(_) => {
+                self.imported.fetch_add(1, Ordering::SeqCst);
+            }
+            FileOutcome::Skipped(_) => {
+                self.skipped.fetch_add(1, Ordering::SeqCst);
+            }
+            FileOutcome::Failed(_) => {
+                self.failed.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
         let total = self.total_files.load(Ordering::SeqCst);
         if total == 0 {
             return;
         }
+        let processed = index + 1;
         #[allow(clippy::cast_possible_truncation)]
-        let progress = (((index + 1) * 100) / total) as u8;
-        let message = Some(format!("{}/{} files processed", index + 1, total));
+        let progress = ((processed * 100) / total) as u8;
+        let message = Some(format!("{processed}/{total} files processed"));
+
+        // Structured progress data
+        let data = Some(serde_json::json!({
+            "processed": processed,
+            "total": total,
+            "imported": self.imported.load(Ordering::SeqCst),
+            "skipped": self.skipped.load(Ordering::SeqCst),
+            "failed": self.failed.load(Ordering::SeqCst),
+        }));
+
         let sender = self.sender.clone();
         tokio::spawn(async move {
-            sender.send_progress(progress, message).await;
+            sender
+                .send_progress_with_data(progress, message, data)
+                .await;
         });
     }
 
@@ -282,5 +325,9 @@ impl ImportProgress for BroadcastProgress {
         tokio::spawn(async move {
             sender.send_progress(100, message).await;
         });
+    }
+
+    fn should_cancel(&self) -> bool {
+        self.sender.is_cancelled()
     }
 }

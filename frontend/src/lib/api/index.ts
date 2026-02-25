@@ -15,6 +15,7 @@ export type {
 	BrowseResponse,
 	CandidateResponse,
 	CandidateSeriesInfo,
+	ChildrenSummary,
 	DuplicateCountResponse,
 	DuplicateLinkResponse,
 	FileEntry,

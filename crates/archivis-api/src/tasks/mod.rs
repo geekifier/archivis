@@ -2,7 +2,10 @@ pub mod handlers;
 pub mod sse;
 pub mod types;
 
-use axum::{routing::get, Router};
+use axum::{
+    routing::{get, post},
+    Router,
+};
 
 use crate::state::AppState;
 
@@ -13,4 +16,6 @@ pub fn router() -> Router<AppState> {
         .route("/active", get(sse::active_tasks_sse))
         .route("/{id}", get(handlers::get_task))
         .route("/{id}/progress", get(sse::task_progress_sse))
+        .route("/{id}/children", get(handlers::list_children))
+        .route("/{id}/cancel", post(handlers::cancel_task))
 }

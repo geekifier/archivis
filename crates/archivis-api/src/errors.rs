@@ -103,6 +103,9 @@ fn map_core_error(err: &ArchivisError) -> (StatusCode, String) {
                 "internal server error".into(),
             )
         }
+        ArchivisError::Task(archivis_core::errors::TaskError::Cancelled) => {
+            (StatusCode::CONFLICT, "task was cancelled".into())
+        }
         ArchivisError::Task(task_err) => {
             tracing::error!(error = %task_err, "task error");
             (

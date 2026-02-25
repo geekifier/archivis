@@ -286,7 +286,7 @@ export interface BrowseResponse {
 // --- Import types ---
 
 export type TaskType = 'import_file' | 'import_directory' | 'identify_book' | 'scan_isbn';
-export type TaskStatus = 'pending' | 'running' | 'completed' | 'failed';
+export type TaskStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
 
 export interface TaskCreatedResponse {
 	task_id: string;
@@ -308,6 +308,15 @@ export interface ScanManifestResponse {
 	formats: FormatSummary[];
 }
 
+export interface ChildrenSummary {
+	total: number;
+	pending: number;
+	running: number;
+	completed: number;
+	failed: number;
+	cancelled: number;
+}
+
 export interface TaskResponse {
 	id: string;
 	task_type: TaskType;
@@ -319,6 +328,8 @@ export interface TaskResponse {
 	started_at: string | null;
 	completed_at: string | null;
 	error_message: string | null;
+	parent_task_id: string | null;
+	children_summary?: ChildrenSummary | null;
 }
 
 /** SSE progress event data for a single task. */
@@ -329,6 +340,8 @@ export interface TaskProgressEvent {
 	message: string | null;
 	result: Record<string, unknown> | null;
 	error: string | null;
+	parent_task_id?: string | null;
+	data?: Record<string, unknown> | null;
 }
 
 // --- Identifier management types ---

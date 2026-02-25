@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id, task_type, payload, status, progress, message, result, created_at, started_at, completed_at, error_message FROM tasks WHERE id = ?",
+  "query": "SELECT id, task_type, payload, status, progress, message, result, created_at, started_at, completed_at, error_message, parent_task_id FROM tasks WHERE status = 'pending' ORDER BY created_at ASC",
   "describe": {
     "columns": [
       {
@@ -57,10 +57,15 @@
         "name": "error_message",
         "ordinal": 10,
         "type_info": "Text"
+      },
+      {
+        "name": "parent_task_id",
+        "ordinal": 11,
+        "type_info": "Text"
       }
     ],
     "parameters": {
-      "Right": 1
+      "Right": 0
     },
     "nullable": [
       false,
@@ -73,8 +78,9 @@
       false,
       true,
       true,
+      true,
       true
     ]
   },
-  "hash": "535248e4b48ee06842e82cee4ab6054eebbae76f9e87decf16f7d948b22f9102"
+  "hash": "3e06200a74fad5a9919df476c8aac6be846f347d93d9d35ae4663e1612153905"
 }

@@ -20,6 +20,7 @@ fn progress_to_event(status: TaskStatus, data: serde_json::Value) -> Option<Even
     let event_name = match status {
         TaskStatus::Completed => "task:complete",
         TaskStatus::Failed => "task:error",
+        TaskStatus::Cancelled => "task:cancelled",
         _ => "task:progress",
     };
     Event::default().event(event_name).json_data(data).ok()
@@ -27,7 +28,7 @@ fn progress_to_event(status: TaskStatus, data: serde_json::Value) -> Option<Even
 
 /// GET /api/tasks/{id}/progress -- SSE stream for a specific task's progress.
 ///
-/// If the task is already in a terminal state (completed/failed), a single
+/// If the task is already in a terminal state (completed/failed/cancelled), a single
 /// final event is sent and the stream ends.  Otherwise, the stream subscribes
 /// to progress updates and forwards events until the task reaches a terminal
 /// state.
@@ -50,7 +51,7 @@ pub async fn task_progress_sse(
     // Verify the task exists and check its current status.
     let task = TaskRepository::get_by_id(state.db_pool(), task_id).await?;
 
-    if task.status == TaskStatus::Completed || task.status == TaskStatus::Failed {
+    if task.status.is_terminal() {
         // Task already finished -- send one terminal event and close.
         let data = serde_json::to_value(&task).expect("serialization of Task should not fail");
         let event =
@@ -77,8 +78,7 @@ pub async fn task_progress_sse(
             _ => return None, // Different task or lagged -- skip.
         };
 
-        let is_terminal =
-            progress.status == TaskStatus::Completed || progress.status == TaskStatus::Failed;
+        let is_terminal = progress.status.is_terminal();
 
         let data = serde_json::to_value(&progress).ok()?;
         let event = progress_to_event(progress.status, data)?;
@@ -101,7 +101,7 @@ pub async fn task_progress_sse(
 
 /// GET /api/tasks/active -- SSE stream for all active task progress.
 ///
-/// Broadcasts every progress / completion / failure event from the task queue.
+/// Broadcasts every progress / completion / failure / cancellation event from the task queue.
 /// The stream stays open indefinitely until the client disconnects.
 #[utoipa::path(
     get,

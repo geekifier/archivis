@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE tasks SET status = 'cancelled', completed_at = ? WHERE parent_task_id = ? AND status = 'pending'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "ff8d6194ac9bb3691da0f3389a296311d8710a8f9611819fece4604ed70e2ee6"
+}

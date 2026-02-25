@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT\n                COUNT(*) as \"total!: i64\",\n                COALESCE(SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END), 0) as \"pending!: i64\",\n                COALESCE(SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END), 0) as \"running!: i64\",\n                COALESCE(SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END), 0) as \"completed!: i64\",\n                COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) as \"failed!: i64\",\n                COALESCE(SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END), 0) as \"cancelled!: i64\"\n            FROM tasks WHERE parent_task_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "total!: i64",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "pending!: i64",
+        "ordinal": 1,
+        "type_info": "Integer"
+      },
+      {
+        "name": "running!: i64",
+        "ordinal": 2,
+        "type_info": "Integer"
+      },
+      {
+        "name": "completed!: i64",
+        "ordinal": 3,
+        "type_info": "Integer"
+      },
+      {
+        "name": "failed!: i64",
+        "ordinal": 4,
+        "type_info": "Integer"
+      },
+      {
+        "name": "cancelled!: i64",
+        "ordinal": 5,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "653760850fd11d236f8ef86bcbaae2998042b265d6c2d68ee803767c410591a1"
+}

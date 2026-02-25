@@ -4,6 +4,17 @@ use chrono::{DateTime, Utc};
 use sqlx::SqlitePool;
 use uuid::Uuid;
 
+/// Summary of child task statuses for a parent task.
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct ChildTaskSummary {
+    pub total: i64,
+    pub pending: i64,
+    pub running: i64,
+    pub completed: i64,
+    pub failed: i64,
+    pub cancelled: i64,
+}
+
 pub struct TaskRepository;
 
 impl TaskRepository {
@@ -17,10 +28,11 @@ impl TaskRepository {
         let started_at = task.started_at.map(|t| t.to_rfc3339());
         let completed_at = task.completed_at.map(|t| t.to_rfc3339());
         let result = task.result.as_ref().map(ToString::to_string);
+        let parent_id = task.parent_task_id.map(|id| id.to_string());
 
         sqlx::query!(
-            "INSERT INTO tasks (id, task_type, payload, status, progress, message, result, created_at, started_at, completed_at, error_message)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO tasks (id, task_type, payload, status, progress, message, result, created_at, started_at, completed_at, error_message, parent_task_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             id,
             task_type,
             payload,
@@ -32,6 +44,7 @@ impl TaskRepository {
             started_at,
             completed_at,
             task.error_message,
+            parent_id,
         )
         .execute(pool)
         .await
@@ -44,7 +57,7 @@ impl TaskRepository {
         let id_str = id.to_string();
         let row = sqlx::query_as!(
             TaskRow,
-            "SELECT id, task_type, payload, status, progress, message, result, created_at, started_at, completed_at, error_message FROM tasks WHERE id = ?",
+            "SELECT id, task_type, payload, status, progress, message, result, created_at, started_at, completed_at, error_message, parent_task_id FROM tasks WHERE id = ?",
             id_str,
         )
         .fetch_optional(pool)
@@ -62,7 +75,7 @@ impl TaskRepository {
     pub async fn list_active(pool: &SqlitePool) -> Result<Vec<Task>, DbError> {
         let rows = sqlx::query_as!(
             TaskRow,
-            "SELECT id, task_type, payload, status, progress, message, result, created_at, started_at, completed_at, error_message FROM tasks WHERE status IN ('pending', 'running') ORDER BY created_at ASC",
+            "SELECT id, task_type, payload, status, progress, message, result, created_at, started_at, completed_at, error_message, parent_task_id FROM tasks WHERE status IN ('pending', 'running') ORDER BY created_at ASC",
         )
         .fetch_all(pool)
         .await
@@ -71,11 +84,11 @@ impl TaskRepository {
         rows.into_iter().map(TaskRow::into_task).collect()
     }
 
-    /// List the most recent tasks, regardless of status.
+    /// List the most recent top-level tasks (no parent), regardless of status.
     pub async fn list_recent(pool: &SqlitePool, limit: i64) -> Result<Vec<Task>, DbError> {
         let rows = sqlx::query_as!(
             TaskRow,
-            "SELECT id, task_type, payload, status, progress, message, result, created_at, started_at, completed_at, error_message FROM tasks ORDER BY created_at DESC LIMIT ?",
+            "SELECT id, task_type, payload, status, progress, message, result, created_at, started_at, completed_at, error_message, parent_task_id FROM tasks WHERE parent_task_id IS NULL ORDER BY created_at DESC LIMIT ?",
             limit,
         )
         .fetch_all(pool)
@@ -83,6 +96,73 @@ impl TaskRepository {
         .map_err(|e| DbError::Query(e.to_string()))?;
 
         rows.into_iter().map(TaskRow::into_task).collect()
+    }
+
+    /// List child tasks of a given parent.
+    pub async fn list_children(pool: &SqlitePool, parent_id: Uuid) -> Result<Vec<Task>, DbError> {
+        let parent_str = parent_id.to_string();
+        let rows = sqlx::query_as!(
+            TaskRow,
+            "SELECT id, task_type, payload, status, progress, message, result, created_at, started_at, completed_at, error_message, parent_task_id FROM tasks WHERE parent_task_id = ? ORDER BY created_at ASC",
+            parent_str,
+        )
+        .fetch_all(pool)
+        .await
+        .map_err(|e| DbError::Query(e.to_string()))?;
+
+        rows.into_iter().map(TaskRow::into_task).collect()
+    }
+
+    /// Get a summary of child task statuses for a parent.
+    pub async fn child_summary(
+        pool: &SqlitePool,
+        parent_id: Uuid,
+    ) -> Result<ChildTaskSummary, DbError> {
+        let parent_str = parent_id.to_string();
+        let row = sqlx::query!(
+            r#"SELECT
+                COUNT(*) as "total!: i64",
+                COALESCE(SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END), 0) as "pending!: i64",
+                COALESCE(SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END), 0) as "running!: i64",
+                COALESCE(SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END), 0) as "completed!: i64",
+                COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) as "failed!: i64",
+                COALESCE(SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END), 0) as "cancelled!: i64"
+            FROM tasks WHERE parent_task_id = ?"#,
+            parent_str,
+        )
+        .fetch_one(pool)
+        .await
+        .map_err(|e| DbError::Query(e.to_string()))?;
+
+        Ok(ChildTaskSummary {
+            total: row.total,
+            pending: row.pending,
+            running: row.running,
+            completed: row.completed,
+            failed: row.failed,
+            cancelled: row.cancelled,
+        })
+    }
+
+    /// Cancel all pending children of a parent task.
+    /// Returns the number of tasks cancelled.
+    pub async fn cancel_pending_children(
+        pool: &SqlitePool,
+        parent_id: Uuid,
+    ) -> Result<u64, DbError> {
+        let parent_str = parent_id.to_string();
+        let now = Utc::now().to_rfc3339();
+
+        let result = sqlx::query!(
+            "UPDATE tasks SET status = 'cancelled', completed_at = ? WHERE parent_task_id = ? AND status = 'pending'",
+            now,
+            parent_str,
+        )
+        .execute(pool)
+        .await
+        .map_err(|e| DbError::Query(e.to_string()))?;
+
+        Ok(result.rows_affected())
     }
 
     /// Update a task's status and optional timestamp/error fields.
@@ -156,7 +236,7 @@ impl TaskRepository {
 
     /// Recover tasks that were running when the application was interrupted.
     /// Resets them to pending so they can be re-dispatched.
-    /// Returns the recovered tasks.
+    /// Skips cancelled tasks. Returns the recovered tasks.
     pub async fn recover_interrupted(pool: &SqlitePool) -> Result<Vec<Task>, DbError> {
         sqlx::query!(
             "UPDATE tasks SET status = 'pending', started_at = NULL, progress = 0, message = 'recovered after restart' WHERE status = 'running'",
@@ -165,10 +245,11 @@ impl TaskRepository {
         .await
         .map_err(|e| DbError::Query(e.to_string()))?;
 
-        // Return all pending tasks (includes both previously pending and just-recovered)
+        // Return all pending tasks (includes both previously pending and just-recovered).
+        // Cancelled tasks are left as-is.
         let rows = sqlx::query_as!(
             TaskRow,
-            "SELECT id, task_type, payload, status, progress, message, result, created_at, started_at, completed_at, error_message FROM tasks WHERE status = 'pending' ORDER BY created_at ASC",
+            "SELECT id, task_type, payload, status, progress, message, result, created_at, started_at, completed_at, error_message, parent_task_id FROM tasks WHERE status = 'pending' ORDER BY created_at ASC",
         )
         .fetch_all(pool)
         .await
@@ -193,6 +274,7 @@ struct TaskRow {
     started_at: Option<String>,
     completed_at: Option<String>,
     error_message: Option<String>,
+    parent_task_id: Option<String>,
 }
 
 impl TaskRow {
@@ -220,6 +302,11 @@ impl TaskRow {
             .map(|r| serde_json::from_str(&r))
             .transpose()
             .map_err(|e| DbError::Query(format!("invalid task result JSON: {e}")))?;
+        let parent_task_id = self
+            .parent_task_id
+            .map(|s| Uuid::parse_str(&s))
+            .transpose()
+            .map_err(|e| DbError::Query(format!("invalid parent_task_id UUID: {e}")))?;
 
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         Ok(Task {
@@ -234,6 +321,7 @@ impl TaskRow {
             started_at,
             completed_at,
             error_message: self.error_message,
+            parent_task_id,
         })
     }
 }

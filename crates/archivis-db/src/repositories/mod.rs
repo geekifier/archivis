@@ -24,6 +24,6 @@ pub use publisher::PublisherRepository;
 pub use series::SeriesRepository;
 pub use session::SessionRepository;
 pub use tag::TagRepository;
-pub use task::TaskRepository;
+pub use task::{ChildTaskSummary, TaskRepository};
 pub use types::{BookFilter, PaginatedResult, PaginationParams, SortOrder};
 pub use user::UserRepository;
