@@ -615,7 +615,7 @@
 		<div class="grid gap-8 md:grid-cols-[280px_1fr]">
 			<!-- Left column: Cover -->
 			<div>
-				<div class="group relative aspect-[2/3] w-full overflow-hidden rounded-lg bg-muted shadow-md">
+				<div class="group relative w-full overflow-hidden rounded-lg bg-muted shadow-md ring-1 ring-black/5 dark:ring-white/5">
 					{#if book.has_cover && !coverError}
 						<CoverImage src={coverUrl} alt="Cover of {book.title}" fadeIn={true} onerror={() => (coverError = true)} />
 						<div
@@ -644,7 +644,7 @@
 						</div>
 					{:else}
 						<div
-							class="flex h-full w-full flex-col items-center justify-center gap-3 p-6"
+							class="flex aspect-[2/3] w-full flex-col items-center justify-center gap-3 p-6"
 							style="background-color: hsl({hue}, 30%, 25%);"
 						>
 							<span class="line-clamp-6 text-center text-lg font-medium text-white/80">

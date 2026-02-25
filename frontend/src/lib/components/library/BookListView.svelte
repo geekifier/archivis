@@ -184,7 +184,7 @@
 								{#if selectionMode}
 									<div class="block h-10 w-7 flex-shrink-0 overflow-hidden rounded">
 										{#if book.has_cover}
-											<CoverImage src="/api/books/{book.id}/cover?size=sm" alt="" blurFill={false} loading="lazy" />
+											<CoverImage src="/api/books/{book.id}/cover?size=sm" alt="" loading="lazy" />
 										{:else}
 											<div
 												class="flex h-full w-full items-center justify-center text-[6px] text-white/70"
@@ -199,7 +199,7 @@
 								{:else}
 									<a href="/books/{book.id}" class="block h-10 w-7 flex-shrink-0 overflow-hidden rounded">
 										{#if book.has_cover}
-											<CoverImage src="/api/books/{book.id}/cover?size=sm" alt="" blurFill={false} loading="lazy" />
+											<CoverImage src="/api/books/{book.id}/cover?size=sm" alt="" loading="lazy" />
 										{:else}
 											<div
 												class="flex h-full w-full items-center justify-center text-[6px] text-white/70"
