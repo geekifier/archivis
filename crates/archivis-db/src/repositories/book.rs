@@ -583,6 +583,28 @@ impl BookRepository {
         Ok(())
     }
 
+    /// Update the position of a book within a series.
+    pub async fn update_series_position(
+        pool: &SqlitePool,
+        book_id: Uuid,
+        series_id: Uuid,
+        position: Option<f64>,
+    ) -> Result<(), DbError> {
+        let book_id_str = book_id.to_string();
+        let series_id_str = series_id.to_string();
+        sqlx::query!(
+            "UPDATE book_series SET position = ? WHERE book_id = ? AND series_id = ?",
+            position,
+            book_id_str,
+            series_id_str,
+        )
+        .execute(pool)
+        .await
+        .map_err(|e| DbError::Query(e.to_string()))?;
+
+        Ok(())
+    }
+
     /// Link a book to a tag.
     pub async fn add_tag(pool: &SqlitePool, book_id: Uuid, tag_id: Uuid) -> Result<(), DbError> {
         let book_id_str = book_id.to_string();

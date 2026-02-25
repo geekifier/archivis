@@ -501,25 +501,43 @@ impl<S: StorageBackend> IdentificationService<S> {
         Ok(())
     }
 
-    /// Update series from provider if book currently has no series.
+    /// Update series from provider metadata.
+    ///
+    /// Uses `find_or_create` for deduplication, checks whether the book is
+    /// already linked to the resolved series, and backfills the position when
+    /// the existing link has no position but the provider supplies one.
     async fn update_series_from_provider(
         &self,
         book_id: Uuid,
         provider_meta: &ProviderMetadata,
     ) -> Result<(), TaskError> {
         if let Some(ref prov_series) = provider_meta.series {
-            // Check if book already has a series
+            let series = SeriesRepository::find_or_create(&self.db_pool, &prov_series.name)
+                .await
+                .map_err(|e| TaskError::Failed(format!("series find_or_create failed: {e}")))?;
+
             let relations = BookRepository::get_with_relations(&self.db_pool, book_id)
                 .await
                 .map_err(|e| TaskError::Failed(format!("failed to load book relations: {e}")))?;
 
-            if relations.series.is_empty() {
-                let series = archivis_core::models::Series::new(&prov_series.name);
-                SeriesRepository::create(&self.db_pool, &series)
-                    .await
-                    .map_err(|e| TaskError::Failed(format!("series create failed: {e}")))?;
+            let position = prov_series.position.map(f64::from);
 
-                let position = prov_series.position.map(f64::from);
+            if let Some(existing) = relations.series.iter().find(|s| s.series.id == series.id) {
+                // Already linked — backfill position if the existing link has none
+                if existing.position.is_none() && position.is_some() {
+                    BookRepository::update_series_position(
+                        &self.db_pool,
+                        book_id,
+                        series.id,
+                        position,
+                    )
+                    .await
+                    .map_err(|e| {
+                        TaskError::Failed(format!("update series position failed: {e}"))
+                    })?;
+                }
+            } else {
+                // Not yet linked — add the series link
                 BookRepository::add_series(&self.db_pool, book_id, series.id, position)
                     .await
                     .map_err(|e| TaskError::Failed(format!("add series failed: {e}")))?;

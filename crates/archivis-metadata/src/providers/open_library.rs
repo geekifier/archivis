@@ -211,12 +211,10 @@ impl OpenLibraryProvider {
 
         let subjects = work.and_then(|w| w.subjects.clone()).unwrap_or_default();
 
-        let series = edition.series.as_ref().and_then(|s| {
-            s.first().map(|name| ProviderSeries {
-                name: name.clone(),
-                position: None,
-            })
-        });
+        let series = edition
+            .series
+            .as_ref()
+            .and_then(|s| s.first().map(|name| parse_series_string(name)));
 
         let cover_url = edition
             .covers
@@ -558,6 +556,94 @@ struct OlSearchDoc {
 /// rate limits on the ISBN-based covers endpoint.
 pub fn cover_url_from_id(cover_id: i64) -> String {
     format!("{COVERS_URL}/b/id/{cover_id}-L.jpg")
+}
+
+/// Parse an Open Library series string into a name and optional position.
+///
+/// OL series strings often embed the volume number in the name, e.g.
+/// `"Harry Potter, #6"`, `"Discworld #12"`, or `"Dune, 3"`.
+/// This splits the trailing number from the series name.
+fn parse_series_string(raw: &str) -> ProviderSeries {
+    let trimmed = raw.trim();
+
+    // Try to split on the last comma or '#' that precedes a number.
+    // Patterns: "Name, #6", "Name #6", "Name, 6", "Name 6"
+    // We scan from the end to find a trailing number (integer or decimal).
+    if let Some(pos) = find_trailing_position(trimmed) {
+        let (name_part, num_str) = trimmed.split_at(pos);
+        // Strip trailing separators: ", #", " #", ", ", " "
+        let name = name_part.trim_end_matches(|c: char| c == ',' || c == '#' || c.is_whitespace());
+        if !name.is_empty() {
+            if let Ok(position) = num_str.trim().parse::<f32>() {
+                return ProviderSeries {
+                    name: name.to_string(),
+                    position: Some(position),
+                };
+            }
+        }
+    }
+
+    ProviderSeries {
+        name: trimmed.to_string(),
+        position: None,
+    }
+}
+
+/// Find the byte offset where a trailing numeric position starts.
+///
+/// Looks for patterns like `, #6`, ` #12`, `, 3`, ` 3.5` at the end
+/// of the string.  Returns the start of the numeric portion.
+fn find_trailing_position(s: &str) -> Option<usize> {
+    // Walk backwards to find the start of a trailing number (digits and optional dot).
+    let bytes = s.as_bytes();
+    let len = bytes.len();
+    if len == 0 {
+        return None;
+    }
+
+    // Find the end of the trailing number (must end with a digit).
+    let mut i = len;
+    if !bytes[i - 1].is_ascii_digit() {
+        return None;
+    }
+
+    // Walk back through digits and at most one decimal point.
+    let mut saw_dot = false;
+    while i > 0 {
+        let b = bytes[i - 1];
+        if b.is_ascii_digit() {
+            i -= 1;
+        } else if b == b'.' && !saw_dot {
+            saw_dot = true;
+            i -= 1;
+        } else {
+            break;
+        }
+    }
+
+    let num_start = i;
+
+    // There must be something before the number.
+    if num_start == 0 {
+        return None;
+    }
+
+    // Skip optional '#' before the number.
+    if i > 0 && bytes[i - 1] == b'#' {
+        i -= 1;
+    }
+
+    // Skip whitespace and/or comma separator.
+    while i > 0 && (bytes[i - 1] == b' ' || bytes[i - 1] == b',') {
+        i -= 1;
+    }
+
+    // Only accept if we actually consumed a separator (not just "Name6").
+    if i == num_start {
+        return None;
+    }
+
+    Some(num_start)
 }
 
 /// Map an Open Library language key to an ISO 639-1 code.
@@ -1283,6 +1369,58 @@ mod tests {
         let json = r#"{"author": {"key": "/authors/OL34221A"}}"#;
         let author_ref: OlAuthorRef = serde_json::from_str(json).unwrap();
         assert_eq!(author_ref.key(), Some("/authors/OL34221A"));
+    }
+
+    // ── Series string parsing ─────────────────────────────────────────
+
+    #[test]
+    fn parse_series_with_comma_hash() {
+        let s = parse_series_string("Harry Potter, #6");
+        assert_eq!(s.name, "Harry Potter");
+        assert!((s.position.unwrap() - 6.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn parse_series_with_hash_no_comma() {
+        let s = parse_series_string("Discworld #12");
+        assert_eq!(s.name, "Discworld");
+        assert!((s.position.unwrap() - 12.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn parse_series_with_comma_no_hash() {
+        let s = parse_series_string("Dune, 3");
+        assert_eq!(s.name, "Dune");
+        assert!((s.position.unwrap() - 3.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn parse_series_with_decimal_position() {
+        let s = parse_series_string("Witcher, #1.5");
+        assert_eq!(s.name, "Witcher");
+        assert!((s.position.unwrap() - 1.5).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn parse_series_no_position() {
+        let s = parse_series_string("Discworld");
+        assert_eq!(s.name, "Discworld");
+        assert!(s.position.is_none());
+    }
+
+    #[test]
+    fn parse_series_trims_whitespace() {
+        let s = parse_series_string("  Harry Potter , #6  ");
+        assert_eq!(s.name, "Harry Potter");
+        assert!((s.position.unwrap() - 6.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn parse_series_only_number_stays_as_name() {
+        // Degenerate case: raw string is just a number — treat as name, no position
+        let s = parse_series_string("42");
+        assert_eq!(s.name, "42");
+        assert!(s.position.is_none());
     }
 
     // ── Integration test (live API — ignored by default) ─────────────

@@ -408,6 +408,82 @@ async fn series_crud() {
     assert!(SeriesRepository::get_by_id(&pool, series.id).await.is_err());
 }
 
+#[tokio::test]
+async fn series_find_or_create_new() {
+    let (pool, _dir) = test_pool().await;
+
+    let series = SeriesRepository::find_or_create(&pool, "Discworld")
+        .await
+        .unwrap();
+    assert_eq!(series.name, "Discworld");
+
+    // Verify it actually exists in the database
+    let fetched = SeriesRepository::get_by_id(&pool, series.id).await.unwrap();
+    assert_eq!(fetched.name, "Discworld");
+}
+
+#[tokio::test]
+async fn series_find_or_create_dedup_case_insensitive() {
+    let (pool, _dir) = test_pool().await;
+
+    let s1 = SeriesRepository::find_or_create(&pool, "Harry Potter")
+        .await
+        .unwrap();
+    let s2 = SeriesRepository::find_or_create(&pool, "harry potter")
+        .await
+        .unwrap();
+    let s3 = SeriesRepository::find_or_create(&pool, "HARRY POTTER")
+        .await
+        .unwrap();
+
+    assert_eq!(s1.id, s2.id, "same series regardless of case");
+    assert_eq!(s1.id, s3.id, "same series regardless of case");
+    // Original casing is preserved
+    assert_eq!(s1.name, "Harry Potter");
+}
+
+#[tokio::test]
+async fn series_find_or_create_distinct_names() {
+    let (pool, _dir) = test_pool().await;
+
+    let s1 = SeriesRepository::find_or_create(&pool, "Discworld")
+        .await
+        .unwrap();
+    let s2 = SeriesRepository::find_or_create(&pool, "Dune Chronicles")
+        .await
+        .unwrap();
+
+    assert_ne!(s1.id, s2.id);
+}
+
+#[tokio::test]
+async fn book_update_series_position() {
+    let (pool, _dir) = test_pool().await;
+
+    let book = test_book("Dune");
+    BookRepository::create(&pool, &book).await.unwrap();
+    let series = Series::new("Dune Chronicles");
+    SeriesRepository::create(&pool, &series).await.unwrap();
+
+    // Add with no position
+    BookRepository::add_series(&pool, book.id, series.id, None)
+        .await
+        .unwrap();
+    let rel = BookRepository::get_with_relations(&pool, book.id)
+        .await
+        .unwrap();
+    assert!(rel.series[0].position.is_none());
+
+    // Backfill position
+    BookRepository::update_series_position(&pool, book.id, series.id, Some(3.0))
+        .await
+        .unwrap();
+    let rel = BookRepository::get_with_relations(&pool, book.id)
+        .await
+        .unwrap();
+    assert!((rel.series[0].position.unwrap() - 3.0).abs() < f64::EPSILON);
+}
+
 // ── BookFileRepository ──────────────────────────────────────────
 
 #[tokio::test]

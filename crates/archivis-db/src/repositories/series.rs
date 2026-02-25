@@ -147,6 +147,26 @@ impl SeriesRepository {
         Ok(())
     }
 
+    /// Find a series by name (case-insensitive exact match), or create it if it doesn't exist.
+    pub async fn find_or_create(pool: &SqlitePool, name: &str) -> Result<Series, DbError> {
+        let row = sqlx::query_as!(
+            SeriesRow,
+            "SELECT id, name, description FROM series WHERE name = ? COLLATE NOCASE",
+            name,
+        )
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| DbError::Query(e.to_string()))?;
+
+        if let Some(row) = row {
+            return row.into_series();
+        }
+
+        let series = Series::new(name);
+        Self::create(pool, &series).await?;
+        Ok(series)
+    }
+
     pub async fn delete(pool: &SqlitePool, id: Uuid) -> Result<(), DbError> {
         let id_str = id.to_string();
         let result = sqlx::query!("DELETE FROM series WHERE id = ?", id_str)

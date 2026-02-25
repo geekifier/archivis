@@ -2,7 +2,7 @@ use std::fmt::Write as _;
 use std::path::Path;
 
 use archivis_core::models::{
-    Book, BookFile, BookFormat, DuplicateLink, Identifier, MetadataSource, Series,
+    Book, BookFile, BookFormat, DuplicateLink, Identifier, MetadataSource,
 };
 use archivis_db::{
     AuthorRepository, BookFileRepository, BookRepository, DbPool, DuplicateRepository,
@@ -458,8 +458,7 @@ impl<S: StorageBackend> ImportService<S> {
 
         if let Some(name) = series_name {
             let clean_name = sanitize_text(name, sanitize_opts).unwrap_or_else(|| name.to_string());
-            let series = Series::new(&clean_name);
-            SeriesRepository::create(&self.db_pool, &series).await?;
+            let series = SeriesRepository::find_or_create(&self.db_pool, &clean_name).await?;
 
             let position = embedded
                 .series_position
