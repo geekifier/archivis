@@ -16,11 +16,15 @@
 		CardHeader,
 		CardTitle
 	} from '$lib/components/ui/card/index.js';
+	import PathPicker from '$lib/components/library/PathPicker.svelte';
 	import { formatFileSize } from '$lib/utils.js';
 
 	// --- Mode selection ---
 	type ImportMode = 'upload' | 'scan';
 	let mode = $state<ImportMode>('upload');
+
+	// --- Path picker state ---
+	let pickerOpen = $state(false);
 
 	// --- Upload state ---
 	let selectedFiles = $state<File[]>([]);
@@ -527,6 +531,9 @@
 							disabled={scanning}
 						/>
 					</div>
+					<Button variant="outline" onclick={() => (pickerOpen = true)} disabled={scanning}>
+						Browse
+					</Button>
 					<Button onclick={handleScan} disabled={!scanPath.trim() || scanning}>
 						{#if scanning}
 							<svg
@@ -555,6 +562,7 @@
 						{/if}
 					</Button>
 				</div>
+				<PathPicker bind:value={scanPath} bind:open={pickerOpen} mode="directory" />
 
 				{#if scanError}
 					<p class="mt-3 text-sm text-destructive">{scanError}</p>

@@ -10,6 +10,7 @@ import type {
 	BatchUpdateResponse,
 	BookDetail,
 	BookListParams,
+	BrowseResponse,
 	CandidateResponse,
 	CreateAuthorRequest,
 	CreatePublisherRequest,
@@ -428,6 +429,17 @@ export const api = {
 		}
 	},
 
+	filesystem: {
+		/** Browse a server directory for files and subdirectories. */
+		browse(path?: string, dirsOnly?: boolean): Promise<BrowseResponse> {
+			const params = new URLSearchParams();
+			if (path) params.set('path', path);
+			if (dirsOnly) params.set('dirs_only', 'true');
+			const qs = params.toString();
+			return request<BrowseResponse>('GET', `/filesystem/browse${qs ? `?${qs}` : ''}`);
+		}
+	},
+
 	import: {
 		/** Upload one or more ebook files via multipart form data. */
 		async upload(files: File[]): Promise<UploadResponse> {
@@ -581,6 +593,7 @@ export type {
 	BookSeriesLink,
 	BookSummary,
 	BookTagLink,
+	BrowseResponse,
 	CandidateResponse,
 	CandidateSeriesInfo,
 	CreateAuthorRequest,
@@ -590,6 +603,7 @@ export type {
 	FileEntry,
 	FlagDuplicateRequest,
 	FormatSummary,
+	FsEntry,
 	IdentifierEntry,
 	IdentifyAllResponse,
 	IdentifyResponse,

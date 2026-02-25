@@ -269,6 +269,20 @@ export interface CreateAuthorRequest {
 	sort_name?: string;
 }
 
+// --- Filesystem types ---
+
+export interface FsEntry {
+	name: string;
+	is_dir: boolean;
+	size: number;
+}
+
+export interface BrowseResponse {
+	path: string;
+	parent: string | null;
+	entries: FsEntry[];
+}
+
 // --- Import types ---
 
 export type TaskType = 'import_file' | 'import_directory' | 'identify_book' | 'scan_isbn';

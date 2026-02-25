@@ -3,6 +3,7 @@ pub mod authors;
 pub mod books;
 pub mod duplicates;
 pub mod errors;
+pub mod filesystem;
 pub mod identify;
 pub mod import;
 pub mod isbn_scan;
@@ -112,6 +113,8 @@ mod openapi {
             super::duplicates::handlers::merge_duplicate,
             super::duplicates::handlers::dismiss_duplicate,
             super::duplicates::handlers::flag_duplicate,
+            // Filesystem
+            super::filesystem::handlers::browse_directory,
         ),
         components(schemas(
             // Auth
@@ -192,6 +195,9 @@ mod openapi {
             super::duplicates::types::MergeRequest,
             super::duplicates::types::FlagDuplicateRequest,
             super::duplicates::types::DuplicateCountResponse,
+            // Filesystem
+            super::filesystem::types::FsEntry,
+            super::filesystem::types::BrowseResponse,
         )),
         tags(
             (name = "auth", description = "Authentication and user management"),
@@ -205,6 +211,7 @@ mod openapi {
             (name = "isbn-scan", description = "ISBN content scanning"),
             (name = "tasks", description = "Background task management"),
             (name = "duplicates", description = "Duplicate book management and merging"),
+            (name = "filesystem", description = "Server filesystem browsing"),
         )
     )]
     pub struct ApiDoc;
@@ -227,7 +234,8 @@ pub fn build_router(state: AppState) -> Router {
         .nest("/import", import::router())
         .nest("/identify", identify::router())
         .nest("/isbn-scan", isbn_scan::router())
-        .nest("/duplicates", duplicates::router());
+        .nest("/duplicates", duplicates::router())
+        .nest("/filesystem", filesystem::router());
 
     let mut router = Router::new()
         .merge(SwaggerUi::new("/api/docs").url("/api/openapi.json", openapi::ApiDoc::openapi()))
