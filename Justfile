@@ -1,14 +1,13 @@
 default:
     @just --list
 
-# Run all checks (fmt, clippy, test, deny)
-check-all: fmt-check clippy test deny
+# ── Build ─────────────────────────────────────────────────────────────────────
 
-# Check compilation
-check:
+# Fast compile check (cargo check)
+compile:
     cargo check --workspace --all-targets
 
-# Build all crates
+# Build all crates (debug)
 build:
     cargo build --workspace
 
@@ -16,25 +15,44 @@ build:
 build-release:
     cargo build --workspace --release
 
-# Run all tests
-test:
-    cargo test --workspace
-
-# Check formatting
-fmt-check:
-    cargo fmt --all -- --check
+# ── Quality ───────────────────────────────────────────────────────────────────
 
 # Format code
 fmt:
     cargo fmt --all
 
+# Check formatting (no changes)
+fmt-check:
+    cargo fmt --all -- --check
+
 # Run clippy lints
 clippy:
     cargo clippy --workspace --all-targets -- -D warnings
 
+# Run all backend tests
+test:
+    cargo test --workspace
+
+# Run frontend unit tests
+test-frontend:
+    cd frontend && npm test
+
+# Run frontend tests in watch mode
+test-frontend-watch:
+    cd frontend && npm run test:watch
+
 # Run cargo-deny license and advisory audit
 deny:
     cargo deny check
+
+# Full quality gate: fmt + clippy + test + deny
+check: fmt-check clippy test deny
+
+# Full frontend gate: build + lint + check + test
+check-frontend:
+    cd frontend && npm run build && npm run lint && npm run check && npm test
+
+# ── Database ──────────────────────────────────────────────────────────────────
 
 # Run database migrations (requires DATABASE_URL)
 migrate:
@@ -44,11 +62,9 @@ migrate:
 sqlx-prepare:
     cargo sqlx prepare --workspace -- --all-targets
 
-# Run the server
-run:
-    cargo run --package archivis-server
+# ── Dev Server (persistent data in .local/data) ──────────────────────────────
 
-# Run backend + frontend dev server together
+# Run backend + frontend dev servers
 dev:
     #!/usr/bin/env bash
     trap 'kill 0' EXIT
@@ -56,62 +72,65 @@ dev:
     cd frontend && npm run dev &
     wait
 
-# Run frontend dev server only (expects backend on :9514)
-dev-frontend:
-    cd frontend && npm run dev
-
 # Run backend only with local dev data
 dev-backend:
     cargo run --package archivis-server -- --data-dir .local/data
 
-# Run frontend checks (build + lint + typecheck + test)
-check-frontend:
-    cd frontend && npm run build && npm run lint && npm run check && npm test
+# Run frontend dev server only (expects backend on :9514)
+dev-frontend:
+    cd frontend && npm run dev
 
-# Run frontend tests
-test-frontend:
-    cd frontend && npm test
+# ── Dev Clean (disposable data in .local/clean) ──────────────────────────────
 
-# Run frontend tests in watch mode
-test-frontend-watch:
-    cd frontend && npm run test:watch
-
-# Run CI pipeline locally via act (requires Docker)
-ci-local *args:
-    act {{ args }}
-
-# Run a single CI job locally via act (e.g. just ci-job fmt)
-ci-job job:
-    act -j {{ job }}
-
-# ── Dev Workflow ────────────────────────────────────────────────────────────
-
-# Fresh boot: clean slate + backend + frontend + create admin + print creds
-dev-fresh:
+# Wipe → backend + frontend + create admin (prints creds)
+dev-clean:
     #!/usr/bin/env bash
     set -euo pipefail
     trap 'kill 0' EXIT
-    export ARCHIVIS_DATA_DIR=".local/fresh"
+    export ARCHIVIS_DATA_DIR=".local/clean"
     ./scripts/dev-boot.sh wipe
-    cargo run --package archivis-server -- --data-dir .local/fresh &
+    cargo run --package archivis-server -- --data-dir .local/clean &
     cd frontend && npm run dev &
     sleep 1
     ./scripts/dev-boot.sh setup
     wait
 
-# Fresh boot: backend only (no frontend)
-dev-fresh-backend:
+# Wipe → backend only + create admin (no frontend)
+dev-clean-backend:
     #!/usr/bin/env bash
     set -euo pipefail
     trap 'kill 0' EXIT
-    export ARCHIVIS_DATA_DIR=".local/fresh"
+    export ARCHIVIS_DATA_DIR=".local/clean"
     ./scripts/dev-boot.sh wipe
-    cargo run --package archivis-server -- --data-dir .local/fresh &
+    cargo run --package archivis-server -- --data-dir .local/clean &
     ./scripts/dev-boot.sh setup
     wait
 
+# Wipe → backend + frontend + admin + seed test data
+dev-clean-seed:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    trap 'kill 0' EXIT
+    export ARCHIVIS_DATA_DIR=".local/clean"
+    ./scripts/dev-boot.sh wipe
+    cargo run --package archivis-server -- --data-dir .local/clean &
+    cd frontend && npm run dev &
+    sleep 1
+    ./scripts/dev-boot.sh setup
+    ./scripts/dev-boot.sh seed
+    wait
+
+# ── Dev Data ──────────────────────────────────────────────────────────────────
+
+# Seed test data into a running instance
+dev-seed dir=".local/test-existing" data-dir=".local/clean":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    export ARCHIVIS_DATA_DIR="{{ data-dir }}"
+    ./scripts/dev-boot.sh seed "{{ dir }}"
+
 # Reset DB only in .local/data/ (preserves book files)
-dev-reset:
+dev-reset-db:
     #!/usr/bin/env bash
     set -euo pipefail
     export ARCHIVIS_DATA_DIR=".local/data"
@@ -119,31 +138,19 @@ dev-reset:
     echo "DB wiped. Restart the server to see setup screen."
 
 # Full wipe of .local/data/
-dev-reset-full:
+dev-reset:
     #!/usr/bin/env bash
     set -euo pipefail
     export ARCHIVIS_DATA_DIR=".local/data"
     ./scripts/dev-boot.sh wipe
     echo "Data directory wiped. Restart the server to start fresh."
 
-# Seed test data from a directory into a running instance (requires ARCHIVIS_DEV_PASSWORD)
-dev-seed dir=".local/test-existing":
-    #!/usr/bin/env bash
-    set -euo pipefail
-    export ARCHIVIS_DATA_DIR=".local/fresh"
-    ./scripts/dev-boot.sh seed "{{ dir }}"
+# ── CI ────────────────────────────────────────────────────────────────────────
 
-# Fresh boot + auto-seed test data in one command
-dev-fresh-seed:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    trap 'kill 0' EXIT
-    export ARCHIVIS_DATA_DIR=".local/fresh"
-    export ARCHIVIS_DEV_PASSWORD="${ARCHIVIS_DEV_PASSWORD:-$(openssl rand -base64 18)}"
-    ./scripts/dev-boot.sh wipe
-    cargo run --package archivis-server -- --data-dir .local/fresh &
-    cd frontend && npm run dev &
-    sleep 1
-    ./scripts/dev-boot.sh setup
-    ./scripts/dev-boot.sh seed
-    wait
+# Run full CI pipeline locally via act (requires Docker)
+ci-local *args:
+    act {{ args }}
+
+# Run a single CI job locally via act (e.g. just ci-job fmt)
+ci-job job:
+    act -j {{ job }}

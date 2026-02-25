@@ -9,7 +9,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-DATA_DIR="${ARCHIVIS_DATA_DIR:-.local/fresh}"
+DATA_DIR="${ARCHIVIS_DATA_DIR:-.local/clean}"
 PORT="${ARCHIVIS_PORT:-9514}"
 DEV_USERNAME="dev"
 DEV_PASSWORD="${ARCHIVIS_DEV_PASSWORD:-}"
@@ -53,6 +53,11 @@ ensure_password() {
 # ── Subcommands ─────────────────────────────────────────────────────────────
 
 cmd_wipe() {
+  # Guard: refuse to rm -rf if path is empty, root, or suspiciously short
+  if [[ -z "$ABS_DATA_DIR" || "$ABS_DATA_DIR" = "/" || ${#ABS_DATA_DIR} -lt 10 ]]; then
+    echo "FATAL: Refusing rm -rf on suspicious path: '${ABS_DATA_DIR}'" >&2
+    exit 1
+  fi
   echo "Wiping data directory: ${ABS_DATA_DIR}"
   rm -rf "$ABS_DATA_DIR"
   mkdir -p "$ABS_DATA_DIR"
@@ -60,6 +65,11 @@ cmd_wipe() {
 }
 
 cmd_wipe_db() {
+  # Guard: refuse to rm if path is empty, root, or suspiciously short
+  if [[ -z "$ABS_DATA_DIR" || "$ABS_DATA_DIR" = "/" || ${#ABS_DATA_DIR} -lt 10 ]]; then
+    echo "FATAL: Refusing rm on suspicious path: '${ABS_DATA_DIR}'" >&2
+    exit 1
+  fi
   echo "Wiping database files in: ${ABS_DATA_DIR}"
   rm -f "$ABS_DATA_DIR"/archivis.db*
   echo "Done."
@@ -97,6 +107,13 @@ cmd_setup() {
     exit 1
   }
 
+  # Persist credentials so dev-seed can read them later
+  local creds_file="${ABS_DATA_DIR}/.dev-creds"
+  cat > "$creds_file" <<CREDS
+DEV_USERNAME=${DEV_USERNAME}
+DEV_PASSWORD=${DEV_PASSWORD}
+CREDS
+
   echo ""
   echo "╔══════════════════════════════════════════╗"
   echo "║       Dev credentials created            ║"
@@ -106,6 +123,9 @@ cmd_setup() {
   echo "╠══════════════════════════════════════════╣"
   echo "║  http://localhost:5173                   ║"
   echo "╚══════════════════════════════════════════╝"
+  echo ""
+  echo "⚠ WARNING: Dev credentials written to ${DATA_DIR}/.dev-creds"
+  echo "⚠ This file contains plaintext passwords. DO NOT commit."
   echo ""
 }
 
@@ -122,9 +142,19 @@ cmd_seed() {
     exit 1
   fi
 
+  # If password not set via env, try reading from creds file
+  if [[ -z "$DEV_PASSWORD" ]]; then
+    local creds_file="${ABS_DATA_DIR}/.dev-creds"
+    if [[ -f "$creds_file" ]]; then
+      echo "Reading credentials from ${DATA_DIR}/.dev-creds"
+      # shellcheck source=/dev/null
+      source "$creds_file"
+    fi
+  fi
+
   if [[ -z "$DEV_PASSWORD" ]]; then
     echo "ERROR: ARCHIVIS_DEV_PASSWORD must be set for seeding" >&2
-    echo "  (it was generated during setup — re-run with dev-fresh-seed or set it)" >&2
+    echo "  (it was generated during setup — re-run with dev-clean-seed or set it)" >&2
     exit 1
   fi
 
@@ -186,7 +216,7 @@ case "${1:-help}" in
     echo "  seed [dir] Import ebooks from dir (default: .local/test-existing)"
     echo ""
     echo "Environment:"
-    echo "  ARCHIVIS_DATA_DIR       Data directory (default: .local/fresh)"
+    echo "  ARCHIVIS_DATA_DIR       Data directory (default: .local/clean)"
     echo "  ARCHIVIS_PORT           Server port (default: 9514)"
     echo "  ARCHIVIS_DEV_PASSWORD   Admin password (default: random)"
     echo "  ARCHIVIS_MAX_WAIT       Readiness timeout in seconds (default: 30)"

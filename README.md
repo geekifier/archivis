@@ -105,14 +105,17 @@ just dev
 
 ### Useful commands
 
-| Command               | Description                                     |
-| --------------------- | ----------------------------------------------- |
-| `just dev`            | Run backend + frontend dev servers              |
-| `just check-all`      | fmt + clippy + test + deny (run before pushing) |
-| `just test`           | Run all tests                                   |
-| `just build-release`  | Production build                                |
-| `just sqlx-prepare`   | Regenerate SQLx offline query cache             |
-| `just check-frontend` | Lint and typecheck frontend                     |
+| Command               | Description                                        |
+| --------------------- | -------------------------------------------------- |
+| `just dev`            | Run backend + frontend dev servers                 |
+| `just dev-clean`      | Wipe + backend + frontend + create admin           |
+| `just dev-clean-seed` | Same as above + seed test data                     |
+| `just check`          | fmt + clippy + test + deny (run before pushing)    |
+| `just compile`        | Fast compile check (cargo check)                   |
+| `just test`           | Run all backend tests                              |
+| `just build-release`  | Production build                                   |
+| `just sqlx-prepare`   | Regenerate SQLx offline query cache                |
+| `just check-frontend` | Lint and typecheck frontend                        |
 
 ### Docker development
 

@@ -41,7 +41,8 @@ Default port is **9514**. Config layering: compiled defaults → TOML file → `
 
 ## Development Commands
 
-- `just check-all` — fmt + clippy + test + deny (run before pushing)
+- `just check` — fmt + clippy + test + deny (run before pushing)
+- `just compile` — fast cargo check (compile only, no lints/tests)
 - `just ci-local` / `just ci-job <name>` — run CI via act (Docker required)
 - `just deny` — cargo-deny locally (act can't run the deny job under QEMU)
 
