@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { untrack } from 'svelte';
 	import { api, ApiError } from '$lib/api/index.js';
 	import type { BookDetail, CandidateResponse } from '$lib/api/index.js';
 	import { Button } from '$lib/components/ui/button/index.js';
@@ -30,7 +31,7 @@
 	/** Initialize default selections for any new pending candidate. */
 	$effect(() => {
 		for (const candidate of pendingCandidates) {
-			if (!fieldSelections[candidate.id]) {
+			if (!untrack(() => fieldSelections[candidate.id])) {
 				const sel: Record<string, boolean> = {};
 				if (candidate.title != null) sel.title = true;
 				if (candidate.authors.length > 0) sel.authors = true;
@@ -188,7 +189,7 @@
 					<!-- Match reasons -->
 					{#if candidate.match_reasons.length > 0}
 						<div class="mb-3 flex flex-wrap gap-1.5">
-							{#each candidate.match_reasons as reason (reason)}
+							{#each candidate.match_reasons as reason, i (i)}
 								<span
 									class="inline-flex rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary"
 								>

@@ -40,6 +40,7 @@
 	let candidates = $state<CandidateResponse[]>([]);
 	let candidatesError = $state<string | null>(null);
 	let candidatesExpanded = $state(false);
+	let candidatesLoaded = $state(false);
 
 	// --- ISBN content scan state ---
 	let scanning = $state(false);
@@ -79,6 +80,7 @@
 		notFound = false;
 		coverLoaded = false;
 		coverError = false;
+		candidatesLoaded = false;
 
 		api.books
 			.get(bookId)
@@ -296,10 +298,10 @@
 		candidatesError = null;
 		try {
 			candidates = await api.identify.candidates(bookId);
-			if (candidates.length > 0) {
-				// Auto-expand for needs_review (user needs to act), collapse for identified
+			if (candidates.length > 0 && !candidatesLoaded) {
 				candidatesExpanded = book?.metadata_status === 'needs_review';
 			}
+			candidatesLoaded = true;
 		} catch (err) {
 			candidatesError =
 				err instanceof Error ? err.message : 'Failed to load candidates';
