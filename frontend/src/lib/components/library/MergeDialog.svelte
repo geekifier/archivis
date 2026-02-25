@@ -5,6 +5,7 @@
 	import * as Dialog from '$lib/components/ui/dialog/index.js';
 	import * as AlertDialog from '$lib/components/ui/alert-dialog/index.js';
 	import * as Select from '$lib/components/ui/select/index.js';
+	import CoverImage from './CoverImage.svelte';
 	import { placeholderHue, formatFileSize, formatIdentifierType } from '$lib/utils.js';
 
 	interface Props {
@@ -297,11 +298,7 @@
 		<div class="mb-3 flex justify-center">
 			<div class="relative h-40 w-28 overflow-hidden rounded-md bg-muted shadow-sm">
 				{#if book.has_cover}
-					<img
-						src="/api/books/{book.id}/cover?size=md"
-						alt="Cover of {book.title}"
-						class="h-full w-full object-cover"
-					/>
+					<CoverImage src="/api/books/{book.id}/cover?size=md" alt="Cover of {book.title}" />
 				{:else}
 					<div
 						class="flex h-full w-full items-center justify-center p-2"

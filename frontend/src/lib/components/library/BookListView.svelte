@@ -8,6 +8,7 @@
 	} from '@tanstack/svelte-table';
 	import type { BookSummary, SortField, SortOrder } from '$lib/api/index.js';
 	import { columnToSortField, statusConfig, formatDate, formatAuthors, formatSeries, formatFormats } from './book-list-utils.js';
+	import CoverImage from './CoverImage.svelte';
 	import { placeholderHue } from '$lib/utils.js';
 
 	interface Props {
@@ -183,12 +184,7 @@
 								{#if selectionMode}
 									<div class="block h-10 w-7 flex-shrink-0 overflow-hidden rounded">
 										{#if book.has_cover}
-											<img
-												src="/api/books/{book.id}/cover?size=sm"
-												alt=""
-												class="h-full w-full object-cover"
-												loading="lazy"
-											/>
+											<CoverImage src="/api/books/{book.id}/cover?size=sm" alt="" blurFill={false} loading="lazy" />
 										{:else}
 											<div
 												class="flex h-full w-full items-center justify-center text-[6px] text-white/70"
@@ -203,12 +199,7 @@
 								{:else}
 									<a href="/books/{book.id}" class="block h-10 w-7 flex-shrink-0 overflow-hidden rounded">
 										{#if book.has_cover}
-											<img
-												src="/api/books/{book.id}/cover?size=sm"
-												alt=""
-												class="h-full w-full object-cover"
-												loading="lazy"
-											/>
+											<CoverImage src="/api/books/{book.id}/cover?size=sm" alt="" blurFill={false} loading="lazy" />
 										{:else}
 											<div
 												class="flex h-full w-full items-center justify-center text-[6px] text-white/70"

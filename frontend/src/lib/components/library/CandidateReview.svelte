@@ -395,7 +395,7 @@
 							<img
 								src={candidate.cover_url}
 								alt="Candidate cover"
-								class="h-20 rounded object-cover shadow-sm"
+								class="h-20 rounded object-contain shadow-sm"
 							/>
 						</div>
 					{/if}

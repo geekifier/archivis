@@ -4,6 +4,7 @@
 	import { Button } from '$lib/components/ui/button/index.js';
 	import Pagination from '$lib/components/library/Pagination.svelte';
 	import MergeDialog from '$lib/components/library/MergeDialog.svelte';
+	import CoverImage from '$lib/components/library/CoverImage.svelte';
 	import { placeholderHue } from '$lib/utils.js';
 	import { goto } from '$app/navigation';
 
@@ -231,11 +232,7 @@
 									class="relative h-20 w-14 flex-shrink-0 overflow-hidden rounded bg-muted shadow-sm"
 								>
 									{#if link.book_a.has_cover}
-										<img
-											src="/api/books/{link.book_a.id}/cover?size=sm"
-											alt="Cover of {link.book_a.title}"
-											class="h-full w-full object-cover"
-										/>
+										<CoverImage src="/api/books/{link.book_a.id}/cover?size=sm" alt="Cover of {link.book_a.title}" />
 									{:else}
 										<div
 											class="flex h-full w-full items-center justify-center p-1"
@@ -286,11 +283,7 @@
 									class="relative h-20 w-14 flex-shrink-0 overflow-hidden rounded bg-muted shadow-sm"
 								>
 									{#if link.book_b.has_cover}
-										<img
-											src="/api/books/{link.book_b.id}/cover?size=sm"
-											alt="Cover of {link.book_b.title}"
-											class="h-full w-full object-cover"
-										/>
+										<CoverImage src="/api/books/{link.book_b.id}/cover?size=sm" alt="Cover of {link.book_b.title}" />
 									{:else}
 										<div
 											class="flex h-full w-full items-center justify-center p-1"

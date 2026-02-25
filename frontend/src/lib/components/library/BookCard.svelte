@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { BookSummary } from '$lib/api/index.js';
 	import { placeholderHue } from '$lib/utils.js';
+	import CoverImage from './CoverImage.svelte';
 
 	interface Props {
 		book: BookSummary;
@@ -10,8 +11,6 @@
 	}
 
 	let { book, selectionMode = false, selected = false, onselect }: Props = $props();
-
-	let coverLoaded = $state(false);
 
 	const authors = $derived(
 		book.authors?.map((a) => a.name).join(', ') ?? ''
@@ -63,17 +62,7 @@
 	>
 		<div class="relative aspect-[2/3] w-full overflow-hidden rounded-lg bg-muted">
 			{#if book.has_cover}
-				{#if !coverLoaded}
-					<div class="absolute inset-0 animate-pulse bg-muted"></div>
-				{/if}
-				<img
-					src={coverSm}
-					srcset="{coverSm} 1x, {coverMd} 2x"
-					alt="Cover of {book.title}"
-					loading="lazy"
-					onload={() => (coverLoaded = true)}
-					class="absolute inset-0 h-full w-full object-cover transition-opacity duration-200 {coverLoaded ? 'opacity-100' : 'opacity-0'}"
-				/>
+				<CoverImage src={coverSm} srcset="{coverSm} 1x, {coverMd} 2x" alt="Cover of {book.title}" fadeIn={true} loading="lazy" />
 			{:else}
 				<div
 					class="flex h-full w-full items-center justify-center p-3"
@@ -125,17 +114,7 @@
 	>
 		<div class="relative aspect-[2/3] w-full overflow-hidden rounded-lg bg-muted">
 			{#if book.has_cover}
-				{#if !coverLoaded}
-					<div class="absolute inset-0 animate-pulse bg-muted"></div>
-				{/if}
-				<img
-					src={coverSm}
-					srcset="{coverSm} 1x, {coverMd} 2x"
-					alt="Cover of {book.title}"
-					loading="lazy"
-					onload={() => (coverLoaded = true)}
-					class="absolute inset-0 h-full w-full object-cover transition-opacity duration-200 {coverLoaded ? 'opacity-100' : 'opacity-0'}"
-				/>
+				<CoverImage src={coverSm} srcset="{coverSm} 1x, {coverMd} 2x" alt="Cover of {book.title}" fadeIn={true} loading="lazy" />
 			{:else}
 				<div
 					class="flex h-full w-full items-center justify-center p-3"

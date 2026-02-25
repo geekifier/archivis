@@ -12,6 +12,7 @@
 	import IdentifierEditor from '$lib/components/library/IdentifierEditor.svelte';
 	import MergeDialog from '$lib/components/library/MergeDialog.svelte';
 	import AutocompleteInput from '$lib/components/library/AutocompleteInput.svelte';
+	import CoverImage from '$lib/components/library/CoverImage.svelte';
 	import {
 		placeholderHue,
 		formatFileSize
@@ -21,7 +22,6 @@
 	let loading = $state(true);
 	let error = $state<string | null>(null);
 	let notFound = $state(false);
-	let coverLoaded = $state(false);
 	let coverError = $state(false);
 	let editing = $state(false);
 	let deleteDialogOpen = $state(false);
@@ -78,7 +78,6 @@
 		loading = true;
 		error = null;
 		notFound = false;
-		coverLoaded = false;
 		coverError = false;
 		candidatesLoaded = false;
 
@@ -133,7 +132,6 @@
 
 	function handleCoverUpdate(updated: BookDetail) {
 		book = updated;
-		coverLoaded = false;
 		coverError = false;
 		coverCacheBust = Date.now();
 	}
@@ -310,7 +308,6 @@
 
 	function handleCandidateApplied(updated: BookDetail) {
 		book = updated;
-		coverLoaded = false;
 		coverError = false;
 		coverCacheBust = Date.now();
 		loadCandidates();
@@ -620,18 +617,7 @@
 			<div>
 				<div class="group relative aspect-[2/3] w-full overflow-hidden rounded-lg bg-muted shadow-md">
 					{#if book.has_cover && !coverError}
-						{#if !coverLoaded}
-							<div class="absolute inset-0 animate-pulse bg-muted"></div>
-						{/if}
-						<img
-							src={coverUrl}
-							alt="Cover of {book.title}"
-							onload={() => (coverLoaded = true)}
-							onerror={() => (coverError = true)}
-							class="absolute inset-0 h-full w-full object-cover transition-opacity duration-200 {coverLoaded
-								? 'opacity-100'
-								: 'opacity-0'}"
-						/>
+						<CoverImage src={coverUrl} alt="Cover of {book.title}" fadeIn={true} onerror={() => (coverError = true)} />
 						<div
 							class="absolute inset-x-0 bottom-0 flex items-center justify-center bg-black/60 p-2 opacity-0 transition-opacity group-hover:opacity-100"
 						>
