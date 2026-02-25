@@ -3,7 +3,7 @@
 	import { taskStatusLabel, statusBgClass } from './task-utils.js';
 
 	interface Props {
-		status: TaskStatus;
+		status: TaskStatus | string;
 	}
 
 	let { status }: Props = $props();

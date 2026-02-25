@@ -1,11 +1,13 @@
 import type { TaskStatus, TaskType } from '$lib/api/index.js';
 
-export function taskStatusLabel(status: TaskStatus): string {
+export function taskStatusLabel(status: TaskStatus | string): string {
 	switch (status) {
 		case 'pending':
 			return 'Pending';
 		case 'running':
 			return 'Running';
+		case 'cancelling':
+			return 'Cancelling';
 		case 'completed':
 			return 'Completed';
 		case 'failed':
@@ -40,6 +42,7 @@ export function statusColorClass(status: TaskStatus | string): string {
 			return 'text-destructive';
 		case 'running':
 			return 'text-blue-600 dark:text-blue-400';
+		case 'cancelling':
 		case 'cancelled':
 			return 'text-amber-600 dark:text-amber-400';
 		default:
@@ -55,6 +58,7 @@ export function statusBgClass(status: TaskStatus | string): string {
 			return 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400';
 		case 'running':
 			return 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400';
+		case 'cancelling':
 		case 'cancelled':
 			return 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400';
 		default:
@@ -66,6 +70,7 @@ export function progressBarColor(status: TaskStatus | string): string {
 	switch (status) {
 		case 'failed':
 			return 'bg-destructive';
+		case 'cancelling':
 		case 'cancelled':
 			return 'bg-amber-500';
 		default:
@@ -102,6 +107,6 @@ export function formatElapsedTime(startedAt: string): string {
 	return `${hr}h ${remMin}m`;
 }
 
-export function isTerminalStatus(status: TaskStatus): boolean {
+export function isTerminalStatus(status: TaskStatus | string): boolean {
 	return status === 'completed' || status === 'failed' || status === 'cancelled';
 }

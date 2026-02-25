@@ -23,6 +23,7 @@
 	let taskProgressMap = $state<Record<string, TaskProgressEvent>>({});
 	let taskDataMap = $state<Record<string, TaskResponse>>({});
 	let childrenSummaryMap = $state<Record<string, ChildrenSummary>>({});
+	let cancellingTaskIds = $state(new Set<string>());
 	let eventSource: EventSource | null = null;
 
 	const hasActiveTasks = $derived(taskIds.length > 0);
@@ -74,6 +75,10 @@
 				taskProgressMap = { ...taskProgressMap, [data.task_id]: data };
 
 				if (isTerminalStatus(data.status)) {
+					// Clear cancelling state if this task was in the cancelling set
+					if (cancellingTaskIds.has(data.task_id)) {
+						cancellingTaskIds = new Set([...cancellingTaskIds].filter((id) => id !== data.task_id));
+					}
 					// Refresh task data on completion to get final state and children_summary
 					fetchTaskData(data.task_id);
 					onAllDone?.();
@@ -101,9 +106,13 @@
 		const updatedData = { ...taskDataMap };
 		delete updatedData[taskId];
 		taskDataMap = updatedData;
+		if (cancellingTaskIds.has(taskId)) {
+			cancellingTaskIds = new Set([...cancellingTaskIds].filter((id) => id !== taskId));
+		}
 	}
 
-	function handleCancelled() {
+	function handleTaskCancelling(taskId: string) {
+		cancellingTaskIds = new Set([...cancellingTaskIds, taskId]);
 		onAllDone?.();
 	}
 
@@ -130,8 +139,9 @@
 					task={taskDataMap[taskId] ?? null}
 					progress={taskProgressMap[taskId] ?? null}
 					childrenSummary={childrenSummaryMap[taskId] ?? null}
+					cancelling={cancellingTaskIds.has(taskId)}
 					onDismiss={() => dismissTask(taskId)}
-					onCancelled={handleCancelled}
+					onCancelling={() => handleTaskCancelling(taskId)}
 				/>
 			{/each}
 		</CardContent>

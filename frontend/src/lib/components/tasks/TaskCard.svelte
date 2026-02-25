@@ -14,30 +14,36 @@
 		task?: TaskResponse | null;
 		progress?: TaskProgressEvent | null;
 		childrenSummary?: ChildrenSummary | null;
+		cancelling?: boolean;
 		onDismiss?: () => void;
-		onCancelled?: () => void;
+		onCancelling?: () => void;
 	}
 
 	let {
 		task = null,
 		progress = null,
 		childrenSummary = null,
+		cancelling = false,
 		onDismiss,
-		onCancelled
+		onCancelling
 	}: Props = $props();
 
 	let expanded = $state(false);
-	let cancelling = $state(false);
+	let cancelApiInFlight = $state(false);
 	let showCancelConfirm = $state(false);
 
-	// Derived values from either progress events or task data
-	const currentStatus = $derived(progress?.status ?? task?.status ?? 'pending');
+	// Backend status from SSE or task data (the real status from the server)
+	const backendStatus = $derived(progress?.status ?? task?.status ?? 'pending');
+	// Display status: override with 'cancelling' while waiting for backend confirmation
+	const currentStatus = $derived(
+		cancelling && !isTerminalStatus(backendStatus) ? 'cancelling' : backendStatus
+	);
 	const currentProgress = $derived(progress?.progress ?? task?.progress ?? 0);
 	const currentMessage = $derived(progress?.message ?? task?.message ?? null);
 	const taskType = $derived(task?.task_type ?? 'import_directory');
 	const taskId = $derived(progress?.task_id ?? task?.id ?? '');
-	const isTerminal = $derived(isTerminalStatus(currentStatus));
-	const canCancel = $derived(!isTerminal && !cancelling);
+	const isTerminal = $derived(isTerminalStatus(backendStatus));
+	const canCancel = $derived(!isTerminal && !cancelling && !cancelApiInFlight);
 
 	// Persist the last-seen structured data — not every SSE event carries it
 	// (e.g. on_file_start sends progress without data), so we keep the most
@@ -70,7 +76,7 @@
 	let elapsedInterval: ReturnType<typeof setInterval> | null = null;
 
 	$effect(() => {
-		if (currentStatus === 'running' && task?.started_at) {
+		if (backendStatus === 'running' && task?.started_at) {
 			const startedAt = task.started_at;
 			elapsedTime = formatElapsedTime(startedAt);
 			elapsedInterval = setInterval(() => {
@@ -91,15 +97,15 @@
 
 	async function handleCancel() {
 		if (!taskId) return;
-		cancelling = true;
+		cancelApiInFlight = true;
 		try {
 			await api.tasks.cancel(taskId);
 			showCancelConfirm = false;
-			onCancelled?.();
+			onCancelling?.();
 		} catch {
 			// Error handling — the task may have finished between button click and request
 		} finally {
-			cancelling = false;
+			cancelApiInFlight = false;
 		}
 	}
 </script>
@@ -124,9 +130,9 @@
 							size="sm"
 							class="h-6 px-2 text-xs"
 							onclick={handleCancel}
-							disabled={cancelling}
+							disabled={cancelApiInFlight}
 						>
-							{cancelling ? 'Cancelling...' : 'Yes'}
+							{cancelApiInFlight ? 'Cancelling...' : 'Yes'}
 						</Button>
 						<Button
 							variant="ghost"
@@ -197,16 +203,19 @@
 	</div>
 
 	<!-- Progress bar -->
-	{#if !isTerminal || currentStatus === 'cancelled'}
+	{#if !isTerminal || currentStatus === 'cancelled' || currentStatus === 'cancelling'}
 		<div class="mt-2 h-2 w-full overflow-hidden rounded-full bg-muted">
 			<div
 				class="h-full rounded-full transition-all duration-300 {progressBarColor(currentStatus)}"
+				class:animate-pulse={currentStatus === 'cancelling'}
 				style="width: {currentProgress}%"
 			></div>
 		</div>
 		<div class="mt-1 flex items-center justify-between text-xs text-muted-foreground">
 			<span>
-				{#if currentMessage}
+				{#if currentStatus === 'cancelling'}
+					Cancelling import...
+				{:else if currentMessage}
 					{currentMessage}
 				{:else if currentStatus === 'cancelled'}
 					Import cancelled
