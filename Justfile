@@ -83,3 +83,67 @@ ci-local *args:
 # Run a single CI job locally via act (e.g. just ci-job fmt)
 ci-job job:
     act -j {{ job }}
+
+# ── Dev Workflow ────────────────────────────────────────────────────────────
+
+# Fresh boot: clean slate + backend + frontend + create admin + print creds
+dev-fresh:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    trap 'kill 0' EXIT
+    export ARCHIVIS_DATA_DIR=".local/fresh"
+    ./scripts/dev-boot.sh wipe
+    cargo run --package archivis-server -- --data-dir .local/fresh &
+    cd frontend && npm run dev &
+    sleep 1
+    ./scripts/dev-boot.sh setup
+    wait
+
+# Fresh boot: backend only (no frontend)
+dev-fresh-backend:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    trap 'kill 0' EXIT
+    export ARCHIVIS_DATA_DIR=".local/fresh"
+    ./scripts/dev-boot.sh wipe
+    cargo run --package archivis-server -- --data-dir .local/fresh &
+    ./scripts/dev-boot.sh setup
+    wait
+
+# Reset DB only in .local/data/ (preserves book files)
+dev-reset:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    export ARCHIVIS_DATA_DIR=".local/data"
+    ./scripts/dev-boot.sh wipe-db
+    echo "DB wiped. Restart the server to see setup screen."
+
+# Full wipe of .local/data/
+dev-reset-full:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    export ARCHIVIS_DATA_DIR=".local/data"
+    ./scripts/dev-boot.sh wipe
+    echo "Data directory wiped. Restart the server to start fresh."
+
+# Seed test data from a directory into a running instance (requires ARCHIVIS_DEV_PASSWORD)
+dev-seed dir=".local/test-existing":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    export ARCHIVIS_DATA_DIR=".local/fresh"
+    ./scripts/dev-boot.sh seed "{{ dir }}"
+
+# Fresh boot + auto-seed test data in one command
+dev-fresh-seed:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    trap 'kill 0' EXIT
+    export ARCHIVIS_DATA_DIR=".local/fresh"
+    export ARCHIVIS_DEV_PASSWORD="${ARCHIVIS_DEV_PASSWORD:-$(openssl rand -base64 18)}"
+    ./scripts/dev-boot.sh wipe
+    cargo run --package archivis-server -- --data-dir .local/fresh &
+    cd frontend && npm run dev &
+    sleep 1
+    ./scripts/dev-boot.sh setup
+    ./scripts/dev-boot.sh seed
+    wait
