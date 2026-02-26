@@ -59,6 +59,7 @@ pub async fn browse_directory(
     }
 
     let mut entries = Vec::new();
+    let mut file_count: u64 = 0;
     let mut read_dir = tokio::fs::read_dir(&canonical).await.map_err(|e| {
         ApiError::Validation(format!(
             "cannot read directory '{}': {e}",
@@ -81,8 +82,9 @@ pub async fn browse_directory(
 
         let is_dir = metadata.is_dir();
 
-        // When dirs_only is set, skip non-directory entries.
+        // When dirs_only is set, count (but don't return) non-directory entries.
         if params.dirs_only && !is_dir {
+            file_count += 1;
             continue;
         }
 
@@ -104,6 +106,7 @@ pub async fn browse_directory(
         path: canonical.to_string_lossy().into_owned(),
         parent,
         entries,
+        file_count,
     }))
 }
 
@@ -139,6 +142,7 @@ mod tests {
         }
 
         let mut entries = Vec::new();
+        let mut file_count: u64 = 0;
         let mut read_dir = tokio::fs::read_dir(&canonical).await.map_err(|e| {
             ApiError::Validation(format!(
                 "cannot read directory '{}': {e}",
@@ -156,6 +160,7 @@ mod tests {
             };
             let is_dir = metadata.is_dir();
             if dirs_only && !is_dir {
+                file_count += 1;
                 continue;
             }
             let size = if is_dir { 0 } else { metadata.len() };
@@ -174,6 +179,7 @@ mod tests {
             path: canonical.to_string_lossy().into_owned(),
             parent,
             entries,
+            file_count,
         }))
     }
 
@@ -214,6 +220,39 @@ mod tests {
         assert_eq!(result.entries.len(), 1);
         assert_eq!(result.entries[0].name, "subdir");
         assert!(result.entries[0].is_dir);
+        // Filtered file should be counted.
+        assert_eq!(result.file_count, 1);
+    }
+
+    #[tokio::test]
+    async fn file_count_zero_when_not_dirs_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(tmp.path().join("subdir")).unwrap();
+        std::fs::write(tmp.path().join("file.txt"), "hello").unwrap();
+
+        let result = call_browse(Some(tmp.path().to_str().unwrap()), false)
+            .await
+            .unwrap();
+
+        // When dirs_only is false, file_count should be 0 (all entries returned).
+        assert_eq!(result.entries.len(), 2);
+        assert_eq!(result.file_count, 0);
+    }
+
+    #[tokio::test]
+    async fn file_count_with_only_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("a.epub"), "book").unwrap();
+        std::fs::write(tmp.path().join("b.pdf"), "doc").unwrap();
+        std::fs::write(tmp.path().join("c.mobi"), "ebook").unwrap();
+
+        let result = call_browse(Some(tmp.path().to_str().unwrap()), true)
+            .await
+            .unwrap();
+
+        // No directories, so entries is empty but file_count reflects the files.
+        assert_eq!(result.entries.len(), 0);
+        assert_eq!(result.file_count, 3);
     }
 
     #[tokio::test]

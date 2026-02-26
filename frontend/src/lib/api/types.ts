@@ -287,6 +287,7 @@ export interface BrowseResponse {
 	path: string;
 	parent: string | null;
 	entries: FsEntry[];
+	file_count: number;
 }
 
 // --- Import types ---

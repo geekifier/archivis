@@ -50,6 +50,7 @@ function makeBrowseResponse(overrides?: Partial<BrowseResponse>): BrowseResponse
 			{ name: 'documents', is_dir: true, size: 0 },
 			{ name: 'readme.txt', is_dir: false, size: 1024 }
 		],
+		file_count: 0,
 		...overrides
 	};
 }

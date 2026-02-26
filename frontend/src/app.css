@@ -106,3 +106,12 @@
 		@apply bg-background text-foreground;
 	}
 }
+
+@keyframes gentle-glow {
+	0%, 80% { box-shadow: 0 0 4px 1px color-mix(in oklch, var(--primary) 10%, transparent); }
+	50% { box-shadow: 0 0 12px 1px color-mix(in oklch, var(--primary) 70%, transparent); }
+}
+
+.animate-gentle-glow {
+	animation: gentle-glow 2s ease-in-out infinite;
+}

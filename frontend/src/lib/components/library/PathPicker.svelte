@@ -11,12 +11,14 @@
 		open: boolean;
 		mode?: 'directory' | 'file';
 		title?: string;
+		onselect?: (path: string, hasContent: boolean) => void;
 	}
 
-	let { value = $bindable(), open = $bindable(), mode = 'directory', title }: Props = $props();
+	let { value = $bindable(), open = $bindable(), mode = 'directory', title, onselect }: Props = $props();
 
 	let currentPath = $state('/');
 	let entries = $state<FsEntry[]>([]);
+	let fileCount = $state(0);
 	let loading = $state(false);
 	let error = $state<string | null>(null);
 	let manualInput = $state('');
@@ -38,9 +40,11 @@
 			currentPath = result.path;
 			manualInput = result.path;
 			entries = result.entries;
+			fileCount = result.file_count;
 		} catch (err) {
 			error = err instanceof Error ? err.message : 'Failed to browse directory';
 			entries = [];
+			fileCount = 0;
 		} finally {
 			loading = false;
 		}
@@ -72,6 +76,7 @@
 	function handleSelect() {
 		value = currentPath;
 		open = false;
+		onselect?.(currentPath, entries.length > 0 || fileCount > 0);
 	}
 
 	function handleOpenChange(isOpen: boolean) {
@@ -205,7 +210,11 @@
 				{/if}
 				{#if entries.length === 0 && !error}
 					<div class="flex items-center justify-center p-8 text-sm text-muted-foreground">
-						Empty directory
+						{#if fileCount > 0}
+							{fileCount} {fileCount === 1 ? 'file' : 'files'} in this directory
+						{:else}
+							Empty directory
+						{/if}
 					</div>
 				{/if}
 				{#each entries as entry (entry.name)}

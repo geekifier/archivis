@@ -483,7 +483,14 @@
 						{/if}
 					</Button>
 				</div>
-				<PathPicker bind:value={scanPath} bind:open={pickerOpen} mode="directory" />
+				<PathPicker
+				bind:value={scanPath}
+				bind:open={pickerOpen}
+				mode="directory"
+				onselect={(_, hasContent) => {
+					if (hasContent) handleScan();
+				}}
+			/>
 
 				{#if scanError}
 					<p class="mt-3 text-sm text-destructive">{scanError}</p>
@@ -525,7 +532,7 @@
 						{/if}
 
 						<div class="mt-4">
-							<Button onclick={handleStartImport} disabled={startingImport}>
+							<Button class="animate-gentle-glow" onclick={handleStartImport} disabled={startingImport}>
 								{#if startingImport}
 									<svg
 										class="size-4 animate-spin"

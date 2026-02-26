@@ -31,4 +31,6 @@ pub struct BrowseResponse {
     pub parent: Option<String>,
     /// Directory entries sorted: directories first, then alphabetical.
     pub entries: Vec<FsEntry>,
+    /// Number of non-hidden files in the directory (populated when `dirs_only` is set).
+    pub file_count: u64,
 }
