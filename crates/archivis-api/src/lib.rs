@@ -9,6 +9,7 @@ pub mod import;
 pub mod isbn_scan;
 pub mod publishers;
 pub mod series;
+pub mod settings;
 pub mod state;
 pub mod tags;
 pub mod tasks;
@@ -115,6 +116,9 @@ mod openapi {
             super::duplicates::handlers::flag_duplicate,
             // Filesystem
             super::filesystem::handlers::browse_directory,
+            // Settings
+            super::settings::handlers::get_settings,
+            super::settings::handlers::update_settings,
         ),
         components(schemas(
             // Auth
@@ -198,6 +202,14 @@ mod openapi {
             // Filesystem
             super::filesystem::types::FsEntry,
             super::filesystem::types::BrowseResponse,
+            // Settings
+            super::settings::types::SettingsResponse,
+            super::settings::types::UpdateSettingsRequest,
+            super::settings::types::UpdateSettingsResponse,
+            super::settings::service::SettingEntry,
+            super::settings::service::ConfigSource,
+            super::settings::service::ConfigOverride,
+            super::settings::registry::SettingType,
         )),
         tags(
             (name = "auth", description = "Authentication and user management"),
@@ -212,6 +224,7 @@ mod openapi {
             (name = "tasks", description = "Background task management"),
             (name = "duplicates", description = "Duplicate book management and merging"),
             (name = "filesystem", description = "Server filesystem browsing"),
+            (name = "settings", description = "Instance settings management"),
         )
     )]
     pub struct ApiDoc;
@@ -235,7 +248,8 @@ pub fn build_router(state: AppState) -> Router {
         .nest("/identify", identify::router())
         .nest("/isbn-scan", isbn_scan::router())
         .nest("/duplicates", duplicates::router())
-        .nest("/filesystem", filesystem::router());
+        .nest("/filesystem", filesystem::router())
+        .nest("/settings", settings::router());
 
     let mut router = Router::new()
         .merge(SwaggerUi::new("/api/docs").url("/api/openapi.json", openapi::ApiDoc::openapi()))
@@ -312,6 +326,14 @@ mod tests {
             dir.to_path_buf(),
         ));
 
+        let config_service = Arc::new(crate::settings::service::ConfigService::new(
+            std::collections::HashMap::new(),
+            std::collections::HashMap::new(),
+            std::collections::HashMap::new(),
+            std::collections::HashMap::new(),
+            db_pool.clone(),
+        ));
+
         AppState::new(
             db_pool,
             Arc::new(task_queue),
@@ -324,6 +346,7 @@ mod tests {
                 data_dir: dir.to_path_buf(),
                 frontend_dir,
             },
+            config_service,
         )
     }
 

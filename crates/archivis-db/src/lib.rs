@@ -6,6 +6,6 @@ pub use repositories::{
     AuthorRepository, BookAuthorEntry, BookFileRepository, BookFilter, BookRepository,
     BookSeriesEntry, BookWithAuthors, BookWithRelations, CandidateRepository, ChildTaskSummary,
     DuplicateRepository, IdentifierRepository, PaginatedResult, PaginationParams,
-    PublisherRepository, SeriesRepository, SessionRepository, SortOrder, TagRepository,
-    TaskRepository, UserRepository,
+    PublisherRepository, SeriesRepository, SessionRepository, SettingRepository, SortOrder,
+    TagRepository, TaskRepository, UserRepository,
 };

@@ -242,7 +242,7 @@ impl AppConfig {
     }
 
     /// Resolve defaults that depend on other config values.
-    fn resolve_derived_defaults(&mut self) {
+    pub fn resolve_derived_defaults(&mut self) {
         if self.book_storage_path.as_os_str().is_empty() {
             self.book_storage_path = self.data_dir.join("books");
         }
@@ -258,6 +258,302 @@ impl AppConfig {
     /// The socket address string the server should bind to.
     pub fn bind_address(&self) -> String {
         format!("{}:{}", self.listen_address, self.port)
+    }
+}
+
+// ── Config flattening and source detection ──────────────────────
+
+use std::collections::HashMap;
+
+use archivis_api::settings::service::{ConfigOverride, ConfigSource};
+
+/// Flatten an `AppConfig` into a `HashMap<String, serde_json::Value>` with dotted keys.
+pub fn flatten_config(config: &AppConfig) -> HashMap<String, serde_json::Value> {
+    let value = serde_json::to_value(config).expect("AppConfig must be serializable");
+    let mut map = HashMap::new();
+    flatten_value(&value, "", &mut map);
+    map
+}
+
+fn flatten_value(
+    value: &serde_json::Value,
+    prefix: &str,
+    map: &mut HashMap<String, serde_json::Value>,
+) {
+    match value {
+        serde_json::Value::Object(obj) => {
+            for (k, v) in obj {
+                let key = if prefix.is_empty() {
+                    k.clone()
+                } else {
+                    format!("{prefix}.{k}")
+                };
+                flatten_value(v, &key, map);
+            }
+        }
+        _ => {
+            map.insert(prefix.to_string(), value.clone());
+        }
+    }
+}
+
+/// Detect which env vars override settings. Returns only keys that have active overrides.
+pub fn detect_env_overrides(cli: &Cli) -> HashMap<String, ConfigOverride> {
+    let mut overrides = HashMap::new();
+
+    // Map of setting keys to their environment variable names
+    let env_mappings: &[(&str, &str)] = &[
+        ("listen_address", "ARCHIVIS_LISTEN_ADDRESS"),
+        ("port", "ARCHIVIS_PORT"),
+        ("data_dir", "ARCHIVIS_DATA_DIR"),
+        ("book_storage_path", "ARCHIVIS_BOOK_STORAGE_PATH"),
+        ("frontend_dir", "ARCHIVIS_FRONTEND_DIR"),
+        ("log_level", "ARCHIVIS_LOG_LEVEL"),
+        ("metadata.enabled", "ARCHIVIS_METADATA__ENABLED"),
+        ("metadata.contact_email", "ARCHIVIS_METADATA__CONTACT_EMAIL"),
+        (
+            "metadata.auto_identify_threshold",
+            "ARCHIVIS_METADATA__AUTO_IDENTIFY_THRESHOLD",
+        ),
+        (
+            "metadata.max_concurrent_identifies",
+            "ARCHIVIS_METADATA__MAX_CONCURRENT_IDENTIFIES",
+        ),
+        (
+            "metadata.open_library.enabled",
+            "ARCHIVIS_METADATA__OPEN_LIBRARY__ENABLED",
+        ),
+        (
+            "metadata.open_library.max_requests_per_minute",
+            "ARCHIVIS_METADATA__OPEN_LIBRARY__MAX_REQUESTS_PER_MINUTE",
+        ),
+        (
+            "metadata.hardcover.enabled",
+            "ARCHIVIS_METADATA__HARDCOVER__ENABLED",
+        ),
+        (
+            "metadata.hardcover.api_token",
+            "ARCHIVIS_METADATA__HARDCOVER__API_TOKEN",
+        ),
+        (
+            "metadata.hardcover.max_requests_per_minute",
+            "ARCHIVIS_METADATA__HARDCOVER__MAX_REQUESTS_PER_MINUTE",
+        ),
+        (
+            "isbn_scan.scan_on_import",
+            "ARCHIVIS_ISBN_SCAN__SCAN_ON_IMPORT",
+        ),
+        ("isbn_scan.confidence", "ARCHIVIS_ISBN_SCAN__CONFIDENCE"),
+        (
+            "isbn_scan.skip_threshold",
+            "ARCHIVIS_ISBN_SCAN__SKIP_THRESHOLD",
+        ),
+        (
+            "isbn_scan.epub_spine_items",
+            "ARCHIVIS_ISBN_SCAN__EPUB_SPINE_ITEMS",
+        ),
+        ("isbn_scan.pdf_pages", "ARCHIVIS_ISBN_SCAN__PDF_PAGES"),
+    ];
+
+    for &(key, env_var) in env_mappings {
+        if std::env::var(env_var).is_ok() {
+            overrides.insert(
+                key.to_string(),
+                ConfigOverride {
+                    source: ConfigSource::Env,
+                    env_var: Some(env_var.to_string()),
+                },
+            );
+        }
+    }
+
+    // CLI overrides: detect by checking if the Option fields were provided
+    let cli_mappings: &[(&str, bool)] = &[
+        ("listen_address", cli.listen_address.is_some()),
+        ("port", cli.port.is_some()),
+        ("data_dir", cli.data_dir.is_some()),
+        ("book_storage_path", cli.book_storage_path.is_some()),
+        ("frontend_dir", cli.frontend_dir.is_some()),
+        ("log_level", cli.log_level.is_some()),
+    ];
+
+    for &(key, present) in cli_mappings {
+        if present {
+            overrides.insert(
+                key.to_string(),
+                ConfigOverride {
+                    source: ConfigSource::Cli,
+                    env_var: None,
+                },
+            );
+        }
+    }
+
+    overrides
+}
+
+/// Detect the configured source (default vs file vs database) for each setting.
+pub fn detect_configured_sources(
+    default_flat: &HashMap<String, serde_json::Value>,
+    file_flat: &HashMap<String, serde_json::Value>,
+    db_keys: &[String],
+) -> HashMap<String, ConfigSource> {
+    let mut sources = HashMap::new();
+
+    for meta in archivis_api::settings::registry::all_settings() {
+        let source = if db_keys.contains(&meta.key.to_string()) {
+            ConfigSource::Database
+        } else if file_flat.get(meta.key) != default_flat.get(meta.key) {
+            ConfigSource::File
+        } else {
+            ConfigSource::Default
+        };
+        sources.insert(meta.key.to_string(), source);
+    }
+
+    sources
+}
+
+/// Apply DB settings as overrides to an `AppConfig` by updating fields directly.
+pub fn apply_db_settings(config: &mut AppConfig, db_settings: &[(String, String)]) {
+    for (key, json_value) in db_settings {
+        let Ok(value) = serde_json::from_str(json_value) else {
+            continue;
+        };
+
+        apply_setting_to_config(config, key, &value);
+    }
+    config.resolve_derived_defaults();
+}
+
+/// Apply a single setting value to the config struct.
+#[allow(clippy::too_many_lines)]
+fn apply_setting_to_config(config: &mut AppConfig, key: &str, value: &serde_json::Value) {
+    match key {
+        "listen_address" => {
+            if let Some(s) = value.as_str() {
+                config.listen_address = s.to_string();
+            }
+        }
+        "port" => {
+            if let Some(n) = value.as_u64() {
+                if let Ok(p) = u16::try_from(n) {
+                    config.port = p;
+                }
+            }
+        }
+        "data_dir" => {
+            if let Some(s) = value.as_str() {
+                config.data_dir = PathBuf::from(s);
+            }
+        }
+        "book_storage_path" => {
+            if let Some(s) = value.as_str() {
+                config.book_storage_path = PathBuf::from(s);
+            }
+        }
+        "frontend_dir" => match value {
+            serde_json::Value::Null => config.frontend_dir = None,
+            serde_json::Value::String(s) => config.frontend_dir = Some(PathBuf::from(s)),
+            _ => {}
+        },
+        "log_level" => {
+            if let Some(s) = value.as_str() {
+                config.log_level = s.to_string();
+            }
+        }
+        "metadata.enabled" => {
+            if let Some(b) = value.as_bool() {
+                config.metadata.enabled = b;
+            }
+        }
+        "metadata.contact_email" => match value {
+            serde_json::Value::Null => config.metadata.contact_email = None,
+            serde_json::Value::String(s) => config.metadata.contact_email = Some(s.clone()),
+            _ => {}
+        },
+        "metadata.auto_identify_threshold" => {
+            if let Some(f) = value.as_f64() {
+                #[allow(clippy::cast_possible_truncation)]
+                {
+                    config.metadata.auto_identify_threshold = f as f32;
+                }
+            }
+        }
+        "metadata.max_concurrent_identifies" => {
+            if let Some(n) = value.as_u64() {
+                if let Ok(v) = usize::try_from(n) {
+                    config.metadata.max_concurrent_identifies = v;
+                }
+            }
+        }
+        "metadata.open_library.enabled" => {
+            if let Some(b) = value.as_bool() {
+                config.metadata.open_library.enabled = b;
+            }
+        }
+        "metadata.open_library.max_requests_per_minute" => {
+            if let Some(n) = value.as_u64() {
+                if let Ok(v) = u32::try_from(n) {
+                    config.metadata.open_library.max_requests_per_minute = v;
+                }
+            }
+        }
+        "metadata.hardcover.enabled" => {
+            if let Some(b) = value.as_bool() {
+                config.metadata.hardcover.enabled = b;
+            }
+        }
+        "metadata.hardcover.api_token" => match value {
+            serde_json::Value::Null => config.metadata.hardcover.api_token = None,
+            serde_json::Value::String(s) => {
+                config.metadata.hardcover.api_token = Some(s.clone());
+            }
+            _ => {}
+        },
+        "metadata.hardcover.max_requests_per_minute" => {
+            if let Some(n) = value.as_u64() {
+                if let Ok(v) = u32::try_from(n) {
+                    config.metadata.hardcover.max_requests_per_minute = v;
+                }
+            }
+        }
+        "isbn_scan.scan_on_import" => {
+            if let Some(b) = value.as_bool() {
+                config.isbn_scan.scan_on_import = b;
+            }
+        }
+        "isbn_scan.confidence" => {
+            if let Some(f) = value.as_f64() {
+                #[allow(clippy::cast_possible_truncation)]
+                {
+                    config.isbn_scan.confidence = f as f32;
+                }
+            }
+        }
+        "isbn_scan.skip_threshold" => {
+            if let Some(f) = value.as_f64() {
+                #[allow(clippy::cast_possible_truncation)]
+                {
+                    config.isbn_scan.skip_threshold = f as f32;
+                }
+            }
+        }
+        "isbn_scan.epub_spine_items" => {
+            if let Some(n) = value.as_u64() {
+                if let Ok(v) = usize::try_from(n) {
+                    config.isbn_scan.epub_spine_items = v;
+                }
+            }
+        }
+        "isbn_scan.pdf_pages" => {
+            if let Some(n) = value.as_u64() {
+                if let Ok(v) = usize::try_from(n) {
+                    config.isbn_scan.pdf_pages = v;
+                }
+            }
+        }
+        _ => {}
     }
 }
 

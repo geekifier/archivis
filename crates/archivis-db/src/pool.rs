@@ -173,6 +173,7 @@ mod tests {
             "publishers",
             "series",
             "sessions",
+            "settings",
             "tags",
             "tasks",
             "users",

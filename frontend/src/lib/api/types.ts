@@ -460,3 +460,37 @@ export interface IsbnScanResponse {
 export interface BatchIsbnScanResponse {
 	tasks: IsbnScanResponse[];
 }
+
+// --- Settings types ---
+
+export type ConfigSource = 'default' | 'file' | 'database' | 'env' | 'cli';
+export type SettingType = 'string' | 'optional_string' | 'boolean' | 'integer' | 'float';
+
+export interface SettingOverride {
+	source: 'env' | 'cli';
+	env_var?: string;
+}
+
+export interface SettingEntry {
+	key: string;
+	value: unknown;
+	effective_value: unknown;
+	source: ConfigSource;
+	override: SettingOverride | null;
+	requires_restart: boolean;
+	label: string;
+	description: string;
+	section: string;
+	value_type: SettingType;
+	sensitive?: boolean;
+	is_set?: boolean;
+}
+
+export interface SettingsResponse {
+	settings: SettingEntry[];
+}
+
+export interface UpdateSettingsResponse {
+	updated: string[];
+	requires_restart: boolean;
+}

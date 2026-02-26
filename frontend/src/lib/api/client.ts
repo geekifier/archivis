@@ -35,11 +35,13 @@ import type {
 	SetBookAuthorsRequest,
 	SetBookSeriesRequest,
 	SetBookTagsRequest,
+	SettingsResponse,
 	SetupRequest,
 	TaskCreatedResponse,
 	TaskResponse,
 	UpdateBookRequest,
 	UpdateIdentifierRequest,
+	UpdateSettingsResponse,
 	UploadResponse,
 	User
 } from './types.js';
@@ -582,6 +584,18 @@ export const api = {
 				book_ids: bookIds
 			});
 		}
+	},
+
+	settings: {
+		/** Fetch all instance settings. */
+		get(): Promise<SettingsResponse> {
+			return request<SettingsResponse>('GET', '/settings');
+		},
+
+		/** Update one or more settings. Null value = reset to default. */
+		update(settings: Record<string, unknown>): Promise<UpdateSettingsResponse> {
+			return request<UpdateSettingsResponse>('PUT', '/settings', { settings });
+		}
 	}
 } as const;
 
@@ -607,6 +621,7 @@ export type {
 	CandidateResponse,
 	CandidateSeriesInfo,
 	ChildrenSummary,
+	ConfigSource,
 	CreateAuthorRequest,
 	CreatePublisherRequest,
 	DuplicateCountResponse,
@@ -637,6 +652,10 @@ export type {
 	SetBookAuthorsRequest,
 	SetBookSeriesRequest,
 	SetBookTagsRequest,
+	SettingEntry,
+	SettingOverride,
+	SettingsResponse,
+	SettingType,
 	SetupRequest,
 	SortField,
 	SortOrder,
@@ -649,6 +668,7 @@ export type {
 	TaskType,
 	UpdateBookRequest,
 	UpdateIdentifierRequest,
+	UpdateSettingsResponse,
 	UploadResponse,
 	User,
 	UserRole

@@ -26,7 +26,7 @@ use tokio::net::TcpListener;
 async fn main() {
     let cli = Cli::parse();
 
-    let config = match AppConfig::load(&cli) {
+    let mut config = match AppConfig::load(&cli) {
         Ok(config) => config,
         Err(err) => {
             eprintln!("Failed to load configuration: {err}");
@@ -65,6 +65,9 @@ async fn main() {
         std::process::exit(1);
     }
 
+    // 1a. Settings: load DB overrides and build ConfigService
+    let config_service = init_config_service(&cli, &mut config, &db_pool).await;
+
     // 2. Storage
     let storage = match LocalStorage::new(&config.book_storage_path).await {
         Ok(s) => s,
@@ -82,8 +85,15 @@ async fn main() {
     let provider_registry = init_metadata_providers(&config.metadata);
 
     // 5. Task queue, workers, and services
-    let router =
-        init_services_and_router(db_pool, storage, auth_service, provider_registry, &config).await;
+    let router = init_services_and_router(
+        db_pool,
+        storage,
+        auth_service,
+        provider_registry,
+        &config,
+        config_service,
+    )
+    .await;
 
     // 6. Bind and serve
     let bind_addr = config.bind_address();
@@ -107,6 +117,58 @@ async fn main() {
     tracing::info!("Archivis stopped");
 }
 
+/// Load settings from the database, apply them to the effective config, and build
+/// the `ConfigService` that powers the admin settings API.
+async fn init_config_service(
+    cli: &Cli,
+    config: &mut AppConfig,
+    db_pool: &archivis_db::DbPool,
+) -> Arc<archivis_api::settings::service::ConfigService> {
+    let db_settings = archivis_db::SettingRepository::get_all(db_pool)
+        .await
+        .unwrap_or_else(|err| {
+            tracing::warn!(%err, "Failed to load settings from database");
+            Vec::new()
+        });
+    let db_keys: Vec<String> = db_settings.iter().map(|(k, _)| k.clone()).collect();
+
+    // Build "configured" config: defaults + TOML + DB (no env/CLI)
+    let configured_config = {
+        let config_path = cli.config.to_str().unwrap_or("config.toml");
+        let base_cli = Cli::parse_from::<[&str; 3], &str>(["archivis", "--config", config_path]);
+        let mut base = AppConfig::load(&base_cli).unwrap_or_default();
+        config::apply_db_settings(&mut base, &db_settings);
+        base
+    };
+
+    // Apply DB settings to the effective config
+    config::apply_db_settings(config, &db_settings);
+
+    // Flatten configs for source detection
+    let default_flat = config::flatten_config(&AppConfig::default());
+    let configured_flat = config::flatten_config(&configured_config);
+    let effective_flat = config::flatten_config(config);
+
+    // Detect where each configured value comes from and which overrides are active
+    let toml_only_flat = {
+        let config_path = cli.config.to_str().unwrap_or("config.toml");
+        let base_cli = Cli::parse_from::<[&str; 3], &str>(["archivis", "--config", config_path]);
+        let base = AppConfig::load(&base_cli).unwrap_or_default();
+        config::flatten_config(&base)
+    };
+    let configured_sources =
+        config::detect_configured_sources(&default_flat, &toml_only_flat, &db_keys);
+    let env_overrides = config::detect_env_overrides(cli);
+
+    Arc::new(archivis_api::settings::service::ConfigService::new(
+        effective_flat,
+        configured_flat,
+        configured_sources,
+        env_overrides,
+        db_pool.clone(),
+    ))
+}
+
 /// Initialize the task queue, background workers, and all application services,
 /// then build the Axum router.
 async fn init_services_and_router(
@@ -115,6 +177,7 @@ async fn init_services_and_router(
     auth_service: AuthService<LocalAuthAdapter>,
     provider_registry: Arc<ProviderRegistry>,
     config: &AppConfig,
+    config_service: Arc<archivis_api::settings::service::ConfigService>,
 ) -> axum::Router {
     let (task_queue, dispatch_rx) = TaskQueue::new(db_pool.clone());
     let task_queue = Arc::new(task_queue);
@@ -178,6 +241,7 @@ async fn init_services_and_router(
         identify_service,
         merge_service,
         api_config,
+        config_service,
     );
     archivis_api::build_router(state)
 }

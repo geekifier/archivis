@@ -9,6 +9,8 @@ use archivis_tasks::identify::IdentificationService;
 use archivis_tasks::merge::MergeService;
 use archivis_tasks::queue::TaskQueue;
 
+use crate::settings::service::ConfigService;
+
 /// API-specific configuration extracted from the application config.
 #[derive(Debug, Clone)]
 pub struct ApiConfig {
@@ -35,6 +37,7 @@ struct AppStateInner {
     identify_service: Arc<IdentificationService<LocalStorage>>,
     merge_service: Arc<MergeService<LocalStorage>>,
     config: ApiConfig,
+    config_service: Arc<ConfigService>,
 }
 
 impl AppState {
@@ -48,6 +51,7 @@ impl AppState {
         identify_service: Arc<IdentificationService<LocalStorage>>,
         merge_service: Arc<MergeService<LocalStorage>>,
         config: ApiConfig,
+        config_service: Arc<ConfigService>,
     ) -> Self {
         Self {
             inner: Arc::new(AppStateInner {
@@ -59,6 +63,7 @@ impl AppState {
                 identify_service,
                 merge_service,
                 config,
+                config_service,
             }),
         }
     }
@@ -93,5 +98,9 @@ impl AppState {
 
     pub fn config(&self) -> &ApiConfig {
         &self.inner.config
+    }
+
+    pub fn config_service(&self) -> &ConfigService {
+        &self.inner.config_service
     }
 }
