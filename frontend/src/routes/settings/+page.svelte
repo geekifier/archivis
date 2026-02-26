@@ -56,6 +56,10 @@
 		return section.startsWith('metadata.') && section !== 'metadata';
 	}
 
+	function isBootstrap(entry: SettingEntry): boolean {
+		return entry.scope === 'bootstrap';
+	}
+
 	function getCurrentValue(entry: SettingEntry): unknown {
 		if (entry.key in editedValues) {
 			return editedValues[entry.key];
@@ -300,7 +304,14 @@
 								</div>
 
 								<div class="flex shrink-0 items-center gap-2">
-									{#if entry.value_type === 'bool'}
+									{#if isBootstrap(entry)}
+										<!-- Bootstrap settings are read-only -->
+										<span
+											class="inline-flex h-9 items-center rounded-md border border-input bg-muted/50 px-3 text-sm text-muted-foreground"
+										>
+											{entry.sensitive ? '***' : String(entry.effective_value ?? entry.value ?? '')}
+										</span>
+									{:else if entry.value_type === 'bool'}
 										<button
 											type="button"
 											role="switch"
@@ -425,7 +436,7 @@
 										/>
 									{/if}
 
-									{#if entry.source === 'database'}
+									{#if entry.source === 'database' && !isBootstrap(entry)}
 										<Button
 											variant="ghost"
 											size="icon-sm"

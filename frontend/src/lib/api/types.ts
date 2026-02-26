@@ -464,6 +464,7 @@ export interface BatchIsbnScanResponse {
 // --- Settings types ---
 
 export type ConfigSource = 'default' | 'file' | 'database' | 'env' | 'cli';
+export type SettingScope = 'bootstrap' | 'runtime';
 export type SettingType = 'string' | 'optional_string' | 'bool' | 'integer' | 'float' | 'select';
 
 export interface SettingOverride {
@@ -476,6 +477,7 @@ export interface SettingEntry {
 	value: unknown;
 	effective_value: unknown;
 	source: ConfigSource;
+	scope: SettingScope;
 	override: SettingOverride | null;
 	requires_restart: boolean;
 	label: string;

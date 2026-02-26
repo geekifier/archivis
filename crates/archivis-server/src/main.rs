@@ -132,32 +132,29 @@ async fn init_config_service(
         });
     let db_keys: Vec<String> = db_settings.iter().map(|(k, _)| k.clone()).collect();
 
-    // Build "configured" config: defaults + TOML + DB (no env/CLI)
+    // Load file-only config once (defaults + TOML, no env/CLI).
+    // Used for bootstrap source detection and as the base for "configured" values.
+    let config_path = cli.config.to_str().unwrap_or("config.toml");
+    let file_cli = Cli::parse_from::<[&str; 3], &str>(["archivis", "--config", config_path]);
+    let file_config = AppConfig::load(&file_cli).unwrap_or_default();
+    let file_flat = config::flatten_config(&file_config);
+
+    // Build "configured" config: file-loaded base (bootstrap) + DB overlay (runtime)
     let configured_config = {
-        let config_path = cli.config.to_str().unwrap_or("config.toml");
-        let base_cli = Cli::parse_from::<[&str; 3], &str>(["archivis", "--config", config_path]);
-        let mut base = AppConfig::load(&base_cli).unwrap_or_default();
+        let mut base = file_config;
         config::apply_db_settings(&mut base, &db_settings);
         base
     };
 
-    // Apply DB settings to the effective config
+    // Apply DB settings to the effective config (which already has env/CLI)
     config::apply_db_settings(config, &db_settings);
 
-    // Flatten configs for source detection
+    // Flatten for source detection and API exposure
     let default_flat = config::flatten_config(&AppConfig::default());
     let configured_flat = config::flatten_config(&configured_config);
     let effective_flat = config::flatten_config(config);
 
-    // Detect where each configured value comes from and which overrides are active
-    let toml_only_flat = {
-        let config_path = cli.config.to_str().unwrap_or("config.toml");
-        let base_cli = Cli::parse_from::<[&str; 3], &str>(["archivis", "--config", config_path]);
-        let base = AppConfig::load(&base_cli).unwrap_or_default();
-        config::flatten_config(&base)
-    };
-    let configured_sources =
-        config::detect_configured_sources(&default_flat, &toml_only_flat, &db_keys);
+    let configured_sources = config::detect_configured_sources(&default_flat, &file_flat, &db_keys);
     let env_overrides = config::detect_env_overrides(cli);
 
     Arc::new(archivis_api::settings::service::ConfigService::new(

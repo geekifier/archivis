@@ -37,7 +37,7 @@ Local testing and temp directories are in `.local/` (gitignored).
 
 ## Configuration
 
-Default port is **9514**. Config layering: compiled defaults → TOML file → `ARCHIVIS_*` env vars → CLI flags.
+Default port is **9514**. Config layering: compiled defaults → TOML file + env vars + CLI flags (bootstrap) → DB via admin UI (runtime). Env vars can override any setting.
 
 ## Development Commands
 

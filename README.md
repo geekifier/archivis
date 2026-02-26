@@ -60,7 +60,9 @@ cd frontend && npm ci && npm run build && cd ..
 
 ## Configuration
 
-The server accepts configuration via CLI flags, environment variables (`ARCHIVIS_` prefix), or a TOML config file (default: `config.toml`). CLI flags take highest priority.
+Settings are divided into two scopes:
+
+**Bootstrap settings** (server, paths, logging) are set via TOML config file, environment variables (`ARCHIVIS_` prefix), or CLI flags. They are read-only in the admin UI.
 
 | Flag                  | Env var                      | Default            |
 | --------------------- | ---------------------------- | ------------------ |
@@ -72,7 +74,9 @@ The server accepts configuration via CLI flags, environment variables (`ARCHIVIS
 | `--log-level`         | `ARCHIVIS_LOG_LEVEL`         | `info`             |
 | `--config` / `-c`     | `ARCHIVIS_CONFIG`            | `config.toml`      |
 
-Example TOML config file:
+**Runtime settings** (metadata providers, ISBN scanning) are managed through the admin UI and stored in the database. Environment variables can still override them for deployment purposes, but the TOML config file is not consulted for runtime settings.
+
+Example TOML config file (bootstrap settings only):
 
 ```toml
 listen_address = "0.0.0.0"

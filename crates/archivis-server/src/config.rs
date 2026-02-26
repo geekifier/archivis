@@ -46,11 +46,14 @@ pub struct Cli {
 
 /// Application configuration.
 ///
-/// Loaded from (in order of increasing priority):
-/// 1. Compiled defaults
-/// 2. TOML config file
-/// 3. Environment variables (`ARCHIVIS_` prefix)
-/// 4. CLI flags
+/// Settings are divided into two scopes (see `SettingScope`):
+///
+/// **Bootstrap** (server, paths, logging): loaded from compiled defaults → TOML
+/// file → env vars → CLI flags. Read-only in the admin UI.
+///
+/// **Runtime** (metadata, ISBN scan): loaded from compiled defaults → DB (admin
+/// UI). Env vars and CLI flags can still override for deployment purposes, but
+/// the TOML file is **not** consulted for runtime keys.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AppConfig {
     /// Address to bind the HTTP server to.
@@ -274,6 +277,7 @@ impl AppConfig {
 
 use std::collections::HashMap;
 
+use archivis_api::settings::registry::SettingScope;
 use archivis_api::settings::service::{ConfigOverride, ConfigSource};
 
 /// Flatten an `AppConfig` into a `HashMap<String, serde_json::Value>` with dotted keys.
@@ -405,6 +409,11 @@ pub fn detect_env_overrides(cli: &Cli) -> HashMap<String, ConfigOverride> {
 }
 
 /// Detect the configured source (default vs file vs database) for each setting.
+///
+/// The logic branches on `SettingScope`:
+/// - **Bootstrap** keys: compare file values vs defaults → `File` if different, then
+///   check DB → `Database`, else `Default`.
+/// - **Runtime** keys: check DB → `Database`, else `Default` — never `File`.
 pub fn detect_configured_sources(
     default_flat: &HashMap<String, serde_json::Value>,
     file_flat: &HashMap<String, serde_json::Value>,
@@ -413,12 +422,23 @@ pub fn detect_configured_sources(
     let mut sources = HashMap::new();
 
     for meta in archivis_api::settings::registry::all_settings() {
-        let source = if db_keys.contains(&meta.key.to_string()) {
-            ConfigSource::Database
-        } else if file_flat.get(meta.key) != default_flat.get(meta.key) {
-            ConfigSource::File
-        } else {
-            ConfigSource::Default
+        let source = match meta.scope {
+            SettingScope::Bootstrap => {
+                if db_keys.contains(&meta.key.to_string()) {
+                    ConfigSource::Database
+                } else if file_flat.get(meta.key) != default_flat.get(meta.key) {
+                    ConfigSource::File
+                } else {
+                    ConfigSource::Default
+                }
+            }
+            SettingScope::Runtime => {
+                if db_keys.contains(&meta.key.to_string()) {
+                    ConfigSource::Database
+                } else {
+                    ConfigSource::Default
+                }
+            }
         };
         sources.insert(meta.key.to_string(), source);
     }
@@ -738,47 +758,25 @@ frontend_dir = "/opt/archivis/frontend"
     }
 
     #[test]
-    fn toml_metadata_config_is_loaded() {
-        let dir = std::env::temp_dir().join("archivis-test-metadata-config");
-        std::fs::create_dir_all(&dir).unwrap();
-        let config_path = dir.join("test-metadata.toml");
-        std::fs::write(
-            &config_path,
-            r#"
-[metadata]
-enabled = true
-contact_email = "test@example.com"
-auto_identify_threshold = 0.8
+    fn detect_configured_sources_uses_scope() {
+        use archivis_api::settings::service::ConfigSource;
+        let default_flat = flatten_config(&AppConfig::default());
+        // Simulate a TOML file that sets both a bootstrap key and a runtime key
+        let mut file_flat = default_flat.clone();
+        file_flat.insert("port".to_string(), serde_json::json!(9090));
+        file_flat.insert("metadata.enabled".to_string(), serde_json::json!(false));
 
-[metadata.open_library]
-enabled = false
-max_requests_per_minute = 50
+        let db_keys = vec!["isbn_scan.confidence".to_string()];
 
-[metadata.hardcover]
-enabled = true
-api_token = "test-token-123"
-max_requests_per_minute = 30
-"#,
-        )
-        .unwrap();
+        let sources = detect_configured_sources(&default_flat, &file_flat, &db_keys);
 
-        let cli = Cli::parse_from(["archivis", "--config", config_path.to_str().unwrap()]);
-        let config = AppConfig::load(&cli).expect("should load metadata config from TOML");
-        assert!(config.metadata.enabled);
-        assert_eq!(
-            config.metadata.contact_email.as_deref(),
-            Some("test@example.com")
-        );
-        assert!((config.metadata.auto_identify_threshold - 0.8).abs() < f32::EPSILON);
-        assert!(!config.metadata.open_library.enabled);
-        assert_eq!(config.metadata.open_library.max_requests_per_minute, 50);
-        assert!(config.metadata.hardcover.enabled);
-        assert_eq!(
-            config.metadata.hardcover.api_token.as_deref(),
-            Some("test-token-123")
-        );
-        assert_eq!(config.metadata.hardcover.max_requests_per_minute, 30);
-
-        let _ = std::fs::remove_dir_all(&dir);
+        // Bootstrap key changed in file → File
+        assert_eq!(sources["port"], ConfigSource::File);
+        // Runtime key changed in file → still Default (file is ignored for runtime)
+        assert_eq!(sources["metadata.enabled"], ConfigSource::Default);
+        // Runtime key in DB → Database
+        assert_eq!(sources["isbn_scan.confidence"], ConfigSource::Database);
+        // Unchanged bootstrap key → Default
+        assert_eq!(sources["listen_address"], ConfigSource::Default);
     }
 }

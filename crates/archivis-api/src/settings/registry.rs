@@ -12,12 +12,24 @@ pub enum SettingType {
     Select,
 }
 
+/// Whether a setting is owned by the bootstrap layer (config file / env / CLI)
+/// or the runtime layer (admin UI / database).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SettingScope {
+    /// Set via config file, env vars, or CLI flags. Read-only in admin UI.
+    Bootstrap,
+    /// Set via admin UI (DB) or env var/CLI overrides. Ignored in config file.
+    Runtime,
+}
+
 pub struct SettingMeta {
     pub key: &'static str,
     pub label: &'static str,
     pub description: &'static str,
     pub section: &'static str,
     pub value_type: SettingType,
+    pub scope: SettingScope,
     pub requires_restart: bool,
     pub sensitive: bool,
     pub options: Option<&'static [&'static str]>,
@@ -34,13 +46,14 @@ pub fn get_setting_meta(key: &str) -> Option<&'static SettingMeta> {
 }
 
 static SETTINGS: &[SettingMeta] = &[
-    // Server settings
+    // Server settings (bootstrap scope — set via config file / env / CLI)
     SettingMeta {
         key: "listen_address",
         label: "Listen Address",
         description: "Address to bind the HTTP server to",
         section: "server",
         value_type: SettingType::String,
+        scope: SettingScope::Bootstrap,
         requires_restart: true,
         sensitive: false,
         options: None,
@@ -51,6 +64,7 @@ static SETTINGS: &[SettingMeta] = &[
         description: "Port to bind the HTTP server to",
         section: "server",
         value_type: SettingType::Integer,
+        scope: SettingScope::Bootstrap,
         requires_restart: true,
         sensitive: false,
         options: None,
@@ -61,6 +75,7 @@ static SETTINGS: &[SettingMeta] = &[
         description: "Root directory for application data (database, cache, etc.)",
         section: "server",
         value_type: SettingType::String,
+        scope: SettingScope::Bootstrap,
         requires_restart: true,
         sensitive: false,
         options: None,
@@ -71,6 +86,7 @@ static SETTINGS: &[SettingMeta] = &[
         description: "Root directory for book file storage",
         section: "server",
         value_type: SettingType::String,
+        scope: SettingScope::Bootstrap,
         requires_restart: true,
         sensitive: false,
         options: None,
@@ -81,6 +97,7 @@ static SETTINGS: &[SettingMeta] = &[
         description: "Directory containing the built frontend assets to serve",
         section: "server",
         value_type: SettingType::OptionalString,
+        scope: SettingScope::Bootstrap,
         requires_restart: true,
         sensitive: false,
         options: None,
@@ -91,17 +108,19 @@ static SETTINGS: &[SettingMeta] = &[
         description: "Log level filter (trace, debug, info, warn, error)",
         section: "server",
         value_type: SettingType::Select,
+        scope: SettingScope::Bootstrap,
         requires_restart: true,
         sensitive: false,
         options: Some(&["trace", "debug", "info", "warn", "error"]),
     },
-    // Metadata settings
+    // Metadata settings (runtime scope — managed via admin UI / database)
     SettingMeta {
         key: "metadata.enabled",
         label: "Metadata Lookups",
         description: "Enable metadata provider lookups",
         section: "metadata",
         value_type: SettingType::Bool,
+        scope: SettingScope::Runtime,
         requires_restart: false,
         sensitive: false,
         options: None,
@@ -112,6 +131,7 @@ static SETTINGS: &[SettingMeta] = &[
         description: "Contact email included in User-Agent for API identification",
         section: "metadata",
         value_type: SettingType::OptionalString,
+        scope: SettingScope::Runtime,
         requires_restart: false,
         sensitive: false,
         options: None,
@@ -122,6 +142,7 @@ static SETTINGS: &[SettingMeta] = &[
         description: "Auto-identify books after import when confidence is below this threshold",
         section: "metadata",
         value_type: SettingType::Float,
+        scope: SettingScope::Runtime,
         requires_restart: false,
         sensitive: false,
         options: None,
@@ -132,6 +153,7 @@ static SETTINGS: &[SettingMeta] = &[
         description: "Maximum concurrent identification tasks",
         section: "metadata",
         value_type: SettingType::Integer,
+        scope: SettingScope::Runtime,
         requires_restart: false,
         sensitive: false,
         options: None,
@@ -143,6 +165,7 @@ static SETTINGS: &[SettingMeta] = &[
         description: "Whether Open Library lookups are enabled",
         section: "metadata.open_library",
         value_type: SettingType::Bool,
+        scope: SettingScope::Runtime,
         requires_restart: false,
         sensitive: false,
         options: None,
@@ -153,6 +176,7 @@ static SETTINGS: &[SettingMeta] = &[
         description: "Maximum requests per minute to Open Library",
         section: "metadata.open_library",
         value_type: SettingType::Integer,
+        scope: SettingScope::Runtime,
         requires_restart: false,
         sensitive: false,
         options: None,
@@ -164,6 +188,7 @@ static SETTINGS: &[SettingMeta] = &[
         description: "Whether Hardcover lookups are enabled",
         section: "metadata.hardcover",
         value_type: SettingType::Bool,
+        scope: SettingScope::Runtime,
         requires_restart: false,
         sensitive: false,
         options: None,
@@ -174,6 +199,7 @@ static SETTINGS: &[SettingMeta] = &[
         description: "Bearer token for the Hardcover GraphQL API",
         section: "metadata.hardcover",
         value_type: SettingType::OptionalString,
+        scope: SettingScope::Runtime,
         requires_restart: false,
         sensitive: true,
         options: None,
@@ -184,17 +210,19 @@ static SETTINGS: &[SettingMeta] = &[
         description: "Maximum requests per minute to Hardcover",
         section: "metadata.hardcover",
         value_type: SettingType::Integer,
+        scope: SettingScope::Runtime,
         requires_restart: false,
         sensitive: false,
         options: None,
     },
-    // ISBN Scan settings
+    // ISBN Scan settings (runtime scope)
     SettingMeta {
         key: "isbn_scan.scan_on_import",
         label: "Scan on Import",
         description: "Automatically scan imported books for ISBNs in their content",
         section: "isbn_scan",
         value_type: SettingType::Bool,
+        scope: SettingScope::Runtime,
         requires_restart: false,
         sensitive: false,
         options: None,
@@ -205,6 +233,7 @@ static SETTINGS: &[SettingMeta] = &[
         description: "Confidence value assigned to ISBNs found via content scanning (0.0-1.0)",
         section: "isbn_scan",
         value_type: SettingType::Float,
+        scope: SettingScope::Runtime,
         requires_restart: false,
         sensitive: false,
         options: None,
@@ -215,6 +244,7 @@ static SETTINGS: &[SettingMeta] = &[
         description: "Skip scanning if any existing ISBN has confidence >= this threshold",
         section: "isbn_scan",
         value_type: SettingType::Float,
+        scope: SettingScope::Runtime,
         requires_restart: false,
         sensitive: false,
         options: None,
@@ -225,6 +255,7 @@ static SETTINGS: &[SettingMeta] = &[
         description: "Number of EPUB spine items to read from front and back",
         section: "isbn_scan",
         value_type: SettingType::Integer,
+        scope: SettingScope::Runtime,
         requires_restart: false,
         sensitive: false,
         options: None,
@@ -235,6 +266,7 @@ static SETTINGS: &[SettingMeta] = &[
         description: "Number of PDF pages to read from front and back",
         section: "isbn_scan",
         value_type: SettingType::Integer,
+        scope: SettingScope::Runtime,
         requires_restart: false,
         sensitive: false,
         options: None,
@@ -245,6 +277,7 @@ static SETTINGS: &[SettingMeta] = &[
         description: "Number of FB2 sections to read from front and back",
         section: "isbn_scan",
         value_type: SettingType::Integer,
+        scope: SettingScope::Runtime,
         requires_restart: false,
         sensitive: false,
         options: None,
@@ -255,6 +288,7 @@ static SETTINGS: &[SettingMeta] = &[
         description: "Bytes to read from front and back of TXT files",
         section: "isbn_scan",
         value_type: SettingType::Integer,
+        scope: SettingScope::Runtime,
         requires_restart: false,
         sensitive: false,
         options: None,
@@ -265,6 +299,7 @@ static SETTINGS: &[SettingMeta] = &[
         description: "Bytes to read from front and back of MOBI/AZW3 text",
         section: "isbn_scan",
         value_type: SettingType::Integer,
+        scope: SettingScope::Runtime,
         requires_restart: false,
         sensitive: false,
         options: None,

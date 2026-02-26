@@ -5,7 +5,7 @@ use archivis_db::{DbPool, SettingRepository};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
-use super::registry::{self, SettingType};
+use super::registry::{self, SettingScope, SettingType};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
@@ -27,7 +27,7 @@ pub struct ConfigOverride {
 pub struct ConfigService {
     /// Effective config = final merged values the server is actually using.
     effective_config: HashMap<String, serde_json::Value>,
-    /// Configured values = what the admin has chosen (DB > file > default).
+    /// Configured values: bootstrap keys from file/default, runtime keys from DB/default.
     configured: RwLock<HashMap<String, serde_json::Value>>,
     /// Per-key: where the configured value came from.
     configured_sources: RwLock<HashMap<String, ConfigSource>>,
@@ -43,6 +43,7 @@ pub struct SettingEntry {
     pub value: serde_json::Value,
     pub effective_value: serde_json::Value,
     pub source: ConfigSource,
+    pub scope: SettingScope,
     #[serde(rename = "override")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub override_info: Option<ConfigOverride>,
@@ -131,6 +132,7 @@ impl ConfigService {
                     value: display_value,
                     effective_value: display_effective,
                     source,
+                    scope: meta.scope,
                     override_info,
                     requires_restart: meta.requires_restart,
                     label: meta.label.to_string(),
@@ -159,6 +161,13 @@ impl ConfigService {
             let Some(meta) = registry::get_setting_meta(key) else {
                 return Err(format!("unknown setting: {key}"));
             };
+
+            if meta.scope == SettingScope::Bootstrap {
+                return Err(format!(
+                    "\"{key}\" is a bootstrap setting \
+                     — change it via config file, environment variable, or CLI flag"
+                ));
+            }
 
             if meta.requires_restart {
                 requires_restart = true;
