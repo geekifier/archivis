@@ -56,8 +56,18 @@
 		return section.startsWith('metadata.') && section !== 'metadata';
 	}
 
-	function isBootstrap(entry: SettingEntry): boolean {
-		return entry.scope === 'bootstrap';
+	function isBootstrapSection(entries: SettingEntry[]): boolean {
+		return entries.length > 0 && entries.every((e) => e.scope === 'bootstrap');
+	}
+
+	function bootstrapSource(entry: SettingEntry): { label: string; detail?: string } {
+		if (entry.override) {
+			if (entry.override.env_var) return { label: 'env', detail: entry.override.env_var };
+			return { label: 'cli' };
+		}
+		if (entry.source === 'file') return { label: 'config file' };
+		if (entry.source === 'database') return { label: 'database' };
+		return { label: 'default' };
 	}
 
 	function getCurrentValue(entry: SettingEntry): unknown {
@@ -261,241 +271,284 @@
 						{sectionLabel(section)}
 					</h2>
 				</div>
-				<div class="divide-y divide-border">
-					{#each entries as entry (entry.key)}
-						<div class="px-6 py-4">
-							<div class="flex items-start justify-between gap-4">
-								<div class="min-w-0 flex-1">
-									<div class="flex items-center gap-2">
-										<label for={entry.key} class="text-sm font-medium">
-											{entry.label}
-										</label>
-										{#if entry.requires_restart}
-											<span
-												class="inline-flex items-center rounded-full bg-amber-500/10 px-2 py-0.5 text-xs font-medium text-amber-600 dark:text-amber-400"
-												title="Requires server restart"
-											>
-												restart
-											</span>
-										{/if}
-										{#if entry.override?.source === 'env' || entry.override?.source === 'cli'}
-											<span
-												class="inline-flex items-center rounded-full bg-amber-500/10 px-2 py-0.5 text-xs font-medium text-amber-600 dark:text-amber-400"
-											>
-												{entry.override.source}
-											</span>
-										{:else if entry.source === 'database'}
-											<span
-												class="inline-flex items-center rounded-full bg-blue-500/10 px-2 py-0.5 text-xs font-medium text-blue-600 dark:text-blue-400"
-											>
-												modified
-											</span>
-										{:else if entry.source === 'file'}
-											<span
-												class="inline-flex items-center rounded-full bg-zinc-500/10 px-2 py-0.5 text-xs font-medium text-zinc-600 dark:text-zinc-400"
-											>
-												config file
-											</span>
-										{/if}
-									</div>
-									<p class="mt-0.5 text-xs text-muted-foreground">
-										{entry.description}
-									</p>
-								</div>
 
-								<div class="flex shrink-0 items-center gap-2">
-									{#if isBootstrap(entry)}
-										<!-- Bootstrap settings are read-only -->
-										<span
-											class="inline-flex h-9 items-center rounded-md border border-input bg-muted/50 px-3 text-sm text-muted-foreground"
-										>
-											{entry.sensitive ? '***' : String(entry.effective_value ?? entry.value ?? '')}
-										</span>
-									{:else if entry.value_type === 'bool'}
-										<button
-											type="button"
-											role="switch"
-											aria-checked={getCurrentValue(entry) === true}
-											aria-label={entry.label}
-											class="relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors
-											{getCurrentValue(entry) === true
-												? 'bg-primary'
-												: 'bg-muted'}"
-											onclick={() =>
-												handleChange(
-													entry.key,
-													getCurrentValue(entry) !== true,
-													entry.value
-												)}
-										>
+				{#if isBootstrapSection(entries)}
+					<!-- Compact table for read-only bootstrap settings -->
+					<div class="px-6 py-3">
+						<table class="w-full text-sm">
+							<thead>
+								<tr class="text-left text-xs text-muted-foreground">
+									<th class="pb-2 font-medium">Setting</th>
+									<th class="pb-2 font-medium">Value</th>
+									<th class="pb-2 text-right font-medium">Source</th>
+								</tr>
+							</thead>
+							<tbody class="divide-y divide-border/50">
+								{#each entries as entry (entry.key)}
+									{@const source = bootstrapSource(entry)}
+									<tr>
+										<td class="py-2 pr-4 font-medium">{entry.label}</td>
+										<td class="py-2 pr-4 font-mono text-xs text-muted-foreground">
+											{entry.sensitive
+												? '***'
+												: String(entry.effective_value ?? entry.value ?? '\u2014')}
+										</td>
+										<td class="py-2 text-right">
 											<span
-												class="pointer-events-none inline-block size-5 rounded-full bg-background shadow-lg ring-0 transition-transform
+												class="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground"
+												title={source.detail
+													? source.detail
+													: source.label === 'cli'
+														? 'CLI flag'
+														: ''}
+											>
+												{source.label}
+											</span>
+										</td>
+									</tr>
+								{/each}
+							</tbody>
+						</table>
+						<p class="mt-3 text-xs text-muted-foreground">
+							Server settings are read-only. Change them via config file, environment
+							variables, or CLI flags.
+						</p>
+					</div>
+				{:else}
+					<!-- Editable runtime settings -->
+					<div class="divide-y divide-border">
+						{#each entries as entry (entry.key)}
+							<div class="px-6 py-4">
+								<div class="flex items-start justify-between gap-4">
+									<div class="min-w-0 flex-1">
+										<div class="flex items-center gap-2">
+											<label for={entry.key} class="text-sm font-medium">
+												{entry.label}
+											</label>
+											{#if entry.requires_restart}
+												<span
+													class="inline-flex items-center rounded-full bg-amber-500/10 px-2 py-0.5 text-xs font-medium text-amber-600 dark:text-amber-400"
+													title="Requires server restart"
+												>
+													restart
+												</span>
+											{/if}
+											{#if entry.override?.source === 'env' || entry.override?.source === 'cli'}
+												<span
+													class="inline-flex items-center rounded-full bg-amber-500/10 px-2 py-0.5 text-xs font-medium text-amber-600 dark:text-amber-400"
+												>
+													{entry.override.source}
+												</span>
+											{:else if entry.source === 'database'}
+												<span
+													class="inline-flex items-center rounded-full bg-blue-500/10 px-2 py-0.5 text-xs font-medium text-blue-600 dark:text-blue-400"
+												>
+													modified
+												</span>
+											{:else if entry.source === 'file'}
+												<span
+													class="inline-flex items-center rounded-full bg-zinc-500/10 px-2 py-0.5 text-xs font-medium text-zinc-600 dark:text-zinc-400"
+												>
+													config file
+												</span>
+											{/if}
+										</div>
+										<p class="mt-0.5 text-xs text-muted-foreground">
+											{entry.description}
+										</p>
+									</div>
+
+									<div class="flex shrink-0 items-center gap-2">
+										{#if entry.value_type === 'bool'}
+											<button
+												type="button"
+												role="switch"
+												aria-checked={getCurrentValue(entry) === true}
+												aria-label={entry.label}
+												class="relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors
 												{getCurrentValue(entry) === true
-													? 'translate-x-5'
-													: 'translate-x-0'}"
-											></span>
-										</button>
-									{:else if entry.sensitive}
-										<div class="flex items-center gap-1">
+													? 'bg-primary'
+													: 'bg-muted'}"
+												onclick={() =>
+													handleChange(
+														entry.key,
+														getCurrentValue(entry) !== true,
+														entry.value
+													)}
+											>
+												<span
+													class="pointer-events-none inline-block size-5 rounded-full bg-background shadow-lg ring-0 transition-transform
+													{getCurrentValue(entry) === true
+														? 'translate-x-5'
+														: 'translate-x-0'}"
+												></span>
+											</button>
+										{:else if entry.sensitive}
+											<div class="flex items-center gap-1">
+												<input
+													id={entry.key}
+													type={visibleSecrets.has(entry.key) ? 'text' : 'password'}
+													class="h-9 w-56 rounded-md border border-input bg-background px-3 text-sm"
+													value={entry.key in editedValues
+														? (editedValues[entry.key] ?? '')
+														: ''}
+													placeholder={entry.is_set ? '••••••••' : 'Not set'}
+													oninput={(e) => handleInputChange(entry, e)}
+												/>
+												<Button
+													variant="ghost"
+													size="icon-sm"
+													onclick={() => toggleSecret(entry.key)}
+													aria-label={visibleSecrets.has(entry.key)
+														? 'Hide value'
+														: 'Show value'}
+												>
+													{#if visibleSecrets.has(entry.key)}
+														<svg
+															class="size-4"
+															xmlns="http://www.w3.org/2000/svg"
+															viewBox="0 0 24 24"
+															fill="none"
+															stroke="currentColor"
+															stroke-width="2"
+															stroke-linecap="round"
+															stroke-linejoin="round"
+														>
+															<path
+																d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"
+															/>
+															<line x1="1" x2="23" y1="1" y2="23" />
+														</svg>
+													{:else}
+														<svg
+															class="size-4"
+															xmlns="http://www.w3.org/2000/svg"
+															viewBox="0 0 24 24"
+															fill="none"
+															stroke="currentColor"
+															stroke-width="2"
+															stroke-linecap="round"
+															stroke-linejoin="round"
+														>
+															<path
+																d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"
+															/>
+															<circle cx="12" cy="12" r="3" />
+														</svg>
+													{/if}
+												</Button>
+											</div>
+										{:else if entry.value_type === 'integer'}
 											<input
 												id={entry.key}
-												type={visibleSecrets.has(entry.key) ? 'text' : 'password'}
-												class="h-9 w-56 rounded-md border border-input bg-background px-3 text-sm"
-												value={entry.key in editedValues
-													? (editedValues[entry.key] ?? '')
-													: ''}
-												placeholder={entry.is_set ? '••••••••' : 'Not set'}
+												type="number"
+												class="h-9 w-32 rounded-md border border-input bg-background px-3 text-sm"
+												value={getCurrentValue(entry) ?? ''}
 												oninput={(e) => handleInputChange(entry, e)}
 											/>
+										{:else if entry.value_type === 'float'}
+											<input
+												id={entry.key}
+												type="number"
+												step="0.01"
+												class="h-9 w-32 rounded-md border border-input bg-background px-3 text-sm"
+												value={getCurrentValue(entry) ?? ''}
+												oninput={(e) => handleInputChange(entry, e)}
+											/>
+										{:else if entry.value_type === 'select' && entry.options}
+											<select
+												id={entry.key}
+												class="h-9 w-56 rounded-md border border-input bg-background px-3 text-sm"
+												value={getCurrentValue(entry) ?? ''}
+												onchange={(e) => {
+													const target = e.target as HTMLSelectElement;
+													handleChange(entry.key, target.value, entry.value);
+												}}
+											>
+												{#each entry.options as option (option)}
+													<option
+														value={option}
+														selected={getCurrentValue(entry) === option}
+													>
+														{option}
+													</option>
+												{/each}
+											</select>
+										{:else}
+											<input
+												id={entry.key}
+												type="text"
+												class="h-9 w-56 rounded-md border border-input bg-background px-3 text-sm"
+												value={getCurrentValue(entry) ?? ''}
+												oninput={(e) => handleInputChange(entry, e)}
+											/>
+										{/if}
+
+										{#if entry.source === 'database'}
 											<Button
 												variant="ghost"
 												size="icon-sm"
-												onclick={() => toggleSecret(entry.key)}
-												aria-label={visibleSecrets.has(entry.key)
-													? 'Hide value'
-													: 'Show value'}
+												onclick={() => resetField(entry.key)}
+												title="Reset to default"
 											>
-												{#if visibleSecrets.has(entry.key)}
-													<svg
-														class="size-4"
-														xmlns="http://www.w3.org/2000/svg"
-														viewBox="0 0 24 24"
-														fill="none"
-														stroke="currentColor"
-														stroke-width="2"
-														stroke-linecap="round"
-														stroke-linejoin="round"
-													>
-														<path
-															d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"
-														/>
-														<line x1="1" x2="23" y1="1" y2="23" />
-													</svg>
-												{:else}
-													<svg
-														class="size-4"
-														xmlns="http://www.w3.org/2000/svg"
-														viewBox="0 0 24 24"
-														fill="none"
-														stroke="currentColor"
-														stroke-width="2"
-														stroke-linecap="round"
-														stroke-linejoin="round"
-													>
-														<path
-															d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"
-														/>
-														<circle cx="12" cy="12" r="3" />
-													</svg>
-												{/if}
-											</Button>
-										</div>
-									{:else if entry.value_type === 'integer'}
-										<input
-											id={entry.key}
-											type="number"
-											class="h-9 w-32 rounded-md border border-input bg-background px-3 text-sm"
-											value={getCurrentValue(entry) ?? ''}
-											oninput={(e) => handleInputChange(entry, e)}
-										/>
-									{:else if entry.value_type === 'float'}
-										<input
-											id={entry.key}
-											type="number"
-											step="0.01"
-											class="h-9 w-32 rounded-md border border-input bg-background px-3 text-sm"
-											value={getCurrentValue(entry) ?? ''}
-											oninput={(e) => handleInputChange(entry, e)}
-										/>
-									{:else if entry.value_type === 'select' && entry.options}
-										<select
-											id={entry.key}
-											class="h-9 w-56 rounded-md border border-input bg-background px-3 text-sm"
-											value={getCurrentValue(entry) ?? ''}
-											onchange={(e) => {
-												const target = e.target as HTMLSelectElement;
-												handleChange(entry.key, target.value, entry.value);
-											}}
-										>
-											{#each entry.options as option (option)}
-												<option
-													value={option}
-													selected={getCurrentValue(entry) === option}
+												<svg
+													class="size-4"
+													xmlns="http://www.w3.org/2000/svg"
+													viewBox="0 0 24 24"
+													fill="none"
+													stroke="currentColor"
+													stroke-width="2"
+													stroke-linecap="round"
+													stroke-linejoin="round"
 												>
-													{option}
-												</option>
-											{/each}
-										</select>
-									{:else}
-										<input
-											id={entry.key}
-											type="text"
-											class="h-9 w-56 rounded-md border border-input bg-background px-3 text-sm"
-											value={getCurrentValue(entry) ?? ''}
-											oninput={(e) => handleInputChange(entry, e)}
-										/>
-									{/if}
-
-									{#if entry.source === 'database' && !isBootstrap(entry)}
-										<Button
-											variant="ghost"
-											size="icon-sm"
-											onclick={() => resetField(entry.key)}
-											title="Reset to default"
-										>
-											<svg
-												class="size-4"
-												xmlns="http://www.w3.org/2000/svg"
-												viewBox="0 0 24 24"
-												fill="none"
-												stroke="currentColor"
-												stroke-width="2"
-												stroke-linecap="round"
-												stroke-linejoin="round"
-											>
-												<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
-												<path d="M3 3v5h5" />
-											</svg>
-										</Button>
-									{/if}
-								</div>
-							</div>
-
-							{#if entry.override}
-								<div
-									class="mt-2 flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-400"
-								>
-									<svg
-										class="size-3.5 shrink-0"
-										xmlns="http://www.w3.org/2000/svg"
-										viewBox="0 0 24 24"
-										fill="none"
-										stroke="currentColor"
-										stroke-width="2"
-										stroke-linecap="round"
-										stroke-linejoin="round"
-									>
-										<path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z" />
-									</svg>
-									<span>
-										Overridden by
-										{#if entry.override.env_var}
-											<code
-												class="rounded bg-amber-500/10 px-1 py-0.5 font-mono text-[11px]"
-												>{entry.override.env_var}</code
-											>
-										{:else}
-											CLI flag
+													<path
+														d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"
+													/>
+													<path d="M3 3v5h5" />
+												</svg>
+											</Button>
 										{/if}
-										— effective value: <strong
-											>{entry.sensitive ? '***' : String(entry.effective_value)}</strong
-										>
-									</span>
+									</div>
 								</div>
-							{/if}
-						</div>
-					{/each}
-				</div>
+
+								{#if entry.override}
+									<div
+										class="mt-2 flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-400"
+									>
+										<svg
+											class="size-3.5 shrink-0"
+											xmlns="http://www.w3.org/2000/svg"
+											viewBox="0 0 24 24"
+											fill="none"
+											stroke="currentColor"
+											stroke-width="2"
+											stroke-linecap="round"
+											stroke-linejoin="round"
+										>
+											<path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z" />
+										</svg>
+										<span>
+											Overridden by
+											{#if entry.override.env_var}
+												<code
+													class="rounded bg-amber-500/10 px-1 py-0.5 font-mono text-[11px]"
+													>{entry.override.env_var}</code
+												>
+											{:else}
+												CLI flag
+											{/if}
+											— effective value: <strong
+												>{entry.sensitive
+													? '***'
+													: String(entry.effective_value)}</strong
+											>
+										</span>
+									</div>
+								{/if}
+							</div>
+						{/each}
+					</div>
+				{/if}
 			</div>
 		{/each}
 
