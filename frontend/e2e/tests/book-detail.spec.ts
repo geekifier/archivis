@@ -38,6 +38,39 @@ test.describe('Book detail page', () => {
 		await expect(page.getByText('Files')).toBeVisible();
 	});
 
+	test('file actions stay readable on narrow viewport and download exposes size tooltip', async ({
+		page
+	}) => {
+		await page.setViewportSize({ width: 390, height: 844 });
+		await page.goto(`/books/${bookId}`);
+		await expect(page.locator('h1').first()).toBeVisible({ timeout: 10_000 });
+
+		const downloadLink = page.getByRole('link', { name: /download/i }).first();
+		const readLink = page.getByRole('link', { name: 'Read' }).first();
+
+		await expect(downloadLink).toBeVisible();
+		await expect(readLink).toBeVisible();
+		await expect(downloadLink).toHaveAttribute('title', /^Download \(.+\)$/);
+
+		const downloadBox = await downloadLink.boundingBox();
+		const readBox = await readLink.boundingBox();
+		expect(downloadBox).not.toBeNull();
+		expect(readBox).not.toBeNull();
+
+		if (!downloadBox || !readBox) {
+			return;
+		}
+
+		const overlapWidth =
+			Math.min(downloadBox.x + downloadBox.width, readBox.x + readBox.width) -
+			Math.max(downloadBox.x, readBox.x);
+		const overlapHeight =
+			Math.min(downloadBox.y + downloadBox.height, readBox.y + readBox.height) -
+			Math.max(downloadBox.y, readBox.y);
+
+		expect(overlapWidth > 0 && overlapHeight > 0).toBe(false);
+	});
+
 	test('edit mode: modify title and save', async ({ page }) => {
 		await page.goto(`/books/${bookId}`);
 		await expect(page.locator('h1').first()).toBeVisible({ timeout: 10_000 });

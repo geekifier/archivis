@@ -2,7 +2,13 @@
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import { api, ApiError } from '$lib/api/index.js';
-	import type { BookDetail, CandidateResponse, DuplicateLinkResponse, TaskProgressEvent, TaskStatus } from '$lib/api/index.js';
+	import type {
+		BookDetail,
+		CandidateResponse,
+		DuplicateLinkResponse,
+		TaskProgressEvent,
+		TaskStatus
+	} from '$lib/api/index.js';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import * as AlertDialog from '$lib/components/ui/alert-dialog/index.js';
 	import * as Dialog from '$lib/components/ui/dialog/index.js';
@@ -13,10 +19,7 @@
 	import MergeDialog from '$lib/components/library/MergeDialog.svelte';
 	import AutocompleteInput from '$lib/components/library/AutocompleteInput.svelte';
 	import CoverImage from '$lib/components/library/CoverImage.svelte';
-	import {
-		placeholderHue,
-		formatFileSize
-	} from '$lib/utils.js';
+	import { placeholderHue, formatFileSize } from '$lib/utils.js';
 
 	let book = $state<BookDetail | null>(null);
 	let loading = $state(true);
@@ -72,7 +75,6 @@
 	);
 
 	const appliedCandidate = $derived(candidates.find((c) => c.status === 'applied'));
-
 
 	function fetchBook() {
 		loading = true;
@@ -301,8 +303,7 @@
 			}
 			candidatesLoaded = true;
 		} catch (err) {
-			candidatesError =
-				err instanceof Error ? err.message : 'Failed to load candidates';
+			candidatesError = err instanceof Error ? err.message : 'Failed to load candidates';
 		}
 	}
 
@@ -393,7 +394,9 @@
 		}
 	}
 
-	async function searchBooksForFlag(query: string): Promise<{ id: string; label: string; sublabel?: string }[]> {
+	async function searchBooksForFlag(
+		query: string
+	): Promise<{ id: string; label: string; sublabel?: string }[]> {
 		try {
 			const result = await api.books.list({ q: query, per_page: 10 });
 			return result.items
@@ -620,9 +623,16 @@
 		<div class="grid gap-8 md:grid-cols-[280px_1fr]">
 			<!-- Left column: Cover -->
 			<div>
-				<div class="group relative w-full overflow-hidden rounded-lg bg-muted shadow-md ring-1 ring-black/5 dark:ring-white/5">
+				<div
+					class="group relative w-full overflow-hidden rounded-lg bg-muted shadow-md ring-1 ring-black/5 dark:ring-white/5"
+				>
 					{#if book.has_cover && !coverError}
-						<CoverImage src={coverUrl} alt="Cover of {book.title}" fadeIn={true} onerror={() => (coverError = true)} />
+						<CoverImage
+							src={coverUrl}
+							alt="Cover of {book.title}"
+							fadeIn={true}
+							onerror={() => (coverError = true)}
+						/>
 						<div
 							class="absolute inset-x-0 bottom-0 flex items-center justify-center bg-black/60 p-2 opacity-0 transition-opacity group-hover:opacity-100"
 						>
@@ -683,20 +693,21 @@
 					<div class="mt-4 space-y-2">
 						<h3 class="text-sm font-semibold text-muted-foreground">Files</h3>
 						{#each book.files as file (file.id)}
-							<div class="flex items-center justify-between rounded-md border border-border p-2.5 text-sm">
-								<div class="flex items-center gap-2">
+							{@const fileFormatLabel = formatFormatBadge(file.format)}
+							{@const fileSizeLabel = formatFileSize(file.file_size)}
+							<div class="flex items-center gap-2 rounded-md border border-border p-2.5 text-sm">
+								<div class="flex shrink-0 items-center gap-2">
 									<span
 										class="inline-flex rounded bg-primary/10 px-1.5 py-0.5 text-xs font-semibold text-primary"
 									>
-										{formatFormatBadge(file.format)}
+										{fileFormatLabel}
 									</span>
-									<span class="text-muted-foreground">{formatFileSize(file.file_size)}</span>
 								</div>
-								<div class="flex items-center gap-2">
+								<div class="ml-auto flex min-w-0 flex-1 flex-wrap items-center justify-end gap-2">
 									{#if isReadableFormat(file.format)}
 										<a
 											href="/read/{book.id}/{file.id}"
-											class="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+											class="inline-flex shrink-0 items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90"
 										>
 											<svg
 												class="size-3.5"
@@ -715,7 +726,9 @@
 									{/if}
 									<a
 										href="/api/books/{book.id}/files/{file.id}/download"
-										class="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted"
+										class="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted"
+										title={`Download (${fileSizeLabel})`}
+										aria-label={`Download ${fileFormatLabel} file (${fileSizeLabel})`}
 									>
 										<svg
 											class="size-3.5"
@@ -742,7 +755,12 @@
 			<!-- Right column: Metadata or Edit Form -->
 			<div class="space-y-6">
 				{#if editing}
-					<BookEditForm {book} oncancel={cancelEdit} onsave={handleSave} oncoverupdate={handleCoverUpdate} />
+					<BookEditForm
+						{book}
+						oncancel={cancelEdit}
+						onsave={handleSave}
+						oncoverupdate={handleCoverUpdate}
+					/>
 				{:else}
 					<!-- Header: Title, status badge, confidence, edit button -->
 					<div>
@@ -786,11 +804,7 @@
 									</svg>
 									Flag Duplicate
 								</Button>
-								<Button
-									size="sm"
-									variant="destructive"
-									onclick={() => (deleteDialogOpen = true)}
-								>
+								<Button size="sm" variant="destructive" onclick={() => (deleteDialogOpen = true)}>
 									<svg
 										class="size-4"
 										viewBox="0 0 24 24"
@@ -814,20 +828,22 @@
 							<p class="mt-1 text-lg text-muted-foreground">
 								{#each primaryAuthors as a, i (a.id)}<a
 										href="/authors/{a.id}"
-										class="transition-colors hover:text-foreground hover:underline"
-									>{a.name}</a>{#if i < primaryAuthors.length - 1},&nbsp;{/if}{/each}
+										class="transition-colors hover:text-foreground hover:underline">{a.name}</a
+									>{#if i < primaryAuthors.length - 1},&nbsp;{/if}{/each}
 							</p>
 						{:else if authors.length > 0}
 							<p class="mt-1 text-lg text-muted-foreground">
 								{#each authors as a, i (a.id)}<a
 										href="/authors/{a.id}"
-										class="transition-colors hover:text-foreground hover:underline"
-									>{a.name}</a>{#if i < authors.length - 1},&nbsp;{/if}{/each}
+										class="transition-colors hover:text-foreground hover:underline">{a.name}</a
+									>{#if i < authors.length - 1},&nbsp;{/if}{/each}
 							</p>
 						{/if}
 						<div class="mt-3 flex flex-wrap items-center gap-3">
 							<span
-								class="inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium {statusClasses(book.metadata_status)}"
+								class="inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium {statusClasses(
+									book.metadata_status
+								)}"
 							>
 								{statusLabel(book.metadata_status)}
 							</span>
@@ -917,7 +933,9 @@
 									onclick={() => (candidatesExpanded = !candidatesExpanded)}
 								>
 									<svg
-										class="size-3.5 transition-transform duration-150 {candidatesExpanded ? 'rotate-90' : ''}"
+										class="size-3.5 transition-transform duration-150 {candidatesExpanded
+											? 'rotate-90'
+											: ''}"
 										viewBox="0 0 24 24"
 										fill="none"
 										stroke="currentColor"
@@ -978,7 +996,8 @@
 										<a
 											href="/authors/{contributor.id}"
 											class="transition-colors hover:text-primary hover:underline"
-										>{contributor.name}</a>
+											>{contributor.name}</a
+										>
 										<span class="text-muted-foreground">({contributor.role})</span>
 									</p>
 								{/each}
@@ -1045,12 +1064,14 @@
 								{#each book.series as s (s.id)}
 									<p class="text-sm font-medium">
 										{#if s.position != null}
-											Book {Number.isInteger(s.position) ? s.position.toString() : s.position.toFixed(1)} in
+											Book {Number.isInteger(s.position)
+												? s.position.toString()
+												: s.position.toFixed(1)} in
 										{/if}
 										<a
 											href="/series/{s.id}"
-											class="transition-colors hover:text-primary hover:underline"
-										>{s.name}</a>
+											class="transition-colors hover:text-primary hover:underline">{s.name}</a
+										>
 									</p>
 								{/each}
 							</div>
@@ -1148,7 +1169,9 @@
 						{/if}
 
 						{#if scanError}
-							<div class="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+							<div
+								class="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive"
+							>
 								{scanError}
 							</div>
 						{/if}
