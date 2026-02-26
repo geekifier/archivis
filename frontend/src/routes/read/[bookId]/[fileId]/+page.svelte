@@ -7,6 +7,8 @@
 	import ReaderToolbar from '$lib/components/reader/ReaderToolbar.svelte';
 	import ReaderTocPanel from '$lib/components/reader/ReaderTocPanel.svelte';
 	import ReaderSettingsPanel from '$lib/components/reader/ReaderSettingsPanel.svelte';
+	import ReaderProgressBar from '$lib/components/reader/ReaderProgressBar.svelte';
+	import ReaderBookmarkPanel from '$lib/components/reader/ReaderBookmarkPanel.svelte';
 	import { reader } from '$lib/stores/reader.svelte.js';
 
 	const bookId = $derived(page.params.bookId ?? '');
@@ -138,6 +140,14 @@
 		readerView?.goTo(href);
 	}
 
+	function handleScrub(fraction: number): void {
+		readerView?.goToFraction(fraction);
+	}
+
+	function handleBookmarkNavigate(location: string): void {
+		readerView?.goTo(location);
+	}
+
 	function handleKeydown(e: KeyboardEvent): void {
 		// Don't capture when typing in an input
 		if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
@@ -159,6 +169,8 @@
 					reader.toggleTocPanel();
 				} else if (reader.settingsPanelOpen) {
 					reader.toggleSettingsPanel();
+				} else if (reader.bookmarksPanelOpen) {
+					reader.toggleBookmarksPanel();
 				} else {
 					reader.toggleToolbar();
 				}
@@ -172,6 +184,18 @@
 			case 's':
 				reader.toggleSettingsPanel();
 				break;
+			case 'b':
+				reader.toggleBookmarksPanel();
+				break;
+			case '+':
+			case '=':
+				e.preventDefault();
+				reader.updatePreference('fontSize', Math.min(200, reader.preferences.fontSize + 10));
+				break;
+			case '-':
+				e.preventDefault();
+				reader.updatePreference('fontSize', Math.max(80, reader.preferences.fontSize - 10));
+				break;
 		}
 	}
 
@@ -181,6 +205,12 @@
 
 	function handleFullscreenChange(): void {
 		reader.setFullscreen(!!document.fullscreenElement);
+		// When entering fullscreen, auto-hide the toolbar after a brief delay
+		if (document.fullscreenElement) {
+			setTimeout(() => {
+				reader.hideToolbar();
+			}, 1500);
+		}
 	}
 
 	// Touch tap zone handling
@@ -255,6 +285,17 @@
 		onClose={() => reader.toggleSettingsPanel()}
 	/>
 
+	<!-- Bookmarks Panel -->
+	<ReaderBookmarkPanel
+		{bookId}
+		{fileId}
+		currentLocation={reader.location}
+		currentProgress={reader.progress}
+		open={reader.bookmarksPanelOpen}
+		onClose={() => reader.toggleBookmarksPanel()}
+		onNavigate={handleBookmarkNavigate}
+	/>
+
 	<!-- Reader viewport -->
 	{#if loading}
 		<div class="flex flex-1 items-center justify-center">
@@ -282,5 +323,13 @@
 				onclick={handleViewportClick}
 			></div>
 		</div>
+
+		<!-- Progress bar (always visible at bottom) -->
+		<ReaderProgressBar
+			progress={reader.progress}
+			currentChapter={reader.currentChapter}
+			toolbarVisible={reader.toolbarVisible}
+			onScrub={handleScrub}
+		/>
 	{/if}
 </div>
