@@ -29,6 +29,8 @@ pub struct ExtractedMetadata {
     pub series: Option<String>,
     pub series_position: Option<f32>,
     pub page_count: Option<i32>,
+    /// Format specification version (e.g., "3.0" for EPUB 3.0, "1.7" for PDF 1.7).
+    pub format_version: Option<String>,
     pub cover_image: Option<CoverData>,
     pub source: MetadataSource,
 }
@@ -47,6 +49,7 @@ impl Default for ExtractedMetadata {
             series: None,
             series_position: None,
             page_count: None,
+            format_version: None,
             cover_image: None,
             source: MetadataSource::Embedded,
         }

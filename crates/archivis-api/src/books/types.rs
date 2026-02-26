@@ -319,6 +319,7 @@ pub struct FileEntry {
     pub id: Uuid,
     #[schema(value_type = String)]
     pub format: BookFormat,
+    pub format_version: Option<String>,
     pub file_size: i64,
     pub hash: String,
     pub added_at: DateTime<Utc>,
@@ -441,6 +442,7 @@ impl From<BookFile> for FileEntry {
         Self {
             id: file.id,
             format: file.format,
+            format_version: file.format_version,
             file_size: file.file_size,
             hash: file.hash,
             added_at: file.added_at,

@@ -245,6 +245,7 @@ async fn book_with_relations() {
         "d/dune.epub",
         1_000_000,
         "abc123",
+        None,
     );
     BookFileRepository::create(&pool, &file).await.unwrap();
 
@@ -294,7 +295,7 @@ async fn book_cascade_delete() {
         .await
         .unwrap();
 
-    let file = BookFile::new(book.id, BookFormat::Epub, "path.epub", 100, "hash1");
+    let file = BookFile::new(book.id, BookFormat::Epub, "path.epub", 100, "hash1", None);
     BookFileRepository::create(&pool, &file).await.unwrap();
 
     // Delete book — should cascade to book_authors and book_files
@@ -500,6 +501,7 @@ async fn book_file_create_and_query() {
         "d/dune.epub",
         500_000,
         "sha256hash",
+        None,
     );
     BookFileRepository::create(&pool, &file).await.unwrap();
 
@@ -531,10 +533,17 @@ async fn book_file_duplicate_hash_rejected() {
     let book = test_book("Dune");
     BookRepository::create(&pool, &book).await.unwrap();
 
-    let file1 = BookFile::new(book.id, BookFormat::Epub, "path1.epub", 100, "samehash");
+    let file1 = BookFile::new(
+        book.id,
+        BookFormat::Epub,
+        "path1.epub",
+        100,
+        "samehash",
+        None,
+    );
     BookFileRepository::create(&pool, &file1).await.unwrap();
 
-    let file2 = BookFile::new(book.id, BookFormat::Pdf, "path2.pdf", 200, "samehash");
+    let file2 = BookFile::new(book.id, BookFormat::Pdf, "path2.pdf", 200, "samehash", None);
     let result = BookFileRepository::create(&pool, &file2).await;
     assert!(result.is_err());
 }
@@ -681,12 +690,12 @@ async fn book_list_filter_by_format() {
 
     let book1 = test_book("EPUB Book");
     BookRepository::create(&pool, &book1).await.unwrap();
-    let file1 = BookFile::new(book1.id, BookFormat::Epub, "a.epub", 100, "h1");
+    let file1 = BookFile::new(book1.id, BookFormat::Epub, "a.epub", 100, "h1", None);
     BookFileRepository::create(&pool, &file1).await.unwrap();
 
     let book2 = test_book("PDF Book");
     BookRepository::create(&pool, &book2).await.unwrap();
-    let file2 = BookFile::new(book2.id, BookFormat::Pdf, "b.pdf", 200, "h2");
+    let file2 = BookFile::new(book2.id, BookFormat::Pdf, "b.pdf", 200, "h2", None);
     BookFileRepository::create(&pool, &file2).await.unwrap();
 
     let filter = BookFilter {
@@ -709,7 +718,14 @@ async fn stats_repository_returns_library_usage_and_db_stats() {
 
     let book = test_book("Dune");
     BookRepository::create(&pool, &book).await.unwrap();
-    let file = BookFile::new(book.id, BookFormat::Epub, "dune.epub", 1_024, "hash-dune");
+    let file = BookFile::new(
+        book.id,
+        BookFormat::Epub,
+        "dune.epub",
+        1_024,
+        "hash-dune",
+        None,
+    );
     BookFileRepository::create(&pool, &file).await.unwrap();
 
     sqlx::query(
@@ -804,7 +820,14 @@ async fn upsert_creates_new_progress() {
     let book = test_book("Dune");
     BookRepository::create(&pool, &book).await.unwrap();
 
-    let file = BookFile::new(book.id, BookFormat::Epub, "dune.epub", 100_000, "hash1");
+    let file = BookFile::new(
+        book.id,
+        BookFormat::Epub,
+        "dune.epub",
+        100_000,
+        "hash1",
+        None,
+    );
     BookFileRepository::create(&pool, &file).await.unwrap();
 
     let progress = ReadingProgressRepository::upsert(
@@ -839,7 +862,14 @@ async fn upsert_updates_existing_progress() {
     let book = test_book("Dune");
     BookRepository::create(&pool, &book).await.unwrap();
 
-    let file = BookFile::new(book.id, BookFormat::Epub, "dune.epub", 100_000, "hash1");
+    let file = BookFile::new(
+        book.id,
+        BookFormat::Epub,
+        "dune.epub",
+        100_000,
+        "hash1",
+        None,
+    );
     BookFileRepository::create(&pool, &file).await.unwrap();
 
     // First upsert
@@ -885,7 +915,14 @@ async fn upsert_distinct_device_ids() {
     let book = test_book("Dune");
     BookRepository::create(&pool, &book).await.unwrap();
 
-    let file = BookFile::new(book.id, BookFormat::Epub, "dune.epub", 100_000, "hash1");
+    let file = BookFile::new(
+        book.id,
+        BookFormat::Epub,
+        "dune.epub",
+        100_000,
+        "hash1",
+        None,
+    );
     BookFileRepository::create(&pool, &file).await.unwrap();
 
     // Web browser (NULL device)
@@ -934,10 +971,17 @@ async fn get_for_book_returns_most_recent() {
     let book = test_book("Dune");
     BookRepository::create(&pool, &book).await.unwrap();
 
-    let file1 = BookFile::new(book.id, BookFormat::Epub, "dune.epub", 100_000, "hash1");
+    let file1 = BookFile::new(
+        book.id,
+        BookFormat::Epub,
+        "dune.epub",
+        100_000,
+        "hash1",
+        None,
+    );
     BookFileRepository::create(&pool, &file1).await.unwrap();
 
-    let file2 = BookFile::new(book.id, BookFormat::Pdf, "dune.pdf", 200_000, "hash2");
+    let file2 = BookFile::new(book.id, BookFormat::Pdf, "dune.pdf", 200_000, "hash2", None);
     BookFileRepository::create(&pool, &file2).await.unwrap();
 
     // Progress on file1 first
@@ -990,7 +1034,14 @@ async fn get_for_file_with_null_device() {
     let book = test_book("Dune");
     BookRepository::create(&pool, &book).await.unwrap();
 
-    let file = BookFile::new(book.id, BookFormat::Epub, "dune.epub", 100_000, "hash1");
+    let file = BookFile::new(
+        book.id,
+        BookFormat::Epub,
+        "dune.epub",
+        100_000,
+        "hash1",
+        None,
+    );
     BookFileRepository::create(&pool, &file).await.unwrap();
 
     // Insert with NULL device_id
@@ -1040,6 +1091,7 @@ async fn list_recent_respects_limit() {
             format!("book{i}.epub"),
             100_000,
             format!("hash{i}"),
+            None,
         );
         BookFileRepository::create(&pool, &file).await.unwrap();
 
@@ -1077,7 +1129,14 @@ async fn delete_for_book_removes_all() {
     let book = test_book("Dune");
     BookRepository::create(&pool, &book).await.unwrap();
 
-    let file = BookFile::new(book.id, BookFormat::Epub, "dune.epub", 100_000, "hash1");
+    let file = BookFile::new(
+        book.id,
+        BookFormat::Epub,
+        "dune.epub",
+        100_000,
+        "hash1",
+        None,
+    );
     BookFileRepository::create(&pool, &file).await.unwrap();
 
     ReadingProgressRepository::upsert(
@@ -1116,7 +1175,14 @@ async fn bookmark_create_and_list() {
     let book = test_book("Dune");
     BookRepository::create(&pool, &book).await.unwrap();
 
-    let file = BookFile::new(book.id, BookFormat::Epub, "dune.epub", 100_000, "hash1");
+    let file = BookFile::new(
+        book.id,
+        BookFormat::Epub,
+        "dune.epub",
+        100_000,
+        "hash1",
+        None,
+    );
     BookFileRepository::create(&pool, &file).await.unwrap();
 
     let bm1 = Bookmark {
@@ -1170,7 +1236,14 @@ async fn bookmark_delete_ownership_check() {
     let book = test_book("Dune");
     BookRepository::create(&pool, &book).await.unwrap();
 
-    let file = BookFile::new(book.id, BookFormat::Epub, "dune.epub", 100_000, "hash1");
+    let file = BookFile::new(
+        book.id,
+        BookFormat::Epub,
+        "dune.epub",
+        100_000,
+        "hash1",
+        None,
+    );
     BookFileRepository::create(&pool, &file).await.unwrap();
 
     let bm = Bookmark {
@@ -1211,7 +1284,14 @@ async fn bookmark_update_label() {
     let book = test_book("Dune");
     BookRepository::create(&pool, &book).await.unwrap();
 
-    let file = BookFile::new(book.id, BookFormat::Epub, "dune.epub", 100_000, "hash1");
+    let file = BookFile::new(
+        book.id,
+        BookFormat::Epub,
+        "dune.epub",
+        100_000,
+        "hash1",
+        None,
+    );
     BookFileRepository::create(&pool, &file).await.unwrap();
 
     let bm = Bookmark {

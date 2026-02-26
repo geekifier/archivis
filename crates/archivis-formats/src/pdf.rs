@@ -30,6 +30,7 @@ pub fn extract_pdf_metadata(data: &[u8]) -> Result<ExtractedMetadata, FormatErro
 
     let mut meta = ExtractedMetadata {
         source: MetadataSource::Embedded,
+        format_version: Some(doc.version.clone()),
         ..ExtractedMetadata::default()
     };
 
@@ -529,6 +530,7 @@ mod tests {
         assert_eq!(meta.title.as_deref(), Some("The Rust Programming Language"));
         assert_eq!(meta.authors, vec!["Steve Klabnik", "Carol Nichols"]);
         assert_eq!(meta.source, MetadataSource::Embedded);
+        assert_eq!(meta.format_version.as_deref(), Some("1.5"));
     }
 
     #[test]

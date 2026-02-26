@@ -18,10 +18,11 @@ impl BookFileRepository {
         let added_at = file.added_at.to_rfc3339();
 
         sqlx::query!(
-            "INSERT INTO book_files (id, book_id, format, storage_path, file_size, hash, added_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO book_files (id, book_id, format, format_version, storage_path, file_size, hash, added_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             id,
             book_id,
             format,
+            file.format_version,
             file.storage_path,
             file.file_size,
             file.hash,
@@ -44,7 +45,7 @@ impl BookFileRepository {
         let id_str = id.to_string();
         let row = sqlx::query_as!(
             BookFileRow,
-            "SELECT id, book_id, format, storage_path, file_size, hash, added_at FROM book_files WHERE id = ?",
+            "SELECT id, book_id, format, format_version, storage_path, file_size, hash, added_at FROM book_files WHERE id = ?",
             id_str,
         )
         .fetch_optional(pool)
@@ -65,7 +66,7 @@ impl BookFileRepository {
         let id_str = book_id.to_string();
         let rows = sqlx::query_as!(
             BookFileRow,
-            "SELECT id, book_id, format, storage_path, file_size, hash, added_at FROM book_files WHERE book_id = ?",
+            "SELECT id, book_id, format, format_version, storage_path, file_size, hash, added_at FROM book_files WHERE book_id = ?",
             id_str,
         )
         .fetch_all(pool)
@@ -78,7 +79,7 @@ impl BookFileRepository {
     pub async fn get_by_hash(pool: &SqlitePool, hash: &str) -> Result<Option<BookFile>, DbError> {
         let row = sqlx::query_as!(
             BookFileRow,
-            "SELECT id, book_id, format, storage_path, file_size, hash, added_at FROM book_files WHERE hash = ?",
+            "SELECT id, book_id, format, format_version, storage_path, file_size, hash, added_at FROM book_files WHERE hash = ?",
             hash,
         )
         .fetch_optional(pool)

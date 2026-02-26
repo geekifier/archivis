@@ -113,6 +113,7 @@ struct OpfParseState {
     meta_name: Option<String>,
     meta_content: Option<String>,
     meta_property: Option<String>,
+    format_version: Option<String>,
 }
 
 /// Parse the OPF package document and extract metadata.
@@ -127,6 +128,7 @@ fn parse_opf(opf_xml: &str) -> Result<ExtractedMetadata, FormatError> {
         meta_name: None,
         meta_content: None,
         meta_property: None,
+        format_version: None,
     };
 
     loop {
@@ -150,12 +152,17 @@ fn parse_opf(opf_xml: &str) -> Result<ExtractedMetadata, FormatError> {
         }
     }
 
+    meta.format_version = state.format_version;
     Ok(meta)
 }
 
 fn handle_opf_start(e: &quick_xml::events::BytesStart<'_>, state: &mut OpfParseState) {
     let qname = e.name();
     let name = local_name(qname.as_ref());
+
+    if name == b"package" && state.format_version.is_none() {
+        state.format_version = find_attr(e, b"version");
+    }
 
     if name == b"metadata" {
         state.in_metadata = true;
@@ -741,6 +748,7 @@ mod tests {
         );
         assert_eq!(meta.subjects, vec!["Programming", "Systems"]);
         assert_eq!(meta.source, MetadataSource::Embedded);
+        assert_eq!(meta.format_version.as_deref(), Some("3.0"));
     }
 
     #[test]
@@ -772,6 +780,7 @@ mod tests {
         assert_eq!(meta.identifiers.len(), 1);
         assert_eq!(meta.identifiers[0].identifier_type, IdentifierType::Isbn10);
         assert_eq!(meta.identifiers[0].value, "059651774X");
+        assert_eq!(meta.format_version.as_deref(), Some("2.0"));
     }
 
     #[test]

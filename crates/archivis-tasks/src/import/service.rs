@@ -229,6 +229,7 @@ impl<S: StorageBackend> ImportService<S> {
                 stored.size as i64
             },
             &stored.hash,
+            embedded.format_version.clone(),
         );
         let book_file_id = book_file.id;
 

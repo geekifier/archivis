@@ -443,7 +443,7 @@ impl BookRepository {
         // Fetch files
         let file_rows = sqlx::query_as!(
             BookFileRow,
-            "SELECT id, book_id, format, storage_path, file_size, hash, added_at FROM book_files WHERE book_id = ?",
+            "SELECT id, book_id, format, format_version, storage_path, file_size, hash, added_at FROM book_files WHERE book_id = ?",
             id_str,
         )
         .fetch_all(pool)
@@ -829,6 +829,7 @@ pub struct BookFileRow {
     pub id: String,
     pub book_id: String,
     pub format: String,
+    pub format_version: Option<String>,
     pub storage_path: String,
     pub file_size: i64,
     pub hash: String,
@@ -857,6 +858,7 @@ impl BookFileRow {
             id,
             book_id,
             format,
+            format_version: self.format_version,
             storage_path: self.storage_path,
             file_size: self.file_size,
             hash: self.hash,
