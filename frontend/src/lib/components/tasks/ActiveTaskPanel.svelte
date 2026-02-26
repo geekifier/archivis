@@ -72,6 +72,13 @@
 				// Only track events for our task IDs
 				if (!taskIds.includes(data.task_id)) return;
 
+				// Don't let a late non-terminal event overwrite a terminal status
+				// (fire-and-forget progress broadcasts can race with the completion event)
+				const existing = taskProgressMap[data.task_id];
+				if (existing && isTerminalStatus(existing.status) && !isTerminalStatus(data.status)) {
+					return;
+				}
+
 				taskProgressMap = { ...taskProgressMap, [data.task_id]: data };
 
 				if (isTerminalStatus(data.status)) {

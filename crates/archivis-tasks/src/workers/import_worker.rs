@@ -177,9 +177,10 @@ impl<S: StorageBackend + 'static> Worker for ImportDirectoryWorker<S> {
                 return Err(TaskError::Cancelled);
             }
 
-            progress
-                .send_progress(100, Some("Directory import complete".into()))
-                .await;
+            let message = adapter
+                .take_completion_message()
+                .unwrap_or_else(|| "Directory import complete".into());
+            progress.send_progress(100, Some(message)).await;
 
             // Enqueue batch ISBN content scan as a child task for all successfully imported books
             if self.isbn_scan_on_import && !result.imported.is_empty() {
@@ -232,12 +233,20 @@ impl<S: StorageBackend + 'static> Worker for ImportDirectoryWorker<S> {
 
 /// Bridges the synchronous [`ImportProgress`] callbacks to the async
 /// [`ProgressSender`] by spawning fire-and-forget tasks for each update.
+///
+/// The `on_import_complete` callback stores the summary message instead of
+/// broadcasting, so the worker can send a single deterministic (awaited)
+/// progress update after `import_directory` returns — avoiding a race with
+/// the dispatcher's completion broadcast.
 struct BroadcastProgress {
     sender: ProgressSender,
     total_files: AtomicUsize,
     imported: AtomicUsize,
     skipped: AtomicUsize,
     failed: AtomicUsize,
+    /// Summary message set by `on_import_complete`, read by the worker after
+    /// `import_directory` returns.
+    completion_message: std::sync::Mutex<Option<String>>,
 }
 
 impl BroadcastProgress {
@@ -248,7 +257,13 @@ impl BroadcastProgress {
             imported: AtomicUsize::new(0),
             skipped: AtomicUsize::new(0),
             failed: AtomicUsize::new(0),
+            completion_message: std::sync::Mutex::new(None),
         }
+    }
+
+    /// Take the completion message set by `on_import_complete`.
+    fn take_completion_message(&self) -> Option<String> {
+        self.completion_message.lock().ok()?.take()
     }
 }
 
@@ -315,16 +330,18 @@ impl ImportProgress for BroadcastProgress {
     }
 
     fn on_import_complete(&self, result: &BulkImportResult) {
-        let message = Some(format!(
+        // Store the summary message for the worker to send synchronously
+        // after import_directory returns, avoiding a race with the
+        // dispatcher's completion broadcast.
+        let message = format!(
             "Complete: {} imported, {} skipped, {} failed",
             result.imported.len(),
             result.skipped.len(),
             result.failed.len(),
-        ));
-        let sender = self.sender.clone();
-        tokio::spawn(async move {
-            sender.send_progress(100, message).await;
-        });
+        );
+        if let Ok(mut guard) = self.completion_message.lock() {
+            *guard = Some(message);
+        }
     }
 
     fn should_cancel(&self) -> bool {
