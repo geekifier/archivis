@@ -39,7 +39,7 @@
 
 	const READABLE_FORMATS = new Set(['epub', 'pdf', 'mobi', 'azw3', 'fb2', 'cbz']);
 
-	$effect(() => {
+	onMount(() => {
 		void loadReader();
 	});
 
