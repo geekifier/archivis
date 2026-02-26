@@ -76,6 +76,20 @@ export async function waitForTask(
 	throw new Error(`Task ${taskId} did not complete within ${timeoutMs}ms`);
 }
 
+export async function getBookDetail(
+	request: APIRequestContext,
+	token: string,
+	bookId: string
+): Promise<{ id: string; title: string; files: Array<{ id: string; format: string }> }> {
+	const response = await request.get(`${API_BASE}/books/${bookId}`, {
+		headers: { Authorization: `Bearer ${token}` }
+	});
+	if (!response.ok()) {
+		throw new Error(`Get book detail failed: ${response.status()} ${await response.text()}`);
+	}
+	return response.json();
+}
+
 export async function listBooks(
 	request: APIRequestContext,
 	token: string

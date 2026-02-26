@@ -10,6 +10,7 @@
 	import ReaderProgressBar from '$lib/components/reader/ReaderProgressBar.svelte';
 	import ReaderBookmarkPanel from '$lib/components/reader/ReaderBookmarkPanel.svelte';
 	import { reader } from '$lib/stores/reader.svelte.js';
+	import { blobToBookFile } from '$lib/utils/reader.js';
 
 	const bookId = $derived(page.params.bookId ?? '');
 	const fileId = $derived(page.params.fileId ?? '');
@@ -145,8 +146,9 @@
 				}
 			}
 
-			// 7. Fetch file as Blob
-			bookBlob = await api.reader.fetchFileBlob(bookId, fileId);
+			// 7. Fetch file and wrap as File so foliate-js can inspect .name for format detection
+			const blob = await api.reader.fetchFileBlob(bookId, fileId);
+			bookBlob = blobToBookFile(blob, fmt);
 		} catch (err: unknown) {
 			if (err instanceof ApiError) {
 				if (err.isNotFound) {
