@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO reading_progress (id, user_id, book_id, book_file_id, location, progress, device_id, preferences, started_at, updated_at)\n               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)\n               ON CONFLICT (user_id, book_file_id, device_id)\n               DO UPDATE SET location = excluded.location, progress = excluded.progress,\n                             preferences = excluded.preferences, updated_at = excluded.updated_at",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 10
+    },
+    "nullable": []
+  },
+  "hash": "c826fa42ed23736b914b0889c75df58b714b0898680dd749727cd0dc5fee8f67"
+}

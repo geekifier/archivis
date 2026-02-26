@@ -1,0 +1,74 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id, user_id, book_id, book_file_id, location, progress,\n                      device_id, preferences, started_at, updated_at\n               FROM reading_progress\n               WHERE id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "user_id",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "book_id",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "book_file_id",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "location",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "progress",
+        "ordinal": 5,
+        "type_info": "Float"
+      },
+      {
+        "name": "device_id",
+        "ordinal": 6,
+        "type_info": "Text"
+      },
+      {
+        "name": "preferences",
+        "ordinal": 7,
+        "type_info": "Text"
+      },
+      {
+        "name": "started_at",
+        "ordinal": 8,
+        "type_info": "Text"
+      },
+      {
+        "name": "updated_at",
+        "ordinal": 9,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      true,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "e47b2d0a0eccfea606b6c5da919b71c15da451ad6ee1d72888465841c4de743b"
+}

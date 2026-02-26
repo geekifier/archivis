@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO bookmarks (id, user_id, book_id, book_file_id, location, label, excerpt, position, created_at)\n               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 9
+    },
+    "nullable": []
+  },
+  "hash": "725ce64303f30d93a65f9f1a5c64e864582df8d7fd22d86e0852bfc9e0ce17c0"
+}

@@ -55,12 +55,12 @@ pub struct StatsRepository;
 impl StatsRepository {
     pub async fn library_overview(pool: &SqlitePool) -> Result<LibraryOverview, DbError> {
         let row = sqlx::query(
-            r#"
+            r"
             SELECT
                 (SELECT COUNT(*) FROM books) AS books,
                 (SELECT COUNT(*) FROM book_files) AS files,
                 COALESCE((SELECT SUM(file_size) FROM book_files), 0) AS total_file_size
-            "#,
+            ",
         )
         .fetch_one(pool)
         .await
@@ -81,7 +81,7 @@ impl StatsRepository {
 
     pub async fn files_by_format(pool: &SqlitePool) -> Result<Vec<FormatFileStat>, DbError> {
         let rows = sqlx::query(
-            r#"
+            r"
             SELECT
                 LOWER(format) AS format,
                 COUNT(*) AS file_count,
@@ -89,7 +89,7 @@ impl StatsRepository {
             FROM book_files
             GROUP BY format
             ORDER BY file_count DESC, format ASC
-            "#,
+            ",
         )
         .fetch_all(pool)
         .await
@@ -115,12 +115,12 @@ impl StatsRepository {
     pub async fn metadata_status_counts(pool: &SqlitePool) -> Result<Vec<BucketCount>, DbError> {
         Self::bucket_counts(
             pool,
-            r#"
+            r"
             SELECT metadata_status AS key, COUNT(*) AS count
             FROM books
             GROUP BY metadata_status
             ORDER BY count DESC, key ASC
-            "#,
+            ",
         )
         .await
     }
@@ -128,12 +128,12 @@ impl StatsRepository {
     pub async fn task_status_counts(pool: &SqlitePool) -> Result<Vec<BucketCount>, DbError> {
         Self::bucket_counts(
             pool,
-            r#"
+            r"
             SELECT status AS key, COUNT(*) AS count
             FROM tasks
             GROUP BY status
             ORDER BY count DESC, key ASC
-            "#,
+            ",
         )
         .await
     }
@@ -141,19 +141,19 @@ impl StatsRepository {
     pub async fn task_type_counts(pool: &SqlitePool) -> Result<Vec<BucketCount>, DbError> {
         Self::bucket_counts(
             pool,
-            r#"
+            r"
             SELECT task_type AS key, COUNT(*) AS count
             FROM tasks
             GROUP BY task_type
             ORDER BY count DESC, key ASC
-            "#,
+            ",
         )
         .await
     }
 
     pub async fn task_overview(pool: &SqlitePool) -> Result<TaskOverview, DbError> {
         let row = sqlx::query(
-            r#"
+            r"
             SELECT
                 COUNT(*) AS total,
                 COALESCE(
@@ -166,7 +166,7 @@ impl StatsRepository {
                     0
                 ) AS last_24h
             FROM tasks
-            "#,
+            ",
         )
         .fetch_one(pool)
         .await
@@ -212,13 +212,13 @@ impl StatsRepository {
 
     pub async fn db_object_stats(pool: &SqlitePool) -> Result<DbObjectStats, DbError> {
         let schema_rows = sqlx::query(
-            r#"
+            r"
             SELECT name, type
             FROM sqlite_master
             WHERE type IN ('table', 'index')
               AND name NOT LIKE 'sqlite_%'
             ORDER BY type, name
-            "#,
+            ",
         )
         .fetch_all(pool)
         .await
@@ -310,12 +310,12 @@ impl StatsRepository {
 
     async fn load_dbstat_sizes(pool: &SqlitePool) -> Result<Option<HashMap<String, i64>>, DbError> {
         let result = sqlx::query(
-            r#"
+            r"
             SELECT name, SUM(pgsize) AS estimated_bytes
             FROM dbstat
             WHERE name NOT LIKE 'sqlite_%'
             GROUP BY name
-            "#,
+            ",
         )
         .fetch_all(pool)
         .await;

@@ -43,6 +43,7 @@ pub async fn get_stats(
     let pending_duplicates = StatsRepository::pending_duplicate_count(pool).await?;
     let pending_candidates = StatsRepository::pending_candidate_count(pool).await?;
 
+    #[allow(clippy::cast_precision_loss)]
     let average_files_per_book = if library_overview.books > 0 {
         library_overview.files as f64 / library_overview.books as f64
     } else {
@@ -139,8 +140,7 @@ pub async fn get_stats(
 }
 
 async fn file_size_or_zero(path: &Path) -> i64 {
-    match tokio::fs::metadata(path).await {
-        Ok(metadata) => i64::try_from(metadata.len()).unwrap_or(i64::MAX),
-        Err(_) => 0,
-    }
+    tokio::fs::metadata(path).await.map_or(0, |metadata| {
+        i64::try_from(metadata.len()).unwrap_or(i64::MAX)
+    })
 }

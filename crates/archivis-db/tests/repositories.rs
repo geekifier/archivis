@@ -1,11 +1,11 @@
 use archivis_core::models::{
-    Author, Book, BookFile, BookFormat, Identifier, IdentifierType, MetadataSource, MetadataStatus,
-    Publisher, Series, Tag,
+    Author, Book, BookFile, BookFormat, Bookmark, Identifier, IdentifierType, MetadataSource,
+    MetadataStatus, Publisher, Series, Tag, User, UserRole,
 };
 use archivis_db::{
     create_pool, run_migrations, AuthorRepository, BookFileRepository, BookFilter, BookRepository,
-    DbPool, IdentifierRepository, PaginationParams, SeriesRepository, SortOrder, StatsRepository,
-    TagRepository,
+    BookmarkRepository, DbPool, IdentifierRepository, PaginationParams, ReadingProgressRepository,
+    SeriesRepository, SortOrder, StatsRepository, TagRepository, UserRepository,
 };
 use tempfile::TempDir;
 use uuid::Uuid;
@@ -784,4 +784,457 @@ async fn stats_repository_returns_library_usage_and_db_stats() {
     let objects = StatsRepository::db_object_stats(&pool).await.unwrap();
     assert!(!objects.objects.is_empty());
     assert!(objects.objects.iter().any(|entry| entry.name == "books"));
+}
+
+// ── Helper: create a test user ─────────────────────────────────
+
+fn test_user(username: &str) -> User {
+    User::new(username.into(), "hashed_pw".into(), UserRole::User)
+}
+
+// ── ReadingProgressRepository ──────────────────────────────────
+
+#[tokio::test]
+async fn upsert_creates_new_progress() {
+    let (pool, _dir) = test_pool().await;
+
+    let user = test_user("reader");
+    UserRepository::create(&pool, &user).await.unwrap();
+
+    let book = test_book("Dune");
+    BookRepository::create(&pool, &book).await.unwrap();
+
+    let file = BookFile::new(book.id, BookFormat::Epub, "dune.epub", 100_000, "hash1");
+    BookFileRepository::create(&pool, &file).await.unwrap();
+
+    let progress = ReadingProgressRepository::upsert(
+        &pool,
+        user.id,
+        file.id,
+        book.id,
+        Some("epubcfi(/6/4)"),
+        0.42,
+        None,
+        Some(&serde_json::json!({"fontSize": 16})),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(progress.user_id, user.id);
+    assert_eq!(progress.book_id, book.id);
+    assert_eq!(progress.book_file_id, file.id);
+    assert_eq!(progress.location.as_deref(), Some("epubcfi(/6/4)"));
+    assert!((progress.progress - 0.42).abs() < f64::EPSILON);
+    assert!(progress.device_id.is_none());
+    assert!(progress.preferences.is_some());
+}
+
+#[tokio::test]
+async fn upsert_updates_existing_progress() {
+    let (pool, _dir) = test_pool().await;
+
+    let user = test_user("reader");
+    UserRepository::create(&pool, &user).await.unwrap();
+
+    let book = test_book("Dune");
+    BookRepository::create(&pool, &book).await.unwrap();
+
+    let file = BookFile::new(book.id, BookFormat::Epub, "dune.epub", 100_000, "hash1");
+    BookFileRepository::create(&pool, &file).await.unwrap();
+
+    // First upsert
+    let p1 = ReadingProgressRepository::upsert(
+        &pool,
+        user.id,
+        file.id,
+        book.id,
+        Some("epubcfi(/6/4)"),
+        0.10,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+
+    // Second upsert (same user, file, device=NULL)
+    let p2 = ReadingProgressRepository::upsert(
+        &pool,
+        user.id,
+        file.id,
+        book.id,
+        Some("epubcfi(/6/10)"),
+        0.50,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(p1.id, p2.id, "upsert should update the same row");
+    assert_eq!(p2.location.as_deref(), Some("epubcfi(/6/10)"));
+    assert!((p2.progress - 0.50).abs() < f64::EPSILON);
+}
+
+#[tokio::test]
+async fn upsert_distinct_device_ids() {
+    let (pool, _dir) = test_pool().await;
+
+    let user = test_user("reader");
+    UserRepository::create(&pool, &user).await.unwrap();
+
+    let book = test_book("Dune");
+    BookRepository::create(&pool, &book).await.unwrap();
+
+    let file = BookFile::new(book.id, BookFormat::Epub, "dune.epub", 100_000, "hash1");
+    BookFileRepository::create(&pool, &file).await.unwrap();
+
+    // Web browser (NULL device)
+    let p1 = ReadingProgressRepository::upsert(
+        &pool,
+        user.id,
+        file.id,
+        book.id,
+        Some("epubcfi(/6/4)"),
+        0.10,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+
+    // KOReader device
+    let p2 = ReadingProgressRepository::upsert(
+        &pool,
+        user.id,
+        file.id,
+        book.id,
+        Some("epubcfi(/6/20)"),
+        0.80,
+        Some("koreader-1"),
+        None,
+    )
+    .await
+    .unwrap();
+
+    assert_ne!(
+        p1.id, p2.id,
+        "different device_ids should create separate rows"
+    );
+    assert!(p1.device_id.is_none());
+    assert_eq!(p2.device_id.as_deref(), Some("koreader-1"));
+}
+
+#[tokio::test]
+async fn get_for_book_returns_most_recent() {
+    let (pool, _dir) = test_pool().await;
+
+    let user = test_user("reader");
+    UserRepository::create(&pool, &user).await.unwrap();
+
+    let book = test_book("Dune");
+    BookRepository::create(&pool, &book).await.unwrap();
+
+    let file1 = BookFile::new(book.id, BookFormat::Epub, "dune.epub", 100_000, "hash1");
+    BookFileRepository::create(&pool, &file1).await.unwrap();
+
+    let file2 = BookFile::new(book.id, BookFormat::Pdf, "dune.pdf", 200_000, "hash2");
+    BookFileRepository::create(&pool, &file2).await.unwrap();
+
+    // Progress on file1 first
+    ReadingProgressRepository::upsert(
+        &pool,
+        user.id,
+        file1.id,
+        book.id,
+        Some("epubcfi(/6/4)"),
+        0.10,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+
+    // Progress on file2 later (more recent)
+    ReadingProgressRepository::upsert(
+        &pool,
+        user.id,
+        file2.id,
+        book.id,
+        Some("page:5"),
+        0.50,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+
+    let most_recent = ReadingProgressRepository::get_for_book(&pool, user.id, book.id)
+        .await
+        .unwrap()
+        .expect("should find progress");
+
+    assert_eq!(
+        most_recent.book_file_id, file2.id,
+        "should return most recently updated"
+    );
+    assert!((most_recent.progress - 0.50).abs() < f64::EPSILON);
+}
+
+#[tokio::test]
+async fn get_for_file_with_null_device() {
+    let (pool, _dir) = test_pool().await;
+
+    let user = test_user("reader");
+    UserRepository::create(&pool, &user).await.unwrap();
+
+    let book = test_book("Dune");
+    BookRepository::create(&pool, &book).await.unwrap();
+
+    let file = BookFile::new(book.id, BookFormat::Epub, "dune.epub", 100_000, "hash1");
+    BookFileRepository::create(&pool, &file).await.unwrap();
+
+    // Insert with NULL device_id
+    ReadingProgressRepository::upsert(
+        &pool,
+        user.id,
+        file.id,
+        book.id,
+        Some("epubcfi(/6/4)"),
+        0.42,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+
+    // Look up with NULL device_id
+    let found = ReadingProgressRepository::get_for_file(&pool, user.id, file.id, None)
+        .await
+        .unwrap();
+    assert!(found.is_some(), "should find progress with NULL device_id");
+    assert!(found.unwrap().device_id.is_none());
+
+    // Look up with a named device should NOT find it
+    let not_found =
+        ReadingProgressRepository::get_for_file(&pool, user.id, file.id, Some("koreader"))
+            .await
+            .unwrap();
+    assert!(not_found.is_none());
+}
+
+#[tokio::test]
+async fn list_recent_respects_limit() {
+    let (pool, _dir) = test_pool().await;
+
+    let user = test_user("reader");
+    UserRepository::create(&pool, &user).await.unwrap();
+
+    // Create 5 books with progress
+    for i in 0..5 {
+        let book = test_book(&format!("Book {i}"));
+        BookRepository::create(&pool, &book).await.unwrap();
+
+        let file = BookFile::new(
+            book.id,
+            BookFormat::Epub,
+            format!("book{i}.epub"),
+            100_000,
+            format!("hash{i}"),
+        );
+        BookFileRepository::create(&pool, &file).await.unwrap();
+
+        ReadingProgressRepository::upsert(
+            &pool,
+            user.id,
+            file.id,
+            book.id,
+            None,
+            f64::from(i) * 0.2,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    }
+
+    let recent = ReadingProgressRepository::list_recent(&pool, user.id, 3)
+        .await
+        .unwrap();
+
+    assert_eq!(recent.len(), 3, "should respect limit");
+    // Results should be ordered by updated_at DESC (most recent first)
+    assert!(recent[0].updated_at >= recent[1].updated_at);
+    assert!(recent[1].updated_at >= recent[2].updated_at);
+}
+
+#[tokio::test]
+async fn delete_for_book_removes_all() {
+    let (pool, _dir) = test_pool().await;
+
+    let user = test_user("reader");
+    UserRepository::create(&pool, &user).await.unwrap();
+
+    let book = test_book("Dune");
+    BookRepository::create(&pool, &book).await.unwrap();
+
+    let file = BookFile::new(book.id, BookFormat::Epub, "dune.epub", 100_000, "hash1");
+    BookFileRepository::create(&pool, &file).await.unwrap();
+
+    ReadingProgressRepository::upsert(
+        &pool,
+        user.id,
+        file.id,
+        book.id,
+        Some("epubcfi(/6/4)"),
+        0.42,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+
+    let rows = ReadingProgressRepository::delete_for_book(&pool, user.id, book.id)
+        .await
+        .unwrap();
+    assert_eq!(rows, 1);
+
+    let found = ReadingProgressRepository::get_for_book(&pool, user.id, book.id)
+        .await
+        .unwrap();
+    assert!(found.is_none(), "progress should be deleted");
+}
+
+// ── BookmarkRepository ─────────────────────────────────────────
+
+#[tokio::test]
+async fn bookmark_create_and_list() {
+    let (pool, _dir) = test_pool().await;
+
+    let user = test_user("reader");
+    UserRepository::create(&pool, &user).await.unwrap();
+
+    let book = test_book("Dune");
+    BookRepository::create(&pool, &book).await.unwrap();
+
+    let file = BookFile::new(book.id, BookFormat::Epub, "dune.epub", 100_000, "hash1");
+    BookFileRepository::create(&pool, &file).await.unwrap();
+
+    let bm1 = Bookmark {
+        id: Uuid::new_v4(),
+        user_id: user.id,
+        book_id: book.id,
+        book_file_id: file.id,
+        location: "epubcfi(/6/4)".into(),
+        label: Some("Chapter 1".into()),
+        excerpt: Some("A beginning is the time...".into()),
+        position: 0.10,
+        created_at: chrono::Utc::now(),
+    };
+
+    let bm2 = Bookmark {
+        id: Uuid::new_v4(),
+        user_id: user.id,
+        book_id: book.id,
+        book_file_id: file.id,
+        location: "epubcfi(/6/20)".into(),
+        label: Some("Chapter 5".into()),
+        excerpt: None,
+        position: 0.50,
+        created_at: chrono::Utc::now(),
+    };
+
+    BookmarkRepository::create(&pool, &bm1).await.unwrap();
+    BookmarkRepository::create(&pool, &bm2).await.unwrap();
+
+    let bookmarks = BookmarkRepository::list_for_file(&pool, user.id, file.id)
+        .await
+        .unwrap();
+
+    assert_eq!(bookmarks.len(), 2);
+    // Ordered by position ASC
+    assert!((bookmarks[0].position - 0.10).abs() < f64::EPSILON);
+    assert!((bookmarks[1].position - 0.50).abs() < f64::EPSILON);
+    assert_eq!(bookmarks[0].label.as_deref(), Some("Chapter 1"));
+}
+
+#[tokio::test]
+async fn bookmark_delete_ownership_check() {
+    let (pool, _dir) = test_pool().await;
+
+    let user1 = test_user("reader1");
+    UserRepository::create(&pool, &user1).await.unwrap();
+
+    let user2 = test_user("reader2");
+    UserRepository::create(&pool, &user2).await.unwrap();
+
+    let book = test_book("Dune");
+    BookRepository::create(&pool, &book).await.unwrap();
+
+    let file = BookFile::new(book.id, BookFormat::Epub, "dune.epub", 100_000, "hash1");
+    BookFileRepository::create(&pool, &file).await.unwrap();
+
+    let bm = Bookmark {
+        id: Uuid::new_v4(),
+        user_id: user1.id,
+        book_id: book.id,
+        book_file_id: file.id,
+        location: "epubcfi(/6/4)".into(),
+        label: None,
+        excerpt: None,
+        position: 0.10,
+        created_at: chrono::Utc::now(),
+    };
+    BookmarkRepository::create(&pool, &bm).await.unwrap();
+
+    // user2 tries to delete user1's bookmark
+    let result = BookmarkRepository::delete(&pool, bm.id, user2.id).await;
+    assert!(result.is_err(), "should fail: wrong user");
+
+    // user1 can delete their own bookmark
+    BookmarkRepository::delete(&pool, bm.id, user1.id)
+        .await
+        .unwrap();
+
+    let bookmarks = BookmarkRepository::list_for_file(&pool, user1.id, file.id)
+        .await
+        .unwrap();
+    assert!(bookmarks.is_empty());
+}
+
+#[tokio::test]
+async fn bookmark_update_label() {
+    let (pool, _dir) = test_pool().await;
+
+    let user = test_user("reader");
+    UserRepository::create(&pool, &user).await.unwrap();
+
+    let book = test_book("Dune");
+    BookRepository::create(&pool, &book).await.unwrap();
+
+    let file = BookFile::new(book.id, BookFormat::Epub, "dune.epub", 100_000, "hash1");
+    BookFileRepository::create(&pool, &file).await.unwrap();
+
+    let bm = Bookmark {
+        id: Uuid::new_v4(),
+        user_id: user.id,
+        book_id: book.id,
+        book_file_id: file.id,
+        location: "epubcfi(/6/4)".into(),
+        label: Some("Original label".into()),
+        excerpt: None,
+        position: 0.10,
+        created_at: chrono::Utc::now(),
+    };
+    BookmarkRepository::create(&pool, &bm).await.unwrap();
+
+    BookmarkRepository::update_label(&pool, bm.id, user.id, Some("Updated label"))
+        .await
+        .unwrap();
+
+    let bookmarks = BookmarkRepository::list_for_file(&pool, user.id, file.id)
+        .await
+        .unwrap();
+
+    assert_eq!(bookmarks.len(), 1);
+    assert_eq!(bookmarks[0].label.as_deref(), Some("Updated label"));
 }

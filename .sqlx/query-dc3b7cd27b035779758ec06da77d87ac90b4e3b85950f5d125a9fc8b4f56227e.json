@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE reading_progress\n                       SET location = ?, progress = ?, preferences = ?, updated_at = ?\n                       WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "dc3b7cd27b035779758ec06da77d87ac90b4e3b85950f5d125a9fc8b4f56227e"
+}
