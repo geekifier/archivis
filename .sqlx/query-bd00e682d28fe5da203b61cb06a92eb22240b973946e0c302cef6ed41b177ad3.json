@@ -1,0 +1,68 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id, user_id, book_id, book_file_id, location, label, excerpt, position, created_at\n               FROM bookmarks\n               WHERE id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "user_id",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "book_id",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "book_file_id",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "location",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "label",
+        "ordinal": 5,
+        "type_info": "Text"
+      },
+      {
+        "name": "excerpt",
+        "ordinal": 6,
+        "type_info": "Text"
+      },
+      {
+        "name": "position",
+        "ordinal": 7,
+        "type_info": "Float"
+      },
+      {
+        "name": "created_at",
+        "ordinal": 8,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "bd00e682d28fe5da203b61cb06a92eb22240b973946e0c302cef6ed41b177ad3"
+}

@@ -8,6 +8,7 @@ pub mod identify;
 pub mod import;
 pub mod isbn_scan;
 pub mod publishers;
+pub mod reader;
 pub mod series;
 pub mod settings;
 pub mod state;
@@ -60,6 +61,7 @@ mod openapi {
             super::books::handlers::delete_identifier,
             super::books::handlers::batch_update_books,
             super::books::handlers::batch_set_tags,
+            super::books::handlers::serve_file_content,
             // Authors
             super::authors::handlers::list_authors,
             super::authors::handlers::create_author,
@@ -105,6 +107,15 @@ mod openapi {
             super::identify::handlers::undo_candidate,
             super::identify::handlers::batch_identify,
             super::identify::handlers::identify_all,
+            // Reader
+            super::reader::handlers::get_progress,
+            super::reader::handlers::update_progress,
+            super::reader::handlers::delete_progress,
+            super::reader::handlers::continue_reading,
+            super::reader::handlers::list_bookmarks,
+            super::reader::handlers::create_bookmark,
+            super::reader::handlers::update_bookmark,
+            super::reader::handlers::delete_bookmark,
             // ISBN Scan
             super::isbn_scan::handlers::scan_book_isbn,
             super::isbn_scan::handlers::batch_scan_isbn,
@@ -192,6 +203,13 @@ mod openapi {
             super::identify::types::BatchIdentifyRequest,
             super::identify::types::IdentifyAllRequest,
             super::identify::types::IdentifyAllResponse,
+            // Reader
+            super::reader::types::ReadingProgressResponse,
+            super::reader::types::UpdateProgressRequest,
+            super::reader::types::ContinueReadingItem,
+            super::reader::types::CreateBookmarkRequest,
+            super::reader::types::BookmarkResponse,
+            super::reader::handlers::UpdateBookmarkRequest,
             // ISBN Scan
             super::isbn_scan::types::IsbnScanResponse,
             super::isbn_scan::types::BatchIsbnScanRequest,
@@ -232,6 +250,7 @@ mod openapi {
             (name = "publishers", description = "Publisher management"),
             (name = "series", description = "Series management"),
             (name = "tags", description = "Tag management"),
+            (name = "reader", description = "Reading progress and bookmarks"),
             (name = "import", description = "File and directory import"),
             (name = "identify", description = "Book metadata identification"),
             (name = "isbn-scan", description = "ISBN content scanning"),
@@ -259,6 +278,7 @@ pub fn build_router(state: AppState) -> Router {
         .nest("/publishers", publishers::router())
         .nest("/series", series::router())
         .nest("/tags", tags::router())
+        .nest("/reader", reader::router())
         .nest("/import", import::router())
         .nest("/identify", identify::router())
         .nest("/isbn-scan", isbn_scan::router())

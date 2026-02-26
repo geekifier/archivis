@@ -26,6 +26,10 @@ pub fn router() -> Router<AppState> {
             "/{id}/files/{file_id}/download",
             get(handlers::download_file),
         )
+        .route(
+            "/{id}/files/{file_id}/content",
+            get(handlers::serve_file_content),
+        )
         .route("/{id}/authors", post(handlers::set_book_authors))
         .route("/{id}/series", post(handlers::set_book_series))
         .route("/{id}/tags", post(handlers::set_book_tags))

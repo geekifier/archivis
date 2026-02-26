@@ -35,6 +35,28 @@ impl BookmarkRepository {
         Ok(())
     }
 
+    /// Get a bookmark by ID.
+    pub async fn get_by_id(pool: &SqlitePool, id: Uuid) -> Result<Bookmark, DbError> {
+        let id_str = id.to_string();
+
+        let row = sqlx::query_as!(
+            BookmarkRow,
+            r#"SELECT id, user_id, book_id, book_file_id, location, label, excerpt, position, created_at
+               FROM bookmarks
+               WHERE id = ?"#,
+            id_str,
+        )
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| DbError::Query(e.to_string()))?
+        .ok_or(DbError::NotFound {
+            entity: "bookmark",
+            id: id_str,
+        })?;
+
+        row.into_bookmark()
+    }
+
     /// List all bookmarks for a user+file, ordered by position.
     pub async fn list_for_file(
         pool: &SqlitePool,

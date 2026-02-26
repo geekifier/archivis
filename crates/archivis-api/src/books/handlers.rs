@@ -615,6 +615,66 @@ pub async fn download_file(
         .into_response())
 }
 
+/// `GET /api/books/{id}/files/{file_id}/content` — serve book file for in-browser reading.
+///
+/// Unlike /download (Content-Disposition: attachment), this uses inline disposition
+/// and aggressive caching since ebook files are immutable after import.
+#[utoipa::path(
+    get,
+    path = "/api/books/{id}/files/{file_id}/content",
+    tag = "books",
+    params(
+        ("id" = Uuid, Path, description = "Book ID"),
+        ("file_id" = Uuid, Path, description = "Book file ID"),
+    ),
+    responses(
+        (status = 200, description = "File content", content_type = "application/octet-stream"),
+        (status = 304, description = "Not modified"),
+        (status = 404, description = "File not found"),
+        (status = 401, description = "Not authenticated"),
+    ),
+    security(("bearer" = []))
+)]
+pub async fn serve_file_content(
+    State(state): State<AppState>,
+    AuthUser(_user): AuthUser,
+    Path((book_id, file_id)): Path<(Uuid, Uuid)>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    let pool = state.db_pool();
+    let book_file = BookFileRepository::get_by_id(pool, file_id).await?;
+
+    // Verify the file belongs to this book
+    if book_file.book_id != book_id {
+        return Err(ApiError::NotFound("book file not found".into()));
+    }
+
+    // ETag based on the file's SHA-256 hash
+    let etag = format!("\"{}\"", book_file.hash);
+
+    // Check If-None-Match for conditional request
+    if let Some(if_none_match) = headers.get(IF_NONE_MATCH).and_then(|v| v.to_str().ok()) {
+        if if_none_match == etag {
+            return Ok(StatusCode::NOT_MODIFIED.into_response());
+        }
+    }
+
+    let storage = state.storage();
+    let data = storage.read(&book_file.storage_path).await?;
+
+    Ok((
+        [
+            (CONTENT_TYPE, book_file.format.mime_type().to_string()),
+            (CONTENT_DISPOSITION, "inline".to_string()),
+            (CONTENT_LENGTH, data.len().to_string()),
+            (ETAG, etag),
+            (CACHE_CONTROL, "public, max-age=604800, immutable".into()),
+        ],
+        data,
+    )
+        .into_response())
+}
+
 /// POST /api/books/{id}/authors — replace book-author links.
 #[utoipa::path(
     post,
