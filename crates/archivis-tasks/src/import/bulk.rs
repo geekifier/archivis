@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use archivis_core::models::BookFormat;
 use archivis_storage::StorageBackend;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use super::progress::{
     BulkImportResult, FailedFile, FileOutcome, ImportProgress, SkipReason, SkippedFile,
@@ -112,7 +112,14 @@ impl<S: StorageBackend> BulkImportService<S> {
 
                 let format = match archivis_formats::detect::detect(&header) {
                     Ok(f) if f != BookFormat::Unknown => f,
-                    _ => continue,
+                    Ok(_) => {
+                        debug!(path = %entry_path.display(), "skipping file: format not recognised");
+                        continue;
+                    }
+                    Err(e) => {
+                        warn!(path = %entry_path.display(), "format detection failed: {e}");
+                        continue;
+                    }
                 };
 
                 let metadata = entry.metadata().await?;
