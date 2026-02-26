@@ -37,6 +37,7 @@ import type {
 	SetBookTagsRequest,
 	SettingsResponse,
 	SetupRequest,
+	StatsResponse,
 	TaskCreatedResponse,
 	TaskResponse,
 	UpdateBookRequest,
@@ -85,11 +86,7 @@ function handleUnauthorized() {
  * Automatically attaches the session token as a Bearer header
  * and handles 401 responses by clearing the session and redirecting.
  */
-async function request<T>(
-	method: string,
-	path: string,
-	body?: unknown
-): Promise<T> {
+async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
 	const headers: Record<string, string> = {
 		Accept: 'application/json'
 	};
@@ -228,14 +225,11 @@ export const api = {
 			}
 			// Do NOT set Content-Type — let the browser set the multipart boundary.
 
-			const response = await fetch(
-				`${BASE_URL}/books/${encodeURIComponent(id)}/cover`,
-				{
-					method: 'POST',
-					headers,
-					body: formData
-				}
-			);
+			const response = await fetch(`${BASE_URL}/books/${encodeURIComponent(id)}/cover`, {
+				method: 'POST',
+				headers,
+				body: formData
+			});
 
 			if (!response.ok) {
 				const error = await parseApiError(response);
@@ -252,11 +246,7 @@ export const api = {
 	identifiers: {
 		/** Add a new identifier to a book. */
 		add(bookId: string, data: AddIdentifierRequest): Promise<BookDetail> {
-			return request<BookDetail>(
-				'POST',
-				`/books/${encodeURIComponent(bookId)}/identifiers`,
-				data
-			);
+			return request<BookDetail>('POST', `/books/${encodeURIComponent(bookId)}/identifiers`, data);
 		},
 
 		/** Update an existing identifier. */
@@ -298,27 +288,17 @@ export const api = {
 
 		/** Get a single duplicate link by ID. */
 		get(id: string): Promise<DuplicateLinkResponse> {
-			return request<DuplicateLinkResponse>(
-				'GET',
-				`/duplicates/${encodeURIComponent(id)}`
-			);
+			return request<DuplicateLinkResponse>('GET', `/duplicates/${encodeURIComponent(id)}`);
 		},
 
 		/** Merge a duplicate pair. */
 		merge(id: string, data: MergeRequest): Promise<BookDetail> {
-			return request<BookDetail>(
-				'POST',
-				`/duplicates/${encodeURIComponent(id)}/merge`,
-				data
-			);
+			return request<BookDetail>('POST', `/duplicates/${encodeURIComponent(id)}/merge`, data);
 		},
 
 		/** Dismiss a duplicate pair. */
 		dismiss(id: string): Promise<void> {
-			return request<void>(
-				'POST',
-				`/duplicates/${encodeURIComponent(id)}/dismiss`
-			);
+			return request<void>('POST', `/duplicates/${encodeURIComponent(id)}/dismiss`);
 		},
 
 		/** Manually flag a book as a duplicate of another. */
@@ -517,10 +497,7 @@ export const api = {
 
 		/** List identification candidates for a book. */
 		candidates(bookId: string): Promise<CandidateResponse[]> {
-			return request<CandidateResponse[]>(
-				'GET',
-				`/books/${encodeURIComponent(bookId)}/candidates`
-			);
+			return request<CandidateResponse[]>('GET', `/books/${encodeURIComponent(bookId)}/candidates`);
 		},
 
 		/** Apply a candidate to a book, updating its metadata. */
@@ -530,9 +507,7 @@ export const api = {
 			excludeFields?: string[]
 		): Promise<BookDetail> {
 			const body =
-				excludeFields && excludeFields.length > 0
-					? { exclude_fields: excludeFields }
-					: undefined;
+				excludeFields && excludeFields.length > 0 ? { exclude_fields: excludeFields } : undefined;
 			return request<BookDetail>(
 				'POST',
 				`/books/${encodeURIComponent(bookId)}/candidates/${encodeURIComponent(candidateId)}/apply`,
@@ -572,10 +547,7 @@ export const api = {
 	isbnScan: {
 		/** Trigger ISBN content scan for a single book. */
 		scanBook(id: string): Promise<IsbnScanResponse> {
-			return request<IsbnScanResponse>(
-				'POST',
-				`/isbn-scan/book/${encodeURIComponent(id)}`
-			);
+			return request<IsbnScanResponse>('POST', `/isbn-scan/book/${encodeURIComponent(id)}`);
 		},
 
 		/** Trigger ISBN content scan for multiple books. */
@@ -595,6 +567,13 @@ export const api = {
 		/** Update one or more settings. Null value = reset to default. */
 		update(settings: Record<string, unknown>): Promise<UpdateSettingsResponse> {
 			return request<UpdateSettingsResponse>('PUT', '/settings', { settings });
+		}
+	},
+
+	stats: {
+		/** Fetch library and usage statistics. */
+		get(): Promise<StatsResponse> {
+			return request<StatsResponse>('GET', '/stats');
 		}
 	}
 } as const;
@@ -652,6 +631,7 @@ export type {
 	SetBookAuthorsRequest,
 	SetBookSeriesRequest,
 	SetBookTagsRequest,
+	StatsResponse,
 	SettingEntry,
 	SettingOverride,
 	SettingsResponse,

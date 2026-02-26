@@ -4,7 +4,8 @@ use archivis_core::models::{
 };
 use archivis_db::{
     create_pool, run_migrations, AuthorRepository, BookFileRepository, BookFilter, BookRepository,
-    DbPool, IdentifierRepository, PaginationParams, SeriesRepository, SortOrder, TagRepository,
+    DbPool, IdentifierRepository, PaginationParams, SeriesRepository, SortOrder, StatsRepository,
+    TagRepository,
 };
 use tempfile::TempDir;
 use uuid::Uuid;
@@ -698,4 +699,89 @@ async fn book_list_filter_by_format() {
 
     assert_eq!(result.total, 1);
     assert_eq!(result.items[0].title, "EPUB Book");
+}
+
+// ── StatsRepository ─────────────────────────────────────────────
+
+#[tokio::test]
+async fn stats_repository_returns_library_usage_and_db_stats() {
+    let (pool, _dir) = test_pool().await;
+
+    let book = test_book("Dune");
+    BookRepository::create(&pool, &book).await.unwrap();
+    let file = BookFile::new(book.id, BookFormat::Epub, "dune.epub", 1_024, "hash-dune");
+    BookFileRepository::create(&pool, &file).await.unwrap();
+
+    sqlx::query(
+        "INSERT INTO tasks (id, task_type, payload, status, progress) VALUES (?, ?, ?, ?, ?)",
+    )
+    .bind(Uuid::new_v4().to_string())
+    .bind("import_file")
+    .bind("{}")
+    .bind("completed")
+    .bind(100_i64)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    // Use two books to satisfy duplicate link constraints.
+    let other = test_book("Dune Copy");
+    BookRepository::create(&pool, &other).await.unwrap();
+    sqlx::query(
+        "INSERT INTO duplicate_links (id, book_id_a, book_id_b, detection_method, confidence, status) VALUES (?, ?, ?, ?, ?, ?)",
+    )
+    .bind(Uuid::new_v4().to_string())
+    .bind(book.id.to_string())
+    .bind(other.id.to_string())
+    .bind("user")
+    .bind(1.0_f32)
+    .bind("pending")
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    sqlx::query(
+        "INSERT INTO identification_candidates (id, book_id, provider_name, score, metadata, status) VALUES (?, ?, ?, ?, ?, ?)",
+    )
+    .bind(Uuid::new_v4().to_string())
+    .bind(book.id.to_string())
+    .bind("open_library")
+    .bind(0.9_f32)
+    .bind("{}")
+    .bind("pending")
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let library = StatsRepository::library_overview(&pool).await.unwrap();
+    assert_eq!(library.books, 2);
+    assert_eq!(library.files, 1);
+    assert_eq!(library.total_file_size, 1_024);
+
+    let formats = StatsRepository::files_by_format(&pool).await.unwrap();
+    assert_eq!(formats.len(), 1);
+    assert_eq!(formats[0].format, "epub");
+    assert_eq!(formats[0].file_count, 1);
+
+    let task_overview = StatsRepository::task_overview(&pool).await.unwrap();
+    assert_eq!(task_overview.total, 1);
+    assert_eq!(task_overview.last_24h, 1);
+
+    let pending_duplicates = StatsRepository::pending_duplicate_count(&pool)
+        .await
+        .unwrap();
+    assert_eq!(pending_duplicates, 1);
+
+    let pending_candidates = StatsRepository::pending_candidate_count(&pool)
+        .await
+        .unwrap();
+    assert_eq!(pending_candidates, 1);
+
+    let pragma = StatsRepository::db_pragma_stats(&pool).await.unwrap();
+    assert!(pragma.page_size > 0);
+    assert!(pragma.page_count > 0);
+
+    let objects = StatsRepository::db_object_stats(&pool).await.unwrap();
+    assert!(!objects.objects.is_empty());
+    assert!(objects.objects.iter().any(|entry| entry.name == "books"));
 }

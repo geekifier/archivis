@@ -38,7 +38,8 @@
 		}
 
 		if (!auth.isAuthenticated && !isPublicPage) {
-			const redirect = page.url.pathname === '/' ? '' : `?redirect=${encodeURIComponent(page.url.pathname)}`;
+			const redirect =
+				page.url.pathname === '/' ? '' : `?redirect=${encodeURIComponent(page.url.pathname)}`;
 			goto(`/login${redirect}`);
 		}
 	}
@@ -46,6 +47,7 @@
 	const navItems = $derived([
 		{ href: '/', label: 'Library', icon: 'library' },
 		{ href: '/import', label: 'Import', icon: 'import' },
+		{ href: '/stats', label: 'Statistics', icon: 'stats' },
 		{ href: '/duplicates', label: 'Duplicates', icon: 'duplicates' },
 		...(auth.user?.role === 'admin'
 			? [{ href: '/settings', label: 'Settings', icon: 'settings' }]
@@ -56,11 +58,14 @@
 
 	function isActive(href: string): boolean {
 		if (href === '/') return page.url.pathname === '/' || page.url.pathname.startsWith('/books');
+		if (href === '/stats') return page.url.pathname.startsWith('/stats');
 		if (href === '/duplicates') return page.url.pathname.startsWith('/duplicates');
 		return page.url.pathname.startsWith(href);
 	}
 
-	const isLibraryPage = $derived(page.url.pathname === '/' || page.url.pathname.startsWith('/books'));
+	const isLibraryPage = $derived(
+		page.url.pathname === '/' || page.url.pathname.startsWith('/books')
+	);
 
 	const formats: { value: BookFormat; label: string }[] = [
 		{ value: 'epub', label: 'EPUB' },
@@ -136,7 +141,16 @@
 				aria-label="Toggle theme"
 			>
 				{#if theme.current === 'dark'}
-					<svg class="size-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+					<svg
+						class="size-4"
+						xmlns="http://www.w3.org/2000/svg"
+						viewBox="0 0 24 24"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="2"
+						stroke-linecap="round"
+						stroke-linejoin="round"
+					>
 						<circle cx="12" cy="12" r="4" />
 						<path d="M12 2v2" />
 						<path d="M12 20v2" />
@@ -148,7 +162,16 @@
 						<path d="m19.07 4.93-1.41 1.41" />
 					</svg>
 				{:else}
-					<svg class="size-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+					<svg
+						class="size-4"
+						xmlns="http://www.w3.org/2000/svg"
+						viewBox="0 0 24 24"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="2"
+						stroke-linecap="round"
+						stroke-linejoin="round"
+					>
 						<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" />
 					</svg>
 				{/if}
@@ -188,29 +211,87 @@
 							: 'text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'}"
 					>
 						{#if item.icon === 'library'}
-							<svg class="size-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-								<path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H19a1 1 0 0 1 1 1v18a1 1 0 0 1-1 1H6.5a1 1 0 0 1 0-5H20" />
+							<svg
+								class="size-4"
+								xmlns="http://www.w3.org/2000/svg"
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								stroke-width="2"
+								stroke-linecap="round"
+								stroke-linejoin="round"
+							>
+								<path
+									d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H19a1 1 0 0 1 1 1v18a1 1 0 0 1-1 1H6.5a1 1 0 0 1 0-5H20"
+								/>
 							</svg>
 						{:else if item.icon === 'import'}
-							<svg class="size-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+							<svg
+								class="size-4"
+								xmlns="http://www.w3.org/2000/svg"
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								stroke-width="2"
+								stroke-linecap="round"
+								stroke-linejoin="round"
+							>
 								<path d="M12 3v12" />
 								<path d="m8 11 4 4 4-4" />
-								<path d="M8 5H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-4" />
+								<path
+									d="M8 5H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-4"
+								/>
+							</svg>
+						{:else if item.icon === 'stats'}
+							<svg
+								class="size-4"
+								xmlns="http://www.w3.org/2000/svg"
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								stroke-width="2"
+								stroke-linecap="round"
+								stroke-linejoin="round"
+							>
+								<path d="M3 3v18h18" />
+								<path d="m19 9-5 5-4-4-3 3" />
 							</svg>
 						{:else if item.icon === 'duplicates'}
-							<svg class="size-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+							<svg
+								class="size-4"
+								xmlns="http://www.w3.org/2000/svg"
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								stroke-width="2"
+								stroke-linecap="round"
+								stroke-linejoin="round"
+							>
 								<rect x="8" y="2" width="13" height="13" rx="2" />
 								<path d="M5 8H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2v-1" />
 							</svg>
 						{:else if item.icon === 'settings'}
-							<svg class="size-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-								<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+							<svg
+								class="size-4"
+								xmlns="http://www.w3.org/2000/svg"
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								stroke-width="2"
+								stroke-linecap="round"
+								stroke-linejoin="round"
+							>
+								<path
+									d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"
+								/>
 								<circle cx="12" cy="12" r="3" />
 							</svg>
 						{/if}
 						<span class="flex-1">{item.label}</span>
 						{#if item.icon === 'duplicates' && duplicateCount != null && duplicateCount > 0}
-							<span class="min-w-5 rounded-full bg-amber-500/15 px-1.5 py-0.5 text-center text-xs font-medium text-amber-600 dark:text-amber-400">
+							<span
+								class="min-w-5 rounded-full bg-amber-500/15 px-1.5 py-0.5 text-center text-xs font-medium text-amber-600 dark:text-amber-400"
+							>
 								{duplicateCount}
 							</span>
 						{/if}
@@ -223,7 +304,9 @@
 
 					<!-- Format filters -->
 					<div class="px-3 pb-1">
-						<span class="text-xs font-semibold uppercase tracking-wider text-sidebar-foreground/60">Format</span>
+						<span class="text-xs font-semibold uppercase tracking-wider text-sidebar-foreground/60"
+							>Format</span
+						>
 					</div>
 					<div class="flex flex-wrap gap-1 px-2">
 						{#each formats as fmt (fmt.value)}
@@ -241,7 +324,9 @@
 
 					<!-- Status filters -->
 					<div class="mt-3 px-3 pb-1">
-						<span class="text-xs font-semibold uppercase tracking-wider text-sidebar-foreground/60">Status</span>
+						<span class="text-xs font-semibold uppercase tracking-wider text-sidebar-foreground/60"
+							>Status</span
+						>
 					</div>
 					{#each statuses as st (st.value)}
 						<button
@@ -254,12 +339,16 @@
 							<span class="size-2 rounded-full {st.colorClass}"></span>
 							<span class="flex-1 text-left">{st.label}</span>
 							{#if st.value === 'needs_review' && filters.needsReviewCount !== null && filters.needsReviewCount > 0}
-								<span class="min-w-5 rounded-full bg-amber-500/15 px-1.5 py-0.5 text-center text-xs font-medium text-amber-600 dark:text-amber-400">
+								<span
+									class="min-w-5 rounded-full bg-amber-500/15 px-1.5 py-0.5 text-center text-xs font-medium text-amber-600 dark:text-amber-400"
+								>
 									{filters.needsReviewCount}
 								</span>
 							{/if}
 							{#if st.value === 'unidentified' && filters.unidentifiedCount !== null && filters.unidentifiedCount > 0}
-								<span class="min-w-5 rounded-full bg-gray-400/15 px-1.5 py-0.5 text-center text-xs font-medium text-gray-600 dark:text-gray-400">
+								<span
+									class="min-w-5 rounded-full bg-gray-400/15 px-1.5 py-0.5 text-center text-xs font-medium text-gray-600 dark:text-gray-400"
+								>
 									{filters.unidentifiedCount}
 								</span>
 							{/if}
@@ -284,7 +373,9 @@
 		<!-- Main area -->
 		<div class="flex flex-1 flex-col overflow-hidden">
 			<!-- Header -->
-			<header class="flex h-14 items-center justify-between border-b border-border bg-background px-4">
+			<header
+				class="flex h-14 items-center justify-between border-b border-border bg-background px-4"
+			>
 				<div class="flex items-center gap-3">
 					<!-- Mobile hamburger -->
 					<Button
@@ -294,7 +385,16 @@
 						onclick={() => (sidebarOpen = !sidebarOpen)}
 						aria-label="Toggle sidebar"
 					>
-						<svg class="size-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+						<svg
+							class="size-5"
+							xmlns="http://www.w3.org/2000/svg"
+							viewBox="0 0 24 24"
+							fill="none"
+							stroke="currentColor"
+							stroke-width="2"
+							stroke-linecap="round"
+							stroke-linejoin="round"
+						>
 							<line x1="4" x2="20" y1="12" y2="12" />
 							<line x1="4" x2="20" y1="6" y2="6" />
 							<line x1="4" x2="20" y1="18" y2="18" />
@@ -312,7 +412,16 @@
 						aria-label="Toggle theme"
 					>
 						{#if theme.current === 'dark'}
-							<svg class="size-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+							<svg
+								class="size-4"
+								xmlns="http://www.w3.org/2000/svg"
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								stroke-width="2"
+								stroke-linecap="round"
+								stroke-linejoin="round"
+							>
 								<circle cx="12" cy="12" r="4" />
 								<path d="M12 2v2" />
 								<path d="M12 20v2" />
@@ -324,7 +433,16 @@
 								<path d="m19.07 4.93-1.41 1.41" />
 							</svg>
 						{:else}
-							<svg class="size-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+							<svg
+								class="size-4"
+								xmlns="http://www.w3.org/2000/svg"
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								stroke-width="2"
+								stroke-linecap="round"
+								stroke-linejoin="round"
+							>
 								<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" />
 							</svg>
 						{/if}
@@ -342,7 +460,16 @@
 								onclick={() => auth.logout()}
 								aria-label="Log out"
 							>
-								<svg class="size-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+								<svg
+									class="size-4"
+									xmlns="http://www.w3.org/2000/svg"
+									viewBox="0 0 24 24"
+									fill="none"
+									stroke="currentColor"
+									stroke-width="2"
+									stroke-linecap="round"
+									stroke-linejoin="round"
+								>
 									<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
 									<polyline points="16 17 21 12 16 7" />
 									<line x1="21" x2="9" y1="12" y2="12" />

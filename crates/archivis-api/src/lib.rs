@@ -11,6 +11,7 @@ pub mod publishers;
 pub mod series;
 pub mod settings;
 pub mod state;
+pub mod stats;
 pub mod tags;
 pub mod tasks;
 
@@ -119,6 +120,8 @@ mod openapi {
             // Settings
             super::settings::handlers::get_settings,
             super::settings::handlers::update_settings,
+            // Stats
+            super::stats::handlers::get_stats,
         ),
         components(schemas(
             // Auth
@@ -210,6 +213,17 @@ mod openapi {
             super::settings::service::ConfigSource,
             super::settings::service::ConfigOverride,
             super::settings::registry::SettingType,
+            // Stats
+            super::stats::types::StatsResponse,
+            super::stats::types::LibraryStats,
+            super::stats::types::FormatStat,
+            super::stats::types::StatusCount,
+            super::stats::types::UsageStats,
+            super::stats::types::TaskTypeCount,
+            super::stats::types::DbStats,
+            super::stats::types::DbFileStats,
+            super::stats::types::DbPageStats,
+            super::stats::types::DbObjectStatResponse,
         )),
         tags(
             (name = "auth", description = "Authentication and user management"),
@@ -225,6 +239,7 @@ mod openapi {
             (name = "duplicates", description = "Duplicate book management and merging"),
             (name = "filesystem", description = "Server filesystem browsing"),
             (name = "settings", description = "Instance settings management"),
+            (name = "stats", description = "Library and usage statistics"),
         )
     )]
     pub struct ApiDoc;
@@ -249,7 +264,8 @@ pub fn build_router(state: AppState) -> Router {
         .nest("/isbn-scan", isbn_scan::router())
         .nest("/duplicates", duplicates::router())
         .nest("/filesystem", filesystem::router())
-        .nest("/settings", settings::router());
+        .nest("/settings", settings::router())
+        .nest("/stats", stats::router());
 
     let mut router = Router::new()
         .merge(SwaggerUi::new("/api/docs").url("/api/openapi.json", openapi::ApiDoc::openapi()))
@@ -474,5 +490,88 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn stats_endpoint_hides_db_stats_for_non_admin() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = test_state(tmp.path(), None).await;
+
+        state
+            .auth_service()
+            .register("admin", "password123", None)
+            .await
+            .unwrap();
+        state
+            .auth_service()
+            .register("reader", "password123", None)
+            .await
+            .unwrap();
+
+        let (token, _session) = state
+            .auth_service()
+            .login("reader", "password123")
+            .await
+            .unwrap();
+
+        let router = build_router(state);
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .uri("/api/stats")
+                    .header("authorization", format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(json.get("library").is_some());
+        assert!(json.get("usage").is_some());
+        assert!(json["db"].is_null());
+    }
+
+    #[tokio::test]
+    async fn stats_endpoint_includes_db_stats_for_admin() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = test_state(tmp.path(), None).await;
+
+        state
+            .auth_service()
+            .register("admin", "password123", None)
+            .await
+            .unwrap();
+
+        let (token, _session) = state
+            .auth_service()
+            .login("admin", "password123")
+            .await
+            .unwrap();
+
+        let router = build_router(state);
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .uri("/api/stats")
+                    .header("authorization", format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(json.get("library").is_some());
+        assert!(json.get("usage").is_some());
+        assert!(json["db"].is_object());
     }
 }

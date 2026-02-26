@@ -8,6 +8,7 @@ mod publisher;
 mod series;
 mod session;
 mod setting;
+mod stats;
 mod tag;
 mod task;
 mod types;
@@ -25,6 +26,10 @@ pub use publisher::PublisherRepository;
 pub use series::SeriesRepository;
 pub use session::SessionRepository;
 pub use setting::SettingRepository;
+pub use stats::{
+    BucketCount, DbObjectStat, DbObjectStats, DbPragmaStats, FormatFileStat, LibraryOverview,
+    StatsRepository, TaskOverview,
+};
 pub use tag::TagRepository;
 pub use task::{ChildTaskSummary, TaskRepository};
 pub use types::{BookFilter, PaginatedResult, PaginationParams, SortOrder};

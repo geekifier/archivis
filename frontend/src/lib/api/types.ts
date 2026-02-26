@@ -49,7 +49,13 @@ export interface ApiErrorResponse {
 
 export type MetadataStatus = 'identified' | 'needs_review' | 'unidentified';
 export type BookFormat = 'epub' | 'pdf' | 'mobi' | 'cbz' | 'fb2' | 'txt' | 'djvu' | 'azw3';
-export type SortField = 'added_at' | 'title' | 'sort_title' | 'updated_at' | 'rating' | 'metadata_status';
+export type SortField =
+	| 'added_at'
+	| 'title'
+	| 'sort_title'
+	| 'updated_at'
+	| 'rating'
+	| 'metadata_status';
 export type SortOrder = 'asc' | 'desc';
 
 export interface AuthorEntry {
@@ -496,4 +502,76 @@ export interface SettingsResponse {
 export interface UpdateSettingsResponse {
 	updated: string[];
 	requires_restart: boolean;
+}
+
+// --- Statistics types ---
+
+export interface FormatStat {
+	format: string;
+	file_count: number;
+	total_size: number;
+}
+
+export interface StatusCount {
+	status: string;
+	count: number;
+}
+
+export interface TaskTypeCount {
+	task_type: string;
+	count: number;
+}
+
+export interface LibraryStats {
+	books: number;
+	files: number;
+	total_file_size: number;
+	average_files_per_book: number;
+	files_by_format: FormatStat[];
+	metadata_status: StatusCount[];
+}
+
+export interface UsageStats {
+	tasks_total: number;
+	tasks_last_24h: number;
+	tasks_by_status: StatusCount[];
+	tasks_by_type: TaskTypeCount[];
+	pending_duplicates: number;
+	pending_candidates: number;
+}
+
+export interface DbFileStats {
+	main_db_size: number;
+	wal_size: number;
+	shm_size: number;
+}
+
+export interface DbPageStats {
+	page_size: number;
+	page_count: number;
+	freelist_count: number;
+	used_pages: number;
+	used_bytes: number;
+	free_bytes: number;
+}
+
+export interface DbObjectStat {
+	name: string;
+	object_type: string;
+	estimated_bytes: number | null;
+	row_count: number | null;
+}
+
+export interface DbStats {
+	files: DbFileStats;
+	pages: DbPageStats;
+	table_size_estimates_available: boolean;
+	objects: DbObjectStat[];
+}
+
+export interface StatsResponse {
+	generated_at: string;
+	library: LibraryStats;
+	usage: UsageStats;
+	db: DbStats | null;
 }

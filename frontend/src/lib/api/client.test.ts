@@ -58,9 +58,7 @@ describe('API client', () => {
 
 			expect(fetchSpy).toHaveBeenCalledOnce();
 			const [, init] = fetchSpy.mock.calls[0];
-			expect((init?.headers as Record<string, string>)['Authorization']).toBe(
-				'Bearer my-token'
-			);
+			expect((init?.headers as Record<string, string>)['Authorization']).toBe('Bearer my-token');
 		});
 
 		it('does NOT attach Authorization header when no token', async () => {
@@ -80,9 +78,7 @@ describe('API client', () => {
 			await api.auth.login({ username: 'admin', password: 'pass' });
 
 			const [, init] = fetchSpy.mock.calls[0];
-			expect((init?.headers as Record<string, string>)['Content-Type']).toBe(
-				'application/json'
-			);
+			expect((init?.headers as Record<string, string>)['Content-Type']).toBe('application/json');
 		});
 
 		it('does NOT set Content-Type when no body', async () => {
@@ -112,10 +108,10 @@ describe('API client', () => {
 
 		it('throws ApiError on non-ok response', async () => {
 			fetchSpy.mockResolvedValueOnce(
-				new Response(
-					JSON.stringify({ error: { status: 400, message: 'Bad input' } }),
-					{ status: 400, headers: { 'Content-Type': 'application/json' } }
-				)
+				new Response(JSON.stringify({ error: { status: 400, message: 'Bad input' } }), {
+					status: 400,
+					headers: { 'Content-Type': 'application/json' }
+				})
 			);
 
 			await expect(api.auth.status()).rejects.toThrow(ApiError);
@@ -132,10 +128,10 @@ describe('API client', () => {
 			});
 
 			fetchSpy.mockResolvedValueOnce(
-				new Response(
-					JSON.stringify({ error: { status: 401, message: 'Unauthorized' } }),
-					{ status: 401, headers: { 'Content-Type': 'application/json' } }
-				)
+				new Response(JSON.stringify({ error: { status: 401, message: 'Unauthorized' } }), {
+					status: 401,
+					headers: { 'Content-Type': 'application/json' }
+				})
 			);
 
 			await expect(api.auth.status()).rejects.toThrow(ApiError);
@@ -154,10 +150,10 @@ describe('API client', () => {
 			});
 
 			fetchSpy.mockResolvedValueOnce(
-				new Response(
-					JSON.stringify({ error: { status: 401, message: 'Unauthorized' } }),
-					{ status: 401, headers: { 'Content-Type': 'application/json' } }
-				)
+				new Response(JSON.stringify({ error: { status: 401, message: 'Unauthorized' } }), {
+					status: 401,
+					headers: { 'Content-Type': 'application/json' }
+				})
 			);
 
 			await expect(api.auth.status()).rejects.toThrow(ApiError);
@@ -208,12 +204,52 @@ describe('API client', () => {
 		});
 	});
 
+	describe('api.stats.get()', () => {
+		it('calls GET /api/stats', async () => {
+			fetchSpy.mockResolvedValueOnce(
+				mockResponse({
+					generated_at: '2026-01-01T00:00:00Z',
+					library: {
+						books: 0,
+						files: 0,
+						total_file_size: 0,
+						average_files_per_book: 0,
+						files_by_format: [],
+						metadata_status: []
+					},
+					usage: {
+						tasks_total: 0,
+						tasks_last_24h: 0,
+						tasks_by_status: [],
+						tasks_by_type: [],
+						pending_duplicates: 0,
+						pending_candidates: 0
+					},
+					db: null
+				})
+			);
+
+			await api.stats.get();
+
+			const [url, init] = fetchSpy.mock.calls[0];
+			expect(url).toBe('/api/stats');
+			expect(init?.method).toBe('GET');
+		});
+	});
+
 	describe('api.auth.login()', () => {
 		it('calls POST /api/auth/login with body', async () => {
 			fetchSpy.mockResolvedValueOnce(
 				mockResponse({
 					token: 'test-token',
-					user: { id: '1', username: 'admin', email: null, role: 'admin', is_active: true, created_at: '2024-01-01' }
+					user: {
+						id: '1',
+						username: 'admin',
+						email: null,
+						role: 'admin',
+						is_active: true,
+						created_at: '2024-01-01'
+					}
 				})
 			);
 
@@ -232,7 +268,14 @@ describe('API client', () => {
 			fetchSpy.mockResolvedValueOnce(
 				mockResponse({
 					token: 'test-token',
-					user: { id: '1', username: 'admin', email: null, role: 'admin', is_active: true, created_at: '2024-01-01' }
+					user: {
+						id: '1',
+						username: 'admin',
+						email: null,
+						role: 'admin',
+						is_active: true,
+						created_at: '2024-01-01'
+					}
 				})
 			);
 
@@ -257,10 +300,10 @@ describe('API client', () => {
 			setSessionToken('my-token');
 
 			fetchSpy.mockResolvedValueOnce(
-				new Response(
-					JSON.stringify({ error: { status: 500, message: 'Server error' } }),
-					{ status: 500, headers: { 'Content-Type': 'application/json' } }
-				)
+				new Response(JSON.stringify({ error: { status: 500, message: 'Server error' } }), {
+					status: 500,
+					headers: { 'Content-Type': 'application/json' }
+				})
 			);
 
 			// logout catches the error internally in the finally block and still clears the token
@@ -315,9 +358,7 @@ describe('API client', () => {
 			await api.books.uploadCover('book-1', file);
 
 			const [, init] = fetchSpy.mock.calls[0];
-			expect((init?.headers as Record<string, string>)['Authorization']).toBe(
-				'Bearer my-token'
-			);
+			expect((init?.headers as Record<string, string>)['Authorization']).toBe('Bearer my-token');
 		});
 	});
 });

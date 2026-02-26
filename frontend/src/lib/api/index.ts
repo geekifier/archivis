@@ -49,6 +49,7 @@ export type {
 	SetupRequest,
 	SortField,
 	SortOrder,
+	StatsResponse,
 	TagEntry,
 	TagResponse,
 	TaskCreatedResponse,

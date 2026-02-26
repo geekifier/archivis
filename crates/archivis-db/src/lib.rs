@@ -4,8 +4,9 @@ pub mod repositories;
 pub use pool::{create_pool, run_migrations, DbPool};
 pub use repositories::{
     AuthorRepository, BookAuthorEntry, BookFileRepository, BookFilter, BookRepository,
-    BookSeriesEntry, BookWithAuthors, BookWithRelations, CandidateRepository, ChildTaskSummary,
-    DuplicateRepository, IdentifierRepository, PaginatedResult, PaginationParams,
+    BookSeriesEntry, BookWithAuthors, BookWithRelations, BucketCount, CandidateRepository,
+    ChildTaskSummary, DbObjectStat, DbObjectStats, DbPragmaStats, DuplicateRepository,
+    FormatFileStat, IdentifierRepository, LibraryOverview, PaginatedResult, PaginationParams,
     PublisherRepository, SeriesRepository, SessionRepository, SettingRepository, SortOrder,
-    TagRepository, TaskRepository, UserRepository,
+    StatsRepository, TagRepository, TaskOverview, TaskRepository, UserRepository,
 };
