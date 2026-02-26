@@ -588,7 +588,7 @@ export const api = {
 			try {
 				return await request<ReadingProgressResponse>(
 					'GET',
-					`/books/${encodeURIComponent(bookId)}/progress`
+					`/reader/progress/${encodeURIComponent(bookId)}`
 				);
 			} catch (err: unknown) {
 				if (err && typeof err === 'object' && 'status' in err && err.status === 404) {
@@ -606,14 +606,14 @@ export const api = {
 		): Promise<ReadingProgressResponse> {
 			return request<ReadingProgressResponse>(
 				'PUT',
-				`/books/${encodeURIComponent(bookId)}/files/${encodeURIComponent(fileId)}/progress`,
+				`/reader/progress/${encodeURIComponent(bookId)}/${encodeURIComponent(fileId)}`,
 				data
 			);
 		},
 
 		/** Clear reading progress for a book. */
 		clearProgress(bookId: string): Promise<void> {
-			return request<void>('DELETE', `/books/${encodeURIComponent(bookId)}/progress`);
+			return request<void>('DELETE', `/reader/progress/${encodeURIComponent(bookId)}`);
 		},
 
 		/** Get continue-reading list. */
@@ -623,7 +623,7 @@ export const api = {
 			const qs = params.toString();
 			return request<ContinueReadingItem[]>(
 				'GET',
-				`/reader/continue${qs ? `?${qs}` : ''}`
+				`/reader/continue-reading${qs ? `?${qs}` : ''}`
 			);
 		},
 
@@ -631,7 +631,7 @@ export const api = {
 		listBookmarks(bookId: string, fileId: string): Promise<BookmarkResponse[]> {
 			return request<BookmarkResponse[]>(
 				'GET',
-				`/books/${encodeURIComponent(bookId)}/files/${encodeURIComponent(fileId)}/bookmarks`
+				`/reader/bookmarks/${encodeURIComponent(bookId)}/${encodeURIComponent(fileId)}`
 			);
 		},
 
@@ -643,7 +643,7 @@ export const api = {
 		): Promise<BookmarkResponse> {
 			return request<BookmarkResponse>(
 				'POST',
-				`/books/${encodeURIComponent(bookId)}/files/${encodeURIComponent(fileId)}/bookmarks`,
+				`/reader/bookmarks/${encodeURIComponent(bookId)}/${encodeURIComponent(fileId)}`,
 				data
 			);
 		},
@@ -652,7 +652,7 @@ export const api = {
 		deleteBookmark(bookmarkId: string): Promise<void> {
 			return request<void>(
 				'DELETE',
-				`/bookmarks/${encodeURIComponent(bookmarkId)}`
+				`/reader/bookmarks/${encodeURIComponent(bookmarkId)}`
 			);
 		},
 

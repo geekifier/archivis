@@ -198,7 +198,7 @@ function createReaderStore() {
 
 		try {
 			fetch(
-				`/api/books/${encodeURIComponent(bookId)}/files/${encodeURIComponent(fileId)}/progress`,
+				`/api/reader/progress/${encodeURIComponent(bookId)}/${encodeURIComponent(fileId)}`,
 				{
 					method: 'PUT',
 					headers,
