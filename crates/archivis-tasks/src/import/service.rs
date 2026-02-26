@@ -108,7 +108,15 @@ impl<S: StorageBackend> ImportService<S> {
         let title = resolve_title(&embedded, &parsed, source_path);
         let author = resolve_author(&embedded, &parsed);
         let (stored, cover_path) = self
-            .store_file_and_cover(&data, &title, &author, source_path, book_id, &embedded)
+            .store_file_and_cover(
+                &data,
+                &hash,
+                &title,
+                &author,
+                source_path,
+                book_id,
+                &embedded,
+            )
             .await?;
 
         // 9: Create DB records
@@ -167,6 +175,7 @@ impl<S: StorageBackend> ImportService<S> {
     async fn store_file_and_cover(
         &self,
         data: &[u8],
+        precomputed_hash: &str,
         title: &str,
         author: &str,
         source_path: &Path,
@@ -177,7 +186,10 @@ impl<S: StorageBackend> ImportService<S> {
             .file_name()
             .map_or_else(|| "book".to_string(), |n| n.to_string_lossy().into_owned());
         let storage_path = archivis_storage::path::generate_book_path(author, title, &filename);
-        let stored = self.storage.store(&storage_path, data).await?;
+        let stored = self
+            .storage
+            .store_with_hash(&storage_path, data, precomputed_hash.to_owned())
+            .await?;
 
         let mut cover_path = None;
         if let Some(ref cover_data) = embedded.cover_image {

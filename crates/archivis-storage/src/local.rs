@@ -69,13 +69,21 @@ impl LocalStorage {
 
 impl StorageBackend for LocalStorage {
     async fn store(&self, path: &str, data: &[u8]) -> Result<StoredFile, StorageError> {
+        let hash = sha256_hex(data);
+        self.store_with_hash(path, data, hash).await
+    }
+
+    async fn store_with_hash(
+        &self,
+        path: &str,
+        data: &[u8],
+        hash: String,
+    ) -> Result<StoredFile, StorageError> {
         let full_path = self.resolve(path)?;
 
         if let Some(parent) = full_path.parent() {
             fs::create_dir_all(parent).await?;
         }
-
-        let hash = sha256_hex(data);
 
         // Write via temp file + rename for crash safety.
         let temp_path = sibling_temp_path(&full_path);

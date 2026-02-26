@@ -81,15 +81,15 @@ pub fn detect(data: &[u8]) -> Result<BookFormat, FormatError> {
 /// Distinguish EPUB from CBZ inside a ZIP archive.
 fn detect_zip_format(data: &[u8]) -> BookFormat {
     let cursor = Cursor::new(data);
-    if let Ok(archive) = zip::ZipArchive::new(cursor) {
+    if let Ok(mut archive) = zip::ZipArchive::new(cursor) {
         // EPUB: must contain a `mimetype` entry whose content is `application/epub+zip`
-        if is_epub(&archive) {
+        if is_epub(&mut archive) {
             debug!("detected EPUB via mimetype entry in ZIP");
             return BookFormat::Epub;
         }
 
         // CBZ: ZIP containing image files
-        if is_cbz(&archive) {
+        if is_cbz(&mut archive) {
             debug!("detected CBZ via image file entries in ZIP");
             return BookFormat::Cbz;
         }
@@ -213,11 +213,10 @@ fn detect_cbz_from_local_headers(data: &[u8]) -> bool {
 }
 
 /// Check if a ZIP archive is a valid EPUB by looking for the `mimetype` entry.
-fn is_epub(archive: &zip::ZipArchive<Cursor<&[u8]>>) -> bool {
+fn is_epub(archive: &mut zip::ZipArchive<Cursor<&[u8]>>) -> bool {
     // The EPUB spec requires the first file in the archive to be named
     // `mimetype` with the value `application/epub+zip`, stored (not compressed).
     // We are lenient: accept it anywhere in the archive.
-    let mut archive = archive.clone();
     let Ok(mut entry) = archive.by_name("mimetype") else {
         return false;
     };
@@ -232,12 +231,11 @@ fn is_epub(archive: &zip::ZipArchive<Cursor<&[u8]>>) -> bool {
 }
 
 /// Check if a ZIP archive looks like a CBZ (contains image files).
-fn is_cbz(archive: &zip::ZipArchive<Cursor<&[u8]>>) -> bool {
+fn is_cbz(archive: &mut zip::ZipArchive<Cursor<&[u8]>>) -> bool {
     let image_extensions = [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"];
 
     for i in 0..archive.len() {
-        let mut cloned = archive.clone();
-        let Ok(entry) = cloned.by_index(i) else {
+        let Ok(entry) = archive.by_index(i) else {
             continue;
         };
         let name = entry.name().to_lowercase();

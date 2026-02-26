@@ -416,30 +416,26 @@ pub(crate) fn classify_isbn(normalized: &str) -> Option<ExtractedIdentifier> {
 
 /// Attempt to extract the cover image from the EPUB archive.
 ///
-/// Searches the OPF manifest for a cover reference using both EPUB 2
-/// (`<meta name="cover" content="id"/>`) and EPUB 3
-/// (`<item properties="cover-image"/>`) conventions.
+/// Performs a single-pass XML parse of the OPF to find both the cover
+/// reference (EPUB 2 meta or EPUB 3 property) and the manifest items,
+/// then resolves the cover path and reads it from the archive.
 fn extract_cover(
     opf_xml: &str,
     opf_dir: &str,
     archive: &mut zip::ZipArchive<Cursor<&[u8]>>,
 ) -> Result<Option<CoverData>, FormatError> {
-    let Some(cover_ref) = find_cover_reference(opf_xml)? else {
-        return Ok(None);
-    };
+    let cover_info = find_cover_in_opf(opf_xml)?;
 
-    let manifest_items = parse_manifest(opf_xml)?;
-
-    let item = match &cover_ref {
-        CoverReference::MetaContentId(id) => manifest_items.iter().find(|item| item.id == *id),
-        CoverReference::CoverImageProperty => manifest_items
-            .iter()
-            .find(|item| item.properties_has_cover_image),
-    };
-
-    let Some(item) = item else {
-        debug!("cover reference found but no matching manifest item");
-        return Ok(None);
+    let item = match cover_info {
+        CoverInfo::Resolved(item) => item,
+        CoverInfo::MetaContentId(id, items) => {
+            let Some(item) = items.into_iter().find(|item| item.id == id) else {
+                debug!("cover reference found but no matching manifest item");
+                return Ok(None);
+            };
+            item
+        }
+        CoverInfo::None => return Ok(None),
     };
 
     let cover_path = if item.href.starts_with('/') {
@@ -452,60 +448,84 @@ fn extract_cover(
 
     Ok(Some(CoverData {
         bytes,
-        media_type: item.media_type.clone(),
+        media_type: item.media_type,
     }))
 }
 
-/// How the OPF references a cover image.
-enum CoverReference {
-    /// EPUB 2: `<meta name="cover" content="some-id"/>` — the id points to a manifest item.
-    MetaContentId(String),
-    /// EPUB 3: a manifest `<item>` with `properties="cover-image"`.
-    CoverImageProperty,
+/// Result of the single-pass OPF cover search.
+enum CoverInfo {
+    /// EPUB 3: a manifest `<item>` with `properties="cover-image"` — already resolved.
+    Resolved(ManifestItem),
+    /// EPUB 2: `<meta name="cover" content="id"/>` — need to look up id in manifest items.
+    MetaContentId(String, Vec<ManifestItem>),
+    /// No cover reference found.
+    None,
 }
 
-/// Scan the OPF for a cover reference.
-fn find_cover_reference(opf_xml: &str) -> Result<Option<CoverReference>, FormatError> {
+/// A parsed `<item>` from the OPF `<manifest>`.
+struct ManifestItem {
+    id: String,
+    href: String,
+    media_type: String,
+    properties_has_cover_image: bool,
+}
+
+/// Single-pass scan of the OPF that collects both cover references and manifest items.
+fn find_cover_in_opf(opf_xml: &str) -> Result<CoverInfo, FormatError> {
     let mut reader = Reader::from_str(opf_xml);
     let mut in_metadata = false;
-    let mut found_epub3_cover = false;
+    let mut in_manifest = false;
+    let mut epub2_cover_id: Option<String> = None;
+    let mut items = Vec::new();
 
     loop {
         match reader.read_event() {
             Ok(Event::Start(ref e)) => {
                 let qname = e.name();
-                if local_name(qname.as_ref()) == b"metadata" {
-                    in_metadata = true;
+                let name = local_name(qname.as_ref());
+                match name {
+                    b"metadata" => in_metadata = true,
+                    b"manifest" => in_manifest = true,
+                    b"item" if in_manifest => {
+                        if let Some(item) = parse_manifest_item(e) {
+                            if item.properties_has_cover_image {
+                                return Ok(CoverInfo::Resolved(item));
+                            }
+                            items.push(item);
+                        }
+                    }
+                    _ => {}
                 }
             }
             Ok(Event::Empty(ref e)) => {
                 let qname = e.name();
                 let name = local_name(qname.as_ref());
 
-                // EPUB 2 meta
-                if in_metadata && name == b"meta" {
+                // EPUB 2: <meta name="cover" content="id"/>
+                if in_metadata && name == b"meta" && epub2_cover_id.is_none() {
                     let attr_name = find_attr(e, b"name");
-                    let attr_content = find_attr(e, b"content");
                     if attr_name.as_deref() == Some("cover") {
-                        if let Some(id) = attr_content {
-                            return Ok(Some(CoverReference::MetaContentId(id)));
-                        }
+                        epub2_cover_id = find_attr(e, b"content");
                     }
                 }
 
-                // EPUB 3 manifest item
-                if name == b"item" {
-                    if let Some(props) = find_attr(e, b"properties") {
-                        if props.split_whitespace().any(|p| p == "cover-image") {
-                            found_epub3_cover = true;
+                // Manifest item (self-closing)
+                if in_manifest && name == b"item" {
+                    if let Some(item) = parse_manifest_item(e) {
+                        if item.properties_has_cover_image {
+                            return Ok(CoverInfo::Resolved(item));
                         }
+                        items.push(item);
                     }
                 }
             }
             Ok(Event::End(ref e)) => {
                 let qname = e.name();
-                if local_name(qname.as_ref()) == b"metadata" {
-                    in_metadata = false;
+                let name = local_name(qname.as_ref());
+                match name {
+                    b"metadata" => in_metadata = false,
+                    b"manifest" => in_manifest = false,
+                    _ => {}
                 }
             }
             Ok(Event::Eof) => break,
@@ -519,69 +539,7 @@ fn find_cover_reference(opf_xml: &str) -> Result<Option<CoverReference>, FormatE
         }
     }
 
-    if found_epub3_cover {
-        return Ok(Some(CoverReference::CoverImageProperty));
-    }
-
-    Ok(None)
-}
-
-/// A parsed `<item>` from the OPF `<manifest>`.
-struct ManifestItem {
-    id: String,
-    href: String,
-    media_type: String,
-    properties_has_cover_image: bool,
-}
-
-/// Parse all `<item>` elements from the OPF `<manifest>` section.
-fn parse_manifest(opf_xml: &str) -> Result<Vec<ManifestItem>, FormatError> {
-    let mut reader = Reader::from_str(opf_xml);
-    let mut items = Vec::new();
-    let mut in_manifest = false;
-
-    loop {
-        match reader.read_event() {
-            Ok(Event::Start(ref e)) => {
-                let qname = e.name();
-                let name = local_name(qname.as_ref());
-
-                if name == b"manifest" {
-                    in_manifest = true;
-                }
-                // Some EPUBs use <item ...>...</item> instead of self-closing.
-                if in_manifest && name == b"item" {
-                    if let Some(item) = parse_manifest_item(e) {
-                        items.push(item);
-                    }
-                }
-            }
-            Ok(Event::Empty(ref e)) if in_manifest => {
-                let qname = e.name();
-                if local_name(qname.as_ref()) == b"item" {
-                    if let Some(item) = parse_manifest_item(e) {
-                        items.push(item);
-                    }
-                }
-            }
-            Ok(Event::End(ref e)) => {
-                let qname = e.name();
-                if local_name(qname.as_ref()) == b"manifest" {
-                    in_manifest = false;
-                }
-            }
-            Ok(Event::Eof) => break,
-            Err(e) => {
-                return Err(FormatError::Parse {
-                    format: "EPUB".into(),
-                    message: format!("error parsing manifest: {e}"),
-                });
-            }
-            _ => {}
-        }
-    }
-
-    Ok(items)
+    Ok(epub2_cover_id.map_or(CoverInfo::None, |id| CoverInfo::MetaContentId(id, items)))
 }
 
 /// Extract a `ManifestItem` from a `<item>` element's attributes.

@@ -38,6 +38,17 @@ pub trait StorageBackend: Send + Sync {
         data: &[u8],
     ) -> impl std::future::Future<Output = Result<StoredFile, StorageError>> + Send;
 
+    /// Store data with a pre-computed SHA-256 hash, avoiding redundant hashing.
+    ///
+    /// Callers that have already hashed the data (e.g. for duplicate detection)
+    /// can pass the hash here to skip re-computation during the write.
+    fn store_with_hash(
+        &self,
+        path: &str,
+        data: &[u8],
+        hash: String,
+    ) -> impl std::future::Future<Output = Result<StoredFile, StorageError>> + Send;
+
     /// Read the entire contents of a stored file.
     fn read(
         &self,

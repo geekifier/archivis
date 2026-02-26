@@ -1,5 +1,6 @@
 use std::io::Cursor;
 use std::path::Path;
+use std::sync::OnceLock;
 
 use archivis_formats::CoverData;
 use archivis_storage::StorageBackend;
@@ -116,12 +117,24 @@ fn is_svg_data(bytes: &[u8]) -> bool {
     trimmed.starts_with("<?xml") || trimmed.starts_with("<svg")
 }
 
+/// Return a lazily-initialized `usvg::Options` with system fonts pre-loaded.
+///
+/// System font enumeration is expensive (100-500ms), so we do it once and
+/// reuse the result for all subsequent SVG rasterizations.
+fn svg_options() -> &'static resvg::usvg::Options<'static> {
+    static OPTIONS: OnceLock<resvg::usvg::Options<'static>> = OnceLock::new();
+    OPTIONS.get_or_init(|| {
+        let mut opt = resvg::usvg::Options::default();
+        opt.fontdb_mut().load_system_fonts();
+        opt
+    })
+}
+
 /// Rasterize an SVG to a `DynamicImage` using resvg.
 fn rasterize_svg(svg_data: &[u8]) -> Result<DynamicImage, String> {
-    let mut opt = resvg::usvg::Options::default();
-    opt.fontdb_mut().load_system_fonts();
+    let opt = svg_options();
 
-    let tree = resvg::usvg::Tree::from_data(svg_data, &opt)
+    let tree = resvg::usvg::Tree::from_data(svg_data, opt)
         .map_err(|e| format!("failed to parse SVG: {e}"))?;
 
     let size = tree.size().to_int_size();
