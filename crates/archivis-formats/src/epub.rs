@@ -1079,6 +1079,33 @@ mod tests {
     }
 
     #[test]
+    fn extracts_svg_cover_epub3() {
+        let cover_svg = br##"<?xml version="1.0"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 150">
+  <rect width="100" height="150" fill="#336699"/>
+</svg>"##;
+
+        let opf = r#"<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>SVG Cover Book</dc:title>
+  </metadata>
+  <manifest>
+    <item id="cover" href="images/cover.svg" media-type="image/svg+xml" properties="cover-image"/>
+  </manifest>
+  <spine/>
+</package>"#;
+
+        let data = build_epub_with_opf(opf, &[("OEBPS/images/cover.svg", cover_svg)]);
+        let meta = extract_epub_metadata(&data).unwrap();
+
+        let cover = meta.cover_image.unwrap();
+        assert_eq!(cover.media_type, "image/svg+xml");
+        // Verify we got the SVG bytes back
+        assert!(std::str::from_utf8(&cover.bytes).unwrap().contains("<svg"));
+    }
+
+    #[test]
     fn no_namespace_prefixes_still_works() {
         // Some EPUBs omit namespace prefixes entirely.
         let opf = r#"<?xml version="1.0"?>

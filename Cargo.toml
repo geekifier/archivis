@@ -82,6 +82,9 @@ mobi-book = { git = "https://github.com/geekifier/mobi-book", version = "0.1.0" 
 # Image processing — only enable codecs we actually use (decode: jpeg/png/gif/webp, encode: webp)
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
 
+# SVG rasterization for cover thumbnails
+resvg = "0.44"
+
 # HTTP client
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 async-trait = "0.1"

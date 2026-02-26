@@ -3,8 +3,79 @@ use std::path::Path;
 
 use archivis_db::{BookFileRepository, BookRepository};
 use archivis_storage::local::LocalStorage;
-use archivis_tasks::import::{ImportConfig, ImportError, ImportService};
+use archivis_tasks::import::{ImportConfig, ImportError, ImportService, ThumbnailSizes};
 use tempfile::TempDir;
+
+/// Create a test EPUB with an SVG cover image (EPUB 3 properties="cover-image").
+fn create_test_epub_with_svg_cover(title: &str, author: &str) -> Vec<u8> {
+    let mut buf = std::io::Cursor::new(Vec::new());
+    {
+        let mut zip = zip::ZipWriter::new(&mut buf);
+
+        let stored = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        let deflated = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+
+        zip.start_file("mimetype", stored).unwrap();
+        zip.write_all(b"application/epub+zip").unwrap();
+
+        zip.start_file("META-INF/container.xml", deflated).unwrap();
+        zip.write_all(
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container" version="1.0">
+  <rootfiles>
+    <rootfile full-path="epub/content.opf" media-type="application/oebps-package+xml"/>
+  </rootfiles>
+</container>"#,
+        )
+        .unwrap();
+
+        zip.start_file("epub/content.opf", deflated).unwrap();
+        let opf = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>{title}</dc:title>
+    <dc:creator>{author}</dc:creator>
+    <dc:identifier id="uid">urn:uuid:aaaabbbb-cccc-dddd-eeee-ffffffffffff</dc:identifier>
+    <dc:language>en</dc:language>
+  </metadata>
+  <manifest>
+    <item id="cover" href="images/cover.svg" media-type="image/svg+xml" properties="cover-image"/>
+    <item id="content" href="content.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine>
+    <itemref idref="content"/>
+  </spine>
+</package>"#
+        );
+        zip.write_all(opf.as_bytes()).unwrap();
+
+        zip.start_file("epub/images/cover.svg", deflated).unwrap();
+        zip.write_all(
+            br##"<?xml version="1.0" encoding="utf-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 300">
+  <rect width="200" height="300" fill="#336699"/>
+  <text x="100" y="150" text-anchor="middle" fill="white" font-size="20">Cover</text>
+</svg>"##,
+        )
+        .unwrap();
+
+        zip.start_file("epub/content.xhtml", deflated).unwrap();
+        zip.write_all(
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head><title>Test</title></head>
+<body><p>Hello, world!</p></body>
+</html>"#,
+        )
+        .unwrap();
+
+        zip.finish().unwrap();
+    }
+    buf.into_inner()
+}
 
 /// Create a minimal valid EPUB file as bytes.
 ///
@@ -185,4 +256,102 @@ async fn import_nonexistent_file() {
         .await;
     assert!(result.is_err());
     assert!(matches!(result.unwrap_err(), ImportError::Io(_)));
+}
+
+/// Verify the actual Frankenstein advanced EPUB (with SVG cover) can be imported
+/// with thumbnails. Skipped if the test file is not present.
+#[tokio::test]
+async fn import_real_epub_with_svg_cover() {
+    let epub_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../.local/test-files/mary-shelley_frankenstein_advanced.epub");
+    if !epub_path.exists() {
+        eprintln!("skipping: test file not found at {}", epub_path.display());
+        return;
+    }
+
+    let tmp = TempDir::new().unwrap();
+    let service = setup_test_env(&tmp).await;
+
+    let result = service.import_file(&epub_path).await.unwrap();
+
+    assert!(result.cover_extracted, "cover_extracted should be true");
+
+    let pool = get_pool(&tmp).await;
+    let book = BookRepository::get_by_id(&pool, result.book_id)
+        .await
+        .unwrap();
+    assert!(
+        book.title.starts_with("Frankenstein"),
+        "title should start with 'Frankenstein', got: {}",
+        book.title,
+    );
+    assert!(book.cover_path.is_some(), "cover_path should be set");
+
+    // Verify thumbnails were generated (the whole point of this fix)
+    let sizes = ThumbnailSizes::default();
+    let covers_dir = tmp
+        .path()
+        .join("data")
+        .join("covers")
+        .join(result.book_id.to_string());
+    assert!(covers_dir.join("sm.webp").exists(), "sm thumbnail missing");
+    assert!(covers_dir.join("md.webp").exists(), "md thumbnail missing");
+
+    let sm_img = image::open(covers_dir.join("sm.webp")).unwrap();
+    assert_eq!(sm_img.height(), sizes.sm_height);
+
+    pool.close().await;
+}
+
+#[tokio::test]
+async fn import_epub_with_svg_cover_generates_thumbnails() {
+    let tmp = TempDir::new().unwrap();
+    let service = setup_test_env(&tmp).await;
+
+    // Write test EPUB with SVG cover to a file
+    let epub_bytes = create_test_epub_with_svg_cover("Frankenstein", "Mary Shelley");
+    let epub_path = tmp.path().join("frankenstein.epub");
+    std::fs::write(&epub_path, &epub_bytes).unwrap();
+
+    let result = service.import_file(&epub_path).await.unwrap();
+
+    assert!(result.duplicate.is_none());
+    assert!(result.cover_extracted, "cover_extracted should be true");
+
+    // Verify cover was stored
+    let pool = get_pool(&tmp).await;
+    let book = BookRepository::get_by_id(&pool, result.book_id)
+        .await
+        .unwrap();
+    assert!(
+        book.cover_path.is_some(),
+        "book should have a cover_path in DB"
+    );
+    let cover_path = book.cover_path.unwrap();
+    assert!(
+        std::path::Path::new(&cover_path)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("svg")),
+        "cover should be stored as SVG"
+    );
+
+    // Verify thumbnails were generated
+    let sizes = ThumbnailSizes::default();
+    let covers_dir = tmp
+        .path()
+        .join("data")
+        .join("covers")
+        .join(result.book_id.to_string());
+    let sm_path = covers_dir.join("sm.webp");
+    let md_path = covers_dir.join("md.webp");
+    assert!(sm_path.exists(), "sm.webp thumbnail should exist");
+    assert!(md_path.exists(), "md.webp thumbnail should exist");
+
+    // Validate the thumbnails are valid WebP images with correct dimensions
+    let sm_img = image::open(&sm_path).unwrap();
+    assert_eq!(sm_img.height(), sizes.sm_height);
+    let md_img = image::open(&md_path).unwrap();
+    assert_eq!(md_img.height(), sizes.md_height);
+
+    pool.close().await;
 }
