@@ -55,6 +55,8 @@ pub struct SettingEntry {
     pub sensitive: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub is_set: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub options: Option<Vec<String>>,
 }
 
 pub struct UpdateResult {
@@ -137,6 +139,9 @@ impl ConfigService {
                     value_type: meta.value_type,
                     sensitive: if meta.sensitive { Some(true) } else { None },
                     is_set,
+                    options: meta
+                        .options
+                        .map(|opts| opts.iter().map(|s| (*s).to_string()).collect()),
                 }
             })
             .collect()

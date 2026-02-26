@@ -79,7 +79,7 @@
 		let value: unknown;
 
 		switch (entry.value_type) {
-			case 'boolean':
+			case 'bool':
 				value = target.checked;
 				break;
 			case 'integer':
@@ -274,11 +274,23 @@
 												restart
 											</span>
 										{/if}
-										{#if entry.source === 'database'}
+										{#if entry.override?.source === 'env' || entry.override?.source === 'cli'}
+											<span
+												class="inline-flex items-center rounded-full bg-amber-500/10 px-2 py-0.5 text-xs font-medium text-amber-600 dark:text-amber-400"
+											>
+												{entry.override.source}
+											</span>
+										{:else if entry.source === 'database'}
 											<span
 												class="inline-flex items-center rounded-full bg-blue-500/10 px-2 py-0.5 text-xs font-medium text-blue-600 dark:text-blue-400"
 											>
 												modified
+											</span>
+										{:else if entry.source === 'file'}
+											<span
+												class="inline-flex items-center rounded-full bg-zinc-500/10 px-2 py-0.5 text-xs font-medium text-zinc-600 dark:text-zinc-400"
+											>
+												config file
 											</span>
 										{/if}
 									</div>
@@ -288,7 +300,7 @@
 								</div>
 
 								<div class="flex shrink-0 items-center gap-2">
-									{#if entry.value_type === 'boolean'}
+									{#if entry.value_type === 'bool'}
 										<button
 											type="button"
 											role="switch"
@@ -384,6 +396,25 @@
 											value={getCurrentValue(entry) ?? ''}
 											oninput={(e) => handleInputChange(entry, e)}
 										/>
+									{:else if entry.value_type === 'select' && entry.options}
+										<select
+											id={entry.key}
+											class="h-9 w-56 rounded-md border border-input bg-background px-3 text-sm"
+											value={getCurrentValue(entry) ?? ''}
+											onchange={(e) => {
+												const target = e.target as HTMLSelectElement;
+												handleChange(entry.key, target.value, entry.value);
+											}}
+										>
+											{#each entry.options as option (option)}
+												<option
+													value={option}
+													selected={getCurrentValue(entry) === option}
+												>
+													{option}
+												</option>
+											{/each}
+										</select>
 									{:else}
 										<input
 											id={entry.key}

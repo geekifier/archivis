@@ -163,6 +163,12 @@ pub struct IsbnScanConfig {
     pub epub_spine_items: usize,
     /// Number of PDF pages to read from front and back.
     pub pdf_pages: usize,
+    /// Number of FB2 sections to read from front and back.
+    pub fb2_sections: usize,
+    /// Bytes to read from front and back of TXT files.
+    pub txt_bytes: usize,
+    /// Bytes to read from front and back of MOBI/AZW3 text.
+    pub mobi_bytes: usize,
 }
 
 impl Default for IsbnScanConfig {
@@ -173,6 +179,9 @@ impl Default for IsbnScanConfig {
             skip_threshold: 0.95,
             epub_spine_items: 3,
             pdf_pages: 5,
+            fb2_sections: 3,
+            txt_bytes: 4000,
+            mobi_bytes: 8000,
         }
     }
 }
@@ -353,6 +362,9 @@ pub fn detect_env_overrides(cli: &Cli) -> HashMap<String, ConfigOverride> {
             "ARCHIVIS_ISBN_SCAN__EPUB_SPINE_ITEMS",
         ),
         ("isbn_scan.pdf_pages", "ARCHIVIS_ISBN_SCAN__PDF_PAGES"),
+        ("isbn_scan.fb2_sections", "ARCHIVIS_ISBN_SCAN__FB2_SECTIONS"),
+        ("isbn_scan.txt_bytes", "ARCHIVIS_ISBN_SCAN__TXT_BYTES"),
+        ("isbn_scan.mobi_bytes", "ARCHIVIS_ISBN_SCAN__MOBI_BYTES"),
     ];
 
     for &(key, env_var) in env_mappings {
@@ -550,6 +562,27 @@ fn apply_setting_to_config(config: &mut AppConfig, key: &str, value: &serde_json
             if let Some(n) = value.as_u64() {
                 if let Ok(v) = usize::try_from(n) {
                     config.isbn_scan.pdf_pages = v;
+                }
+            }
+        }
+        "isbn_scan.fb2_sections" => {
+            if let Some(n) = value.as_u64() {
+                if let Ok(v) = usize::try_from(n) {
+                    config.isbn_scan.fb2_sections = v;
+                }
+            }
+        }
+        "isbn_scan.txt_bytes" => {
+            if let Some(n) = value.as_u64() {
+                if let Ok(v) = usize::try_from(n) {
+                    config.isbn_scan.txt_bytes = v;
+                }
+            }
+        }
+        "isbn_scan.mobi_bytes" => {
+            if let Some(n) = value.as_u64() {
+                if let Ok(v) = usize::try_from(n) {
+                    config.isbn_scan.mobi_bytes = v;
                 }
             }
         }

@@ -40,6 +40,9 @@ impl IsbnScanConfig {
         skip_threshold: f32,
         epub_spine_items: usize,
         pdf_pages: usize,
+        fb2_sections: usize,
+        txt_bytes: usize,
+        mobi_bytes: usize,
     ) -> Self {
         Self {
             confidence,
@@ -47,7 +50,9 @@ impl IsbnScanConfig {
             text_config: ContentScanConfig {
                 epub_spine_items,
                 pdf_pages,
-                ..ContentScanConfig::default()
+                fb2_sections,
+                txt_bytes,
+                mobi_bytes,
             },
         }
     }

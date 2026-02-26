@@ -9,6 +9,7 @@ pub enum SettingType {
     Bool,
     Integer,
     Float,
+    Select,
 }
 
 pub struct SettingMeta {
@@ -19,6 +20,7 @@ pub struct SettingMeta {
     pub value_type: SettingType,
     pub requires_restart: bool,
     pub sensitive: bool,
+    pub options: Option<&'static [&'static str]>,
 }
 
 /// Get the static registry of all known settings.
@@ -41,6 +43,7 @@ static SETTINGS: &[SettingMeta] = &[
         value_type: SettingType::String,
         requires_restart: true,
         sensitive: false,
+        options: None,
     },
     SettingMeta {
         key: "port",
@@ -50,6 +53,7 @@ static SETTINGS: &[SettingMeta] = &[
         value_type: SettingType::Integer,
         requires_restart: true,
         sensitive: false,
+        options: None,
     },
     SettingMeta {
         key: "data_dir",
@@ -59,6 +63,7 @@ static SETTINGS: &[SettingMeta] = &[
         value_type: SettingType::String,
         requires_restart: true,
         sensitive: false,
+        options: None,
     },
     SettingMeta {
         key: "book_storage_path",
@@ -68,6 +73,7 @@ static SETTINGS: &[SettingMeta] = &[
         value_type: SettingType::String,
         requires_restart: true,
         sensitive: false,
+        options: None,
     },
     SettingMeta {
         key: "frontend_dir",
@@ -77,15 +83,17 @@ static SETTINGS: &[SettingMeta] = &[
         value_type: SettingType::OptionalString,
         requires_restart: true,
         sensitive: false,
+        options: None,
     },
     SettingMeta {
         key: "log_level",
         label: "Log Level",
         description: "Log level filter (trace, debug, info, warn, error)",
         section: "server",
-        value_type: SettingType::String,
+        value_type: SettingType::Select,
         requires_restart: true,
         sensitive: false,
+        options: Some(&["trace", "debug", "info", "warn", "error"]),
     },
     // Metadata settings
     SettingMeta {
@@ -96,6 +104,7 @@ static SETTINGS: &[SettingMeta] = &[
         value_type: SettingType::Bool,
         requires_restart: false,
         sensitive: false,
+        options: None,
     },
     SettingMeta {
         key: "metadata.contact_email",
@@ -105,6 +114,7 @@ static SETTINGS: &[SettingMeta] = &[
         value_type: SettingType::OptionalString,
         requires_restart: false,
         sensitive: false,
+        options: None,
     },
     SettingMeta {
         key: "metadata.auto_identify_threshold",
@@ -114,6 +124,7 @@ static SETTINGS: &[SettingMeta] = &[
         value_type: SettingType::Float,
         requires_restart: false,
         sensitive: false,
+        options: None,
     },
     SettingMeta {
         key: "metadata.max_concurrent_identifies",
@@ -123,6 +134,7 @@ static SETTINGS: &[SettingMeta] = &[
         value_type: SettingType::Integer,
         requires_restart: false,
         sensitive: false,
+        options: None,
     },
     // Open Library
     SettingMeta {
@@ -133,6 +145,7 @@ static SETTINGS: &[SettingMeta] = &[
         value_type: SettingType::Bool,
         requires_restart: false,
         sensitive: false,
+        options: None,
     },
     SettingMeta {
         key: "metadata.open_library.max_requests_per_minute",
@@ -142,6 +155,7 @@ static SETTINGS: &[SettingMeta] = &[
         value_type: SettingType::Integer,
         requires_restart: false,
         sensitive: false,
+        options: None,
     },
     // Hardcover
     SettingMeta {
@@ -152,6 +166,7 @@ static SETTINGS: &[SettingMeta] = &[
         value_type: SettingType::Bool,
         requires_restart: false,
         sensitive: false,
+        options: None,
     },
     SettingMeta {
         key: "metadata.hardcover.api_token",
@@ -161,6 +176,7 @@ static SETTINGS: &[SettingMeta] = &[
         value_type: SettingType::OptionalString,
         requires_restart: false,
         sensitive: true,
+        options: None,
     },
     SettingMeta {
         key: "metadata.hardcover.max_requests_per_minute",
@@ -170,6 +186,7 @@ static SETTINGS: &[SettingMeta] = &[
         value_type: SettingType::Integer,
         requires_restart: false,
         sensitive: false,
+        options: None,
     },
     // ISBN Scan settings
     SettingMeta {
@@ -180,6 +197,7 @@ static SETTINGS: &[SettingMeta] = &[
         value_type: SettingType::Bool,
         requires_restart: false,
         sensitive: false,
+        options: None,
     },
     SettingMeta {
         key: "isbn_scan.confidence",
@@ -189,6 +207,7 @@ static SETTINGS: &[SettingMeta] = &[
         value_type: SettingType::Float,
         requires_restart: false,
         sensitive: false,
+        options: None,
     },
     SettingMeta {
         key: "isbn_scan.skip_threshold",
@@ -198,6 +217,7 @@ static SETTINGS: &[SettingMeta] = &[
         value_type: SettingType::Float,
         requires_restart: false,
         sensitive: false,
+        options: None,
     },
     SettingMeta {
         key: "isbn_scan.epub_spine_items",
@@ -207,6 +227,7 @@ static SETTINGS: &[SettingMeta] = &[
         value_type: SettingType::Integer,
         requires_restart: false,
         sensitive: false,
+        options: None,
     },
     SettingMeta {
         key: "isbn_scan.pdf_pages",
@@ -216,6 +237,37 @@ static SETTINGS: &[SettingMeta] = &[
         value_type: SettingType::Integer,
         requires_restart: false,
         sensitive: false,
+        options: None,
+    },
+    SettingMeta {
+        key: "isbn_scan.fb2_sections",
+        label: "FB2 Sections",
+        description: "Number of FB2 sections to read from front and back",
+        section: "isbn_scan",
+        value_type: SettingType::Integer,
+        requires_restart: false,
+        sensitive: false,
+        options: None,
+    },
+    SettingMeta {
+        key: "isbn_scan.txt_bytes",
+        label: "TXT Bytes",
+        description: "Bytes to read from front and back of TXT files",
+        section: "isbn_scan",
+        value_type: SettingType::Integer,
+        requires_restart: false,
+        sensitive: false,
+        options: None,
+    },
+    SettingMeta {
+        key: "isbn_scan.mobi_bytes",
+        label: "MOBI/AZW3 Bytes",
+        description: "Bytes to read from front and back of MOBI/AZW3 text",
+        section: "isbn_scan",
+        value_type: SettingType::Integer,
+        requires_restart: false,
+        sensitive: false,
+        options: None,
     },
 ];
 
@@ -259,12 +311,27 @@ pub fn validate_setting_value(meta: &SettingMeta, value: &serde_json::Value) -> 
                         return Err(format!("{}: must be between 1 and 100", meta.key));
                     }
                 }
-                "isbn_scan.epub_spine_items" | "isbn_scan.pdf_pages" => {
+                "isbn_scan.epub_spine_items" | "isbn_scan.pdf_pages" | "isbn_scan.fb2_sections" => {
                     if !(1..=100).contains(&n) {
                         return Err(format!("{}: must be between 1 and 100", meta.key));
                     }
                 }
+                "isbn_scan.txt_bytes" | "isbn_scan.mobi_bytes" => {
+                    if !(100..=100_000).contains(&n) {
+                        return Err(format!("{}: must be between 100 and 100000", meta.key));
+                    }
+                }
                 _ => {}
+            }
+        }
+        SettingType::Select => {
+            let Some(s) = value.as_str() else {
+                return Err(format!("{}: expected a string", meta.key));
+            };
+            if let Some(opts) = meta.options {
+                if !opts.contains(&s) {
+                    return Err(format!("{}: must be one of: {}", meta.key, opts.join(", ")));
+                }
             }
         }
         SettingType::Float => {

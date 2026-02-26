@@ -301,6 +301,9 @@ fn init_workers(
         config.isbn_scan.skip_threshold,
         config.isbn_scan.epub_spine_items,
         config.isbn_scan.pdf_pages,
+        config.isbn_scan.fb2_sections,
+        config.isbn_scan.txt_bytes,
+        config.isbn_scan.mobi_bytes,
     );
     let isbn_scan_service = Arc::new(IsbnScanService::new(
         db_pool.clone(),
