@@ -95,6 +95,14 @@ dev-clean:
     ./scripts/dev-boot.sh setup
     wait
 
+# Resume existing clean instance data: backend + frontend (no wipe/setup)
+dev-clean-resume:
+    #!/usr/bin/env bash
+    trap 'kill 0' EXIT
+    cargo run --package archivis-server -- --data-dir .local/clean &
+    cd frontend && npm run dev &
+    wait
+
 # Wipe → backend only + create admin (no frontend)
 dev-clean-backend:
     #!/usr/bin/env bash
