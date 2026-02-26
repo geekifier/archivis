@@ -1,7 +1,7 @@
 import { test as setup, expect } from '@playwright/test';
 import { API_BASE, FRONTEND_BASE, TEST_ADMIN } from './fixtures/test-data';
 
-setup('create admin and authenticate', async ({ request, browser }) => {
+setup('create admin and authenticate', async ({ request, page }) => {
 	// Create admin account via setup endpoint
 	const setupResponse = await request.post(`${API_BASE}/auth/setup`, {
 		data: {
@@ -22,9 +22,7 @@ setup('create admin and authenticate', async ({ request, browser }) => {
 	const { token } = await loginResponse.json();
 	expect(token).toBeTruthy();
 
-	// Open browser context and set localStorage token
-	const context = await browser.newContext();
-	const page = await context.newPage();
+	// Set localStorage token via the default page fixture
 	await page.goto(FRONTEND_BASE + '/login');
 	await page.evaluate(
 		({ token }) => {
@@ -34,6 +32,5 @@ setup('create admin and authenticate', async ({ request, browser }) => {
 	);
 
 	// Save storage state for authenticated tests
-	await context.storageState({ path: './e2e/.auth/admin.json' });
-	await context.close();
+	await page.context().storageState({ path: './e2e/.auth/admin.json' });
 });

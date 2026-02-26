@@ -163,6 +163,10 @@ test-e2e:
 test-e2e-ui:
     cd frontend && npx playwright test --ui
 
+# Run Playwright E2E tests in a visible browser
+test-e2e-headed:
+    cd frontend && npx playwright test --headed
+
 # Install Playwright browsers
 playwright-install:
     cd frontend && npx playwright install --with-deps chromium
