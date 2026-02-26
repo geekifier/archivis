@@ -6,6 +6,7 @@
 	import ReaderView from '$lib/components/reader/ReaderView.svelte';
 	import ReaderToolbar from '$lib/components/reader/ReaderToolbar.svelte';
 	import ReaderTocPanel from '$lib/components/reader/ReaderTocPanel.svelte';
+	import ReaderSettingsPanel from '$lib/components/reader/ReaderSettingsPanel.svelte';
 	import { reader } from '$lib/stores/reader.svelte.js';
 
 	const bookId = $derived(page.params.bookId ?? '');
@@ -156,6 +157,8 @@
 			case 'Escape':
 				if (reader.tocPanelOpen) {
 					reader.toggleTocPanel();
+				} else if (reader.settingsPanelOpen) {
+					reader.toggleSettingsPanel();
 				} else {
 					reader.toggleToolbar();
 				}
@@ -165,6 +168,9 @@
 				break;
 			case 't':
 				reader.toggleTocPanel();
+				break;
+			case 's':
+				reader.toggleSettingsPanel();
 				break;
 		}
 	}
@@ -241,6 +247,12 @@
 		open={reader.tocPanelOpen}
 		onClose={() => reader.toggleTocPanel()}
 		onNavigate={handleTocNavigate}
+	/>
+
+	<!-- Settings Panel -->
+	<ReaderSettingsPanel
+		open={reader.settingsPanelOpen}
+		onClose={() => reader.toggleSettingsPanel()}
 	/>
 
 	<!-- Reader viewport -->
