@@ -35,8 +35,9 @@
 			class="w-full text-left text-sm transition-colors hover:bg-accent {isCurrent(item.href) ? 'bg-primary/10 font-medium text-primary' : 'text-foreground'}"
 			style:padding-left="{1 + level * 0.75}rem"
 			style:padding-right="1rem"
-			style:padding-top="0.5rem"
-			style:padding-bottom="0.5rem"
+			style:padding-top="0.625rem"
+			style:padding-bottom="0.625rem"
+			style:min-height="44px"
 		>
 			{item.label}
 		</button>
@@ -57,7 +58,7 @@
 
 	<!-- TOC panel -->
 	<div
-		class="fixed bottom-0 left-0 top-0 z-50 flex w-72 flex-col border-r border-border bg-background shadow-lg sm:w-80"
+		class="fixed inset-0 z-50 flex flex-col bg-background shadow-lg sm:bottom-0 sm:left-0 sm:right-auto sm:top-0 sm:w-80 sm:border-r sm:border-border"
 	>
 		<!-- Header -->
 		<div class="flex items-center justify-between border-b border-border px-4 py-3">

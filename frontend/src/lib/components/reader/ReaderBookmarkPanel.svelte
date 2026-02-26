@@ -97,9 +97,9 @@
 		onkeydown={handleOverlayKeydown}
 	></div>
 
-	<!-- Bookmarks panel (slides from right, same pattern as settings) -->
+	<!-- Bookmarks panel (bottom sheet on mobile, side panel on desktop) -->
 	<div
-		class="fixed bottom-0 right-0 top-0 z-50 flex w-72 flex-col border-l border-border bg-background shadow-lg sm:w-80"
+		class="fixed inset-x-0 bottom-0 z-50 flex max-h-[80vh] flex-col rounded-t-xl border-t border-border bg-background shadow-lg sm:inset-x-auto sm:inset-y-0 sm:right-0 sm:max-h-none sm:w-80 sm:rounded-none sm:border-l sm:border-t-0"
 	>
 		<!-- Header -->
 		<div class="flex items-center justify-between border-b border-border px-4 py-3">

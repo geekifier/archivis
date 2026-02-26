@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { page } from '$app/state';
 	import { onMount } from 'svelte';
-	import { api } from '$lib/api/index.js';
+	import { api, ApiError } from '$lib/api/index.js';
 	import type { BookDetail, ReadingProgressResponse, TocItem } from '$lib/api/types.js';
 	import ReaderView from '$lib/components/reader/ReaderView.svelte';
 	import ReaderToolbar from '$lib/components/reader/ReaderToolbar.svelte';
@@ -18,8 +18,12 @@
 	let bookBlob = $state<Blob | null>(null);
 	let savedLocation = $state<string | null>(null);
 	let loading = $state(true);
-	let error = $state<string | null>(null);
 	let readerView = $state<ReturnType<typeof ReaderView> | null>(null);
+
+	// Error state with type differentiation
+	type ErrorKind = 'not_found' | 'network' | 'format_unsupported' | 'reader_import' | 'book_open' | 'generic';
+	let errorKind = $state<ErrorKind | null>(null);
+	let errorMessage = $state<string | null>(null);
 
 	// Auto-hide timer for toolbar
 	const TOOLBAR_HIDE_DELAY = 3000;
@@ -32,6 +36,8 @@
 		sepia: '#f4ecd8'
 	};
 	const containerBg = $derived(themes[reader.preferences.theme] ?? '#ffffff');
+
+	const READABLE_FORMATS = new Set(['epub', 'pdf', 'mobi', 'azw3', 'fb2', 'cbz']);
 
 	$effect(() => {
 		void loadReader();
@@ -72,25 +78,49 @@
 		}
 	}
 
+	function setError(kind: ErrorKind, message: string): void {
+		errorKind = kind;
+		errorMessage = message;
+	}
+
+	function clearError(): void {
+		errorKind = null;
+		errorMessage = null;
+	}
+
 	async function loadReader(): Promise<void> {
 		loading = true;
-		error = null;
+		clearError();
+		bookBlob = null;
 		try {
 			// 1. Fetch book metadata
 			book = await api.books.get(bookId);
 
 			// 2. Find the file entry to get the format
 			const fileEntry = book.files.find((f) => f.id === fileId);
-			const fmt = fileEntry?.format ?? 'epub';
+			if (!fileEntry) {
+				setError('not_found', 'The requested file was not found for this book.');
+				loading = false;
+				return;
+			}
 
-			// 3. Initialize the reader store
+			const fmt = fileEntry.format;
+
+			// 3. Check if the format is readable
+			if (!READABLE_FORMATS.has(fmt)) {
+				setError('format_unsupported', `The ${fmt.toUpperCase()} format is not supported by the reader.`);
+				loading = false;
+				return;
+			}
+
+			// 4. Initialize the reader store
 			reader.init(bookId, fileId, book.title, fmt);
 			reader.loadPreferences();
 
-			// 4. Try to load saved location from localStorage first (instant)
+			// 5. Try to load saved location from localStorage first (instant)
 			savedLocation = reader.loadSavedLocation();
 
-			// 5. Then try server progress (may have newer data)
+			// 6. Then try server progress (may have newer data)
 			let serverProgress: ReadingProgressResponse | null = null;
 			try {
 				serverProgress = await api.reader.getProgress(bookId);
@@ -115,12 +145,30 @@
 				}
 			}
 
-			// 6. Fetch file as Blob
+			// 7. Fetch file as Blob
 			bookBlob = await api.reader.fetchFileBlob(bookId, fileId);
 		} catch (err: unknown) {
-			error = err instanceof Error ? err.message : 'Failed to load reader';
+			if (err instanceof ApiError) {
+				if (err.isNotFound) {
+					setError('not_found', 'The book or file could not be found.');
+				} else {
+					setError('network', err.userMessage);
+				}
+			} else if (err instanceof TypeError && err.message.includes('fetch')) {
+				setError('network', 'A network error occurred while loading the book. Please check your connection and try again.');
+			} else {
+				setError('generic', err instanceof Error ? err.message : 'Failed to load reader');
+			}
 		} finally {
 			loading = false;
+		}
+	}
+
+	function handleReaderError(err: Error): void {
+		if (err.message.includes('Failed to load script')) {
+			setError('reader_import', 'The reader engine failed to load. Please refresh the page or try a different browser.');
+		} else {
+			setError('book_open', `The book could not be opened: ${err.message}`);
 		}
 	}
 
@@ -254,7 +302,7 @@
 />
 
 <svelte:head>
-	<title>{book?.title ?? 'Reader'} — Archivis</title>
+	<title>{book?.title ? `${book.title} — Archivis Reader` : 'Archivis Reader'}</title>
 </svelte:head>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -298,12 +346,169 @@
 
 	<!-- Reader viewport -->
 	{#if loading}
-		<div class="flex flex-1 items-center justify-center">
-			<div class="text-muted-foreground">Loading book...</div>
+		<div class="flex flex-1 flex-col items-center justify-center gap-4">
+			<!-- Spinner -->
+			<svg
+				class="size-10 animate-spin text-primary"
+				xmlns="http://www.w3.org/2000/svg"
+				fill="none"
+				viewBox="0 0 24 24"
+			>
+				<circle
+					class="opacity-25"
+					cx="12"
+					cy="12"
+					r="10"
+					stroke="currentColor"
+					stroke-width="4"
+				></circle>
+				<path
+					class="opacity-75"
+					fill="currentColor"
+					d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+				></path>
+			</svg>
+			{#if book?.title}
+				<p class="max-w-xs truncate text-center text-sm font-medium text-foreground">
+					{book.title}
+				</p>
+			{/if}
+			<p class="text-sm text-muted-foreground">Loading book...</p>
 		</div>
-	{:else if error}
-		<div class="flex flex-1 items-center justify-center">
-			<div class="text-destructive">{error}</div>
+	{:else if errorKind}
+		<div class="flex flex-1 items-center justify-center p-6">
+			<div class="max-w-md space-y-4 text-center">
+				<!-- Error icon -->
+				{#if errorKind === 'not_found'}
+					<svg
+						class="mx-auto size-12 text-muted-foreground"
+						viewBox="0 0 24 24"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="1.5"
+						stroke-linecap="round"
+						stroke-linejoin="round"
+					>
+						<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" />
+						<path d="M14 2v4a2 2 0 0 0 2 2h4" />
+						<path d="m9.5 12.5 5 5" />
+						<path d="m14.5 12.5-5 5" />
+					</svg>
+				{:else if errorKind === 'format_unsupported'}
+					<svg
+						class="mx-auto size-12 text-muted-foreground"
+						viewBox="0 0 24 24"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="1.5"
+						stroke-linecap="round"
+						stroke-linejoin="round"
+					>
+						<circle cx="12" cy="12" r="10" />
+						<path d="M12 16v.01" />
+						<path d="M12 8v4" />
+					</svg>
+				{:else}
+					<svg
+						class="mx-auto size-12 text-destructive"
+						viewBox="0 0 24 24"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="1.5"
+						stroke-linecap="round"
+						stroke-linejoin="round"
+					>
+						<path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+						<line x1="12" x2="12" y1="9" y2="13" />
+						<line x1="12" x2="12.01" y1="17" y2="17" />
+					</svg>
+				{/if}
+
+				<h2 class="text-lg font-semibold text-foreground">
+					{#if errorKind === 'not_found'}
+						File Not Found
+					{:else if errorKind === 'format_unsupported'}
+						Format Not Supported
+					{:else if errorKind === 'network'}
+						Connection Error
+					{:else if errorKind === 'reader_import'}
+						Reader Failed to Load
+					{:else if errorKind === 'book_open'}
+						Unable to Open Book
+					{:else}
+						Something Went Wrong
+					{/if}
+				</h2>
+
+				<p class="text-sm text-muted-foreground">
+					{errorMessage}
+				</p>
+
+				<div class="flex flex-wrap items-center justify-center gap-3 pt-2">
+					{#if errorKind === 'network' || errorKind === 'reader_import' || errorKind === 'generic'}
+						<button
+							onclick={() => loadReader()}
+							class="inline-flex items-center gap-1.5 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+						>
+							<svg
+								class="size-4"
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								stroke-width="2"
+								stroke-linecap="round"
+								stroke-linejoin="round"
+							>
+								<path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+								<path d="M3 3v5h5" />
+								<path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" />
+								<path d="M16 16h5v5" />
+							</svg>
+							Retry
+						</button>
+					{/if}
+
+					{#if errorKind === 'format_unsupported' || errorKind === 'book_open'}
+						<a
+							href="/api/books/{bookId}/files/{fileId}/download"
+							class="inline-flex items-center gap-1.5 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+						>
+							<svg
+								class="size-4"
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								stroke-width="2"
+								stroke-linecap="round"
+								stroke-linejoin="round"
+							>
+								<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+								<polyline points="7 10 12 15 17 10" />
+								<line x1="12" x2="12" y1="15" y2="3" />
+							</svg>
+							Download Instead
+						</a>
+					{/if}
+
+					<a
+						href="/books/{bookId}"
+						class="inline-flex items-center gap-1.5 rounded-md border border-border px-4 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted"
+					>
+						<svg
+							class="size-4"
+							viewBox="0 0 24 24"
+							fill="none"
+							stroke="currentColor"
+							stroke-width="2"
+							stroke-linecap="round"
+							stroke-linejoin="round"
+						>
+							<path d="m15 18-6-6 6-6" />
+						</svg>
+						Back to Book
+					</a>
+				</div>
+			</div>
 		</div>
 	{:else if bookBlob}
 		<div class="relative flex-1 overflow-hidden">
@@ -314,6 +519,7 @@
 				onRelocate={handleRelocate}
 				onTocLoaded={handleTocLoaded}
 				onLoad={handleLoad}
+				onError={handleReaderError}
 			/>
 			<!-- Touch/click tap zones overlay -->
 			<!-- svelte-ignore a11y_click_events_have_key_events -->

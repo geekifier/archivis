@@ -37,9 +37,10 @@
 		onRelocate?: (detail: RelocateDetail) => void;
 		onTocLoaded?: (toc: TocItem[]) => void;
 		onLoad?: () => void;
+		onError?: (error: Error) => void;
 	}
 
-	let { bookBlob, savedLocation = null, onRelocate, onTocLoaded, onLoad }: Props = $props();
+	let { bookBlob, savedLocation = null, onRelocate, onTocLoaded, onLoad, onError }: Props = $props();
 
 	let container = $state<HTMLDivElement | null>(null);
 	let view: FoliateView | null = null;
@@ -159,52 +160,62 @@
 	async function initReader(): Promise<void> {
 		if (!container) return;
 
-		// Load foliate-js view.js as a module script
-		await loadScript('/vendor/foliate-js/view.js');
-
-		// Create the custom element
-		const el = document.createElement('foliate-view') as FoliateView;
-		el.style.width = '100%';
-		el.style.height = '100%';
-
-		// Listen for relocate events
-		el.addEventListener('relocate', (e: Event) => {
-			const detail = (e as CustomEvent).detail as RelocateDetail;
-			onRelocate?.(detail);
-		});
-
-		// Listen for load events (fired per section)
-		el.addEventListener('load', (e: Event) => {
-			const { doc } = (e as CustomEvent).detail as { doc: Document; index: number };
-			// Inject theme CSS into each loaded document
-			injectDocumentCSS(doc);
-		});
-
-		// eslint-disable-next-line svelte/no-dom-manipulating -- foliate-js custom element must be mounted imperatively
-		container.append(el);
-		view = el;
-
-		// Open the book
-		await el.open(bookBlob);
-		bookOpened = true;
-
-		// Extract TOC from the book object
-		if (el.book?.toc) {
-			onTocLoaded?.(el.book.toc);
+		try {
+			// Load foliate-js view.js as a module script
+			await loadScript('/vendor/foliate-js/view.js');
+		} catch (err: unknown) {
+			onError?.(err instanceof Error ? err : new Error('Failed to load script: /vendor/foliate-js/view.js'));
+			return;
 		}
 
-		// Apply initial renderer attributes and styles
-		applyRendererAttributes();
-		injectCSS();
+		try {
+			// Create the custom element
+			const el = document.createElement('foliate-view') as FoliateView;
+			el.style.width = '100%';
+			el.style.height = '100%';
 
-		// Initialize position
-		if (savedLocation) {
-			await el.init({ lastLocation: savedLocation });
-		} else {
-			await el.init({ showTextStart: true });
+			// Listen for relocate events
+			el.addEventListener('relocate', (e: Event) => {
+				const detail = (e as CustomEvent).detail as RelocateDetail;
+				onRelocate?.(detail);
+			});
+
+			// Listen for load events (fired per section)
+			el.addEventListener('load', (e: Event) => {
+				const { doc } = (e as CustomEvent).detail as { doc: Document; index: number };
+				// Inject theme CSS into each loaded document
+				injectDocumentCSS(doc);
+			});
+
+			// eslint-disable-next-line svelte/no-dom-manipulating -- foliate-js custom element must be mounted imperatively
+			container.append(el);
+			view = el;
+
+			// Open the book
+			await el.open(bookBlob);
+			bookOpened = true;
+
+			// Extract TOC from the book object
+			if (el.book?.toc) {
+				onTocLoaded?.(el.book.toc);
+			}
+
+			// Apply initial renderer attributes and styles
+			applyRendererAttributes();
+			injectCSS();
+
+			// Initialize position
+			if (savedLocation) {
+				await el.init({ lastLocation: savedLocation });
+			} else {
+				await el.init({ showTextStart: true });
+			}
+
+			onLoad?.();
+		} catch (err: unknown) {
+			const msg = err instanceof Error ? err.message : 'Unknown error opening book';
+			onError?.(new Error(msg));
 		}
-
-		onLoad?.();
 	}
 
 	function injectDocumentCSS(doc: Document): void {

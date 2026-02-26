@@ -483,6 +483,11 @@
 	function formatFormatBadge(format: string): string {
 		return format.toUpperCase();
 	}
+
+	const READABLE_FORMATS = new Set(['epub', 'pdf', 'mobi', 'azw3', 'fb2', 'cbz']);
+	function isReadableFormat(format: string): boolean {
+		return READABLE_FORMATS.has(format);
+	}
 </script>
 
 <div class="mx-auto max-w-5xl space-y-6">
@@ -678,10 +683,7 @@
 					<div class="mt-4 space-y-2">
 						<h3 class="text-sm font-semibold text-muted-foreground">Files</h3>
 						{#each book.files as file (file.id)}
-							<a
-								href="/api/books/{book.id}/files/{file.id}/download"
-								class="flex items-center justify-between rounded-md border border-border p-2.5 text-sm transition-colors hover:bg-muted"
-							>
+							<div class="flex items-center justify-between rounded-md border border-border p-2.5 text-sm">
 								<div class="flex items-center gap-2">
 									<span
 										class="inline-flex rounded bg-primary/10 px-1.5 py-0.5 text-xs font-semibold text-primary"
@@ -690,21 +692,48 @@
 									</span>
 									<span class="text-muted-foreground">{formatFileSize(file.file_size)}</span>
 								</div>
-								<svg
-									class="size-4 text-muted-foreground"
-									xmlns="http://www.w3.org/2000/svg"
-									viewBox="0 0 24 24"
-									fill="none"
-									stroke="currentColor"
-									stroke-width="2"
-									stroke-linecap="round"
-									stroke-linejoin="round"
-								>
-									<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-									<polyline points="7 10 12 15 17 10" />
-									<line x1="12" x2="12" y1="15" y2="3" />
-								</svg>
-							</a>
+								<div class="flex items-center gap-2">
+									{#if isReadableFormat(file.format)}
+										<a
+											href="/read/{book.id}/{file.id}"
+											class="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+										>
+											<svg
+												class="size-3.5"
+												viewBox="0 0 24 24"
+												fill="none"
+												stroke="currentColor"
+												stroke-width="2"
+												stroke-linecap="round"
+												stroke-linejoin="round"
+											>
+												<path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z" />
+												<path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z" />
+											</svg>
+											Read
+										</a>
+									{/if}
+									<a
+										href="/api/books/{book.id}/files/{file.id}/download"
+										class="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted"
+									>
+										<svg
+											class="size-3.5"
+											viewBox="0 0 24 24"
+											fill="none"
+											stroke="currentColor"
+											stroke-width="2"
+											stroke-linecap="round"
+											stroke-linejoin="round"
+										>
+											<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+											<polyline points="7 10 12 15 17 10" />
+											<line x1="12" x2="12" y1="15" y2="3" />
+										</svg>
+										Download
+									</a>
+								</div>
+							</div>
 						{/each}
 					</div>
 				{/if}

@@ -29,7 +29,7 @@
 		<!-- Left section: back button + title -->
 		<a
 			href="/books/{bookId}"
-			class="flex shrink-0 items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
+			class="flex size-11 shrink-0 items-center justify-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground sm:size-auto sm:justify-start"
 		>
 			<svg
 				class="size-4"
@@ -56,11 +56,11 @@
 		{/if}
 
 		<!-- Right section: action buttons -->
-		<div class="ml-auto flex shrink-0 items-center gap-1">
+		<div class="ml-auto flex shrink-0 items-center gap-0.5 sm:gap-1">
 			<!-- TOC button -->
 			<button
 				onclick={onToggleToc}
-				class="inline-flex size-9 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+				class="inline-flex size-11 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground sm:size-9"
 				aria-label="Table of contents"
 				title="Table of contents (t)"
 			>
@@ -82,7 +82,7 @@
 			<!-- Bookmarks button -->
 			<button
 				onclick={onToggleBookmarks}
-				class="inline-flex size-9 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+				class="inline-flex size-11 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground sm:size-9"
 				aria-label="Bookmarks"
 				title="Bookmarks (b)"
 			>
@@ -102,7 +102,7 @@
 			<!-- Settings button -->
 			<button
 				onclick={onToggleSettings}
-				class="inline-flex size-9 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+				class="inline-flex size-11 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground sm:size-9"
 				aria-label="Reader settings"
 				title="Settings (s)"
 			>
@@ -125,7 +125,7 @@
 			<!-- Fullscreen button -->
 			<button
 				onclick={onToggleFullscreen}
-				class="inline-flex size-9 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+				class="inline-flex size-11 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground sm:size-9"
 				aria-label="Toggle fullscreen"
 				title="Fullscreen (f)"
 			>

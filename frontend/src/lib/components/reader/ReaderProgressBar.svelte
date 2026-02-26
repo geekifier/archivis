@@ -114,7 +114,7 @@
 
 	<!-- Expanded info below bar when toolbar is visible -->
 	{#if toolbarVisible}
-		<div class="flex items-center justify-between bg-background/90 px-4 py-1 text-xs backdrop-blur-sm">
+		<div class="hidden items-center justify-between bg-background/90 px-4 py-1 text-xs backdrop-blur-sm sm:flex">
 			<span class="min-w-0 truncate text-muted-foreground">
 				{currentChapter ?? ''}
 			</span>
