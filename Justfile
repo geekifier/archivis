@@ -153,6 +153,20 @@ dev-reset:
     ./scripts/dev-boot.sh wipe
     echo "Data directory wiped. Restart the server to start fresh."
 
+# ── E2E Testing ──────────────────────────────────────────────────────────────
+
+# Run Playwright E2E tests (starts backend + frontend automatically)
+test-e2e:
+    cd frontend && npx playwright test
+
+# Run Playwright E2E tests with interactive UI
+test-e2e-ui:
+    cd frontend && npx playwright test --ui
+
+# Install Playwright browsers
+playwright-install:
+    cd frontend && npx playwright install --with-deps chromium
+
 # ── CI ────────────────────────────────────────────────────────────────────────
 
 # Run full CI pipeline locally via act (requires Docker)

@@ -16,12 +16,16 @@
 		"test": "vitest run",
 		"test:watch": "vitest",
 		"test:coverage": "vitest run --coverage",
+		"test:e2e": "playwright test",
+		"test:e2e:ui": "playwright test --ui",
+		"test:e2e:headed": "playwright test --headed",
 		"generate:api": "openapi-typescript http://localhost:9514/api/openapi.json -o src/lib/api/schema.d.ts"
 	},
 	"devDependencies": {
 		"@eslint/js": "^9.39.3",
 		"@internationalized/date": "^3.11.0",
 		"@lucide/svelte": "^0.561.0",
+		"@playwright/test": "^1.58.2",
 		"@sveltejs/adapter-static": "^3.0.0",
 		"@sveltejs/kit": "^2.50.2",
 		"@sveltejs/vite-plugin-svelte": "^6.2.4",
