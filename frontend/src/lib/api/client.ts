@@ -10,9 +10,12 @@ import type {
 	BatchUpdateResponse,
 	BookDetail,
 	BookListParams,
+	BookmarkResponse,
 	BrowseResponse,
 	CandidateResponse,
+	ContinueReadingItem,
 	CreateAuthorRequest,
+	CreateBookmarkRequest,
 	CreatePublisherRequest,
 	DuplicateCountResponse,
 	DuplicateLinkResponse,
@@ -30,6 +33,7 @@ import type {
 	PaginatedSeries,
 	PaginatedTags,
 	PublisherResponse,
+	ReadingProgressResponse,
 	ScanManifestResponse,
 	SeriesResponse,
 	SetBookAuthorsRequest,
@@ -42,6 +46,7 @@ import type {
 	TaskResponse,
 	UpdateBookRequest,
 	UpdateIdentifierRequest,
+	UpdateProgressRequest,
 	UpdateSettingsResponse,
 	UploadResponse,
 	User
@@ -575,6 +580,107 @@ export const api = {
 		get(): Promise<StatsResponse> {
 			return request<StatsResponse>('GET', '/stats');
 		}
+	},
+
+	reader: {
+		/** Get reading progress for a book. Returns null if no progress exists. */
+		async getProgress(bookId: string): Promise<ReadingProgressResponse | null> {
+			try {
+				return await request<ReadingProgressResponse>(
+					'GET',
+					`/books/${encodeURIComponent(bookId)}/progress`
+				);
+			} catch (err: unknown) {
+				if (err && typeof err === 'object' && 'status' in err && err.status === 404) {
+					return null;
+				}
+				throw err;
+			}
+		},
+
+		/** Update reading progress for a book file. */
+		updateProgress(
+			bookId: string,
+			fileId: string,
+			data: UpdateProgressRequest
+		): Promise<ReadingProgressResponse> {
+			return request<ReadingProgressResponse>(
+				'PUT',
+				`/books/${encodeURIComponent(bookId)}/files/${encodeURIComponent(fileId)}/progress`,
+				data
+			);
+		},
+
+		/** Clear reading progress for a book. */
+		clearProgress(bookId: string): Promise<void> {
+			return request<void>('DELETE', `/books/${encodeURIComponent(bookId)}/progress`);
+		},
+
+		/** Get continue-reading list. */
+		continueReading(limit?: number): Promise<ContinueReadingItem[]> {
+			const params = new URLSearchParams();
+			if (limit !== undefined) params.set('limit', String(limit));
+			const qs = params.toString();
+			return request<ContinueReadingItem[]>(
+				'GET',
+				`/reader/continue${qs ? `?${qs}` : ''}`
+			);
+		},
+
+		/** List bookmarks for a book file. */
+		listBookmarks(bookId: string, fileId: string): Promise<BookmarkResponse[]> {
+			return request<BookmarkResponse[]>(
+				'GET',
+				`/books/${encodeURIComponent(bookId)}/files/${encodeURIComponent(fileId)}/bookmarks`
+			);
+		},
+
+		/** Create a bookmark for a book file. */
+		createBookmark(
+			bookId: string,
+			fileId: string,
+			data: CreateBookmarkRequest
+		): Promise<BookmarkResponse> {
+			return request<BookmarkResponse>(
+				'POST',
+				`/books/${encodeURIComponent(bookId)}/files/${encodeURIComponent(fileId)}/bookmarks`,
+				data
+			);
+		},
+
+		/** Delete a bookmark by ID. */
+		deleteBookmark(bookmarkId: string): Promise<void> {
+			return request<void>(
+				'DELETE',
+				`/bookmarks/${encodeURIComponent(bookmarkId)}`
+			);
+		},
+
+		/** Fetch a book file as a Blob for the reader. */
+		async fetchFileBlob(bookId: string, fileId: string): Promise<Blob> {
+			const headers: Record<string, string> = {
+				Accept: 'application/octet-stream'
+			};
+			const token = getSessionToken();
+			if (token) {
+				headers['Authorization'] = `Bearer ${token}`;
+			}
+
+			const response = await fetch(
+				`${BASE_URL}/books/${encodeURIComponent(bookId)}/files/${encodeURIComponent(fileId)}/content`,
+				{ method: 'GET', headers }
+			);
+
+			if (!response.ok) {
+				const error = await parseApiError(response);
+				if (error.isUnauthorized) {
+					handleUnauthorized();
+				}
+				throw error;
+			}
+
+			return response.blob();
+		}
 	}
 } as const;
 
@@ -593,6 +699,7 @@ export type {
 	BookDetail,
 	BookFormat,
 	BookListParams,
+	BookmarkResponse,
 	BookSeriesLink,
 	BookSummary,
 	BookTagLink,
@@ -601,7 +708,9 @@ export type {
 	CandidateSeriesInfo,
 	ChildrenSummary,
 	ConfigSource,
+	ContinueReadingItem,
 	CreateAuthorRequest,
+	CreateBookmarkRequest,
 	CreatePublisherRequest,
 	DuplicateCountResponse,
 	DuplicateLinkResponse,
@@ -625,6 +734,7 @@ export type {
 	PaginatedSeries,
 	PaginatedTags,
 	PublisherResponse,
+	ReadingProgressResponse,
 	ScanManifestResponse,
 	SeriesEntry,
 	SeriesResponse,
@@ -646,8 +756,10 @@ export type {
 	TaskResponse,
 	TaskStatus,
 	TaskType,
+	TocItem,
 	UpdateBookRequest,
 	UpdateIdentifierRequest,
+	UpdateProgressRequest,
 	UpdateSettingsResponse,
 	UploadResponse,
 	User,

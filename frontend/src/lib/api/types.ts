@@ -504,6 +504,60 @@ export interface UpdateSettingsResponse {
 	requires_restart: boolean;
 }
 
+// --- Reader types ---
+
+export interface ReadingProgressResponse {
+	id: string;
+	book_id: string;
+	book_file_id: string;
+	location: string | null;
+	progress: number;
+	device_id: string | null;
+	preferences: Record<string, unknown> | null;
+	started_at: string;
+	updated_at: string;
+}
+
+export interface UpdateProgressRequest {
+	location?: string | null;
+	progress: number;
+	device_id?: string | null;
+	preferences?: Record<string, unknown> | null;
+}
+
+export interface ContinueReadingItem {
+	book_id: string;
+	book_title: string;
+	book_file_id: string;
+	file_format: string;
+	progress: number;
+	location: string | null;
+	has_cover: boolean;
+	updated_at: string;
+}
+
+export interface CreateBookmarkRequest {
+	location: string;
+	label?: string;
+	excerpt?: string;
+	position: number;
+}
+
+export interface BookmarkResponse {
+	id: string;
+	location: string;
+	label: string | null;
+	excerpt: string | null;
+	position: number;
+	created_at: string;
+}
+
+export interface TocItem {
+	label: string;
+	href: string;
+	subitems?: TocItem[];
+}
+
 // --- Statistics types ---
 
 export interface FormatStat {

@@ -18,6 +18,12 @@
 	const publicPaths = ['/login', '/setup'];
 	const isPublicPage = $derived(publicPaths.includes(page.url.pathname));
 
+	/** Pages that render chromeless (no sidebar/header) — handled by their own layout. */
+	const chromelessPaths = ['/read'];
+	const isChromeless = $derived(
+		chromelessPaths.some((p) => page.url.pathname.startsWith(p))
+	);
+
 	$effect(() => {
 		theme.init();
 	});
@@ -179,6 +185,9 @@
 		</div>
 		{@render children()}
 	</div>
+{:else if isChromeless}
+	<!-- Chromeless layout for reader — child layout handles auth and chrome -->
+	{@render children()}
 {:else}
 	<!-- Full app shell for authenticated users -->
 
