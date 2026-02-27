@@ -264,11 +264,18 @@
 {#snippet bookColumn(book: BookDetail, otherBook: BookDetail, position: 'left' | 'right')}
 	{@const isPrimary = primaryId === book.id}
 	{@const facesRight = position === 'left'}
+	{@const hasIncoming = isPrimary && otherBook.files.length > 0}
+	{@const hasOutgoing = !isPrimary && book.files.length > 0}
+	{@const isExtending = hasIncoming || hasOutgoing}
 	<!-- svelte-ignore a11y_click_events_have_key_events -->
 	<!-- svelte-ignore a11y_no_static_element_interactions -->
 	<div
-		class="cursor-pointer overflow-visible rounded-lg p-4 {isPrimary
-			? 'relative z-10 bg-primary/[0.03]'
+		class="cursor-pointer overflow-visible rounded-lg border p-4 transition-colors {isPrimary
+			? 'relative z-10 border-sky-500/40 bg-sky-500/[0.03] dark:border-sky-400/40 dark:bg-sky-400/[0.03]'
+			: 'border-transparent hover:border-border/50'} {isExtending
+			? facesRight
+				? 'md:rounded-r-none md:border-r-0'
+				: 'md:rounded-l-none md:border-l-0'
 			: ''}"
 		onclick={() => (primaryId = book.id)}
 	>
@@ -433,13 +440,12 @@
 					<dd>
 						{#if isPrimary}
 							<!-- Primary: unified puzzle block — extends across gap to meet secondary -->
-							{@const hasIncoming = otherBook.files.length > 0}
 							<div class="mt-1 text-xs">
 								<div
-									class="rounded-lg border border-sky-500/30 bg-sky-500/15 px-2 py-1.5 dark:border-sky-400/30 dark:bg-sky-400/15 {hasIncoming
+									class="rounded-lg border border-sky-500/40 bg-sky-500/15 px-2 py-1.5 dark:border-sky-400/40 dark:bg-sky-400/15 {hasIncoming
 										? facesRight
-											? 'md:mr-[-2rem] md:rounded-r-none md:border-r-0'
-											: 'md:ml-[-2rem] md:rounded-l-none md:border-l-0'
+											? 'md:mr-[-2rem] md:rounded-tr-none'
+											: 'md:ml-[-2rem] md:rounded-tl-none'
 										: ''}"
 								>
 									<div class="space-y-1">
@@ -457,7 +463,7 @@
 										{/each}
 									</div>
 									{#if hasIncoming}
-										<div class="mt-1.5 border-t border-sky-500/20 pt-1.5 dark:border-sky-400/20">
+										<div class="mt-1.5 border-t border-sky-500/30 pt-1.5 dark:border-sky-400/30">
 											<div class="space-y-1">
 												{#each otherBook.files as file (file.id)}
 													<div class="flex items-center gap-1.5 opacity-50">
@@ -480,9 +486,9 @@
 							<!-- Secondary: files being merged away, extends toward primary -->
 							{#if book.files.length > 0}
 								<div
-									class="mt-1 rounded-lg border border-sky-500/30 bg-sky-500/15 px-2 py-1.5 text-xs dark:border-sky-400/30 dark:bg-sky-400/15 {facesRight
-										? 'md:mr-[-1rem] md:rounded-r-none md:border-r-0'
-										: 'md:ml-[-1rem] md:rounded-l-none md:border-l-0'}"
+									class="mt-1 rounded-lg border border-sky-500/40 bg-sky-500/15 px-2 py-1.5 text-xs dark:border-sky-400/40 dark:bg-sky-400/15 {facesRight
+										? 'md:mr-[-1rem] md:border-r-0 md:rounded-r-none'
+										: 'md:ml-[-1rem] md:border-l-0 md:rounded-l-none'}"
 								>
 									<div class="space-y-1">
 										{#each book.files as file (file.id)}
