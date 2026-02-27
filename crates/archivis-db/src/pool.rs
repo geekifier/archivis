@@ -1,6 +1,7 @@
 use std::path::Path;
 use std::time::Duration;
 
+use crate::repositories::BookRepository;
 use archivis_core::errors::DbError;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use sqlx::SqlitePool;
@@ -57,6 +58,9 @@ pub async fn run_migrations(pool: &DbPool) -> Result<(), DbError> {
         .run(pool)
         .await
         .map_err(|e| DbError::Migration(e.to_string()))?;
+
+    // Backfill norm_title for existing rows after migration adds the column.
+    BookRepository::backfill_norm_titles(pool).await?;
 
     tracing::info!("database migrations applied");
     Ok(())

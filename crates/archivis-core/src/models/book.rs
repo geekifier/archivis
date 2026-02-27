@@ -60,7 +60,7 @@ impl Book {
 }
 
 /// Generate a sort-friendly title by stripping leading articles.
-fn generate_sort_title(title: &str) -> String {
+pub fn generate_sort_title(title: &str) -> String {
     let lower = title.to_lowercase();
     for article in ["the ", "a ", "an "] {
         if lower.starts_with(article) {
@@ -68,6 +68,47 @@ fn generate_sort_title(title: &str) -> String {
         }
     }
     title.to_string()
+}
+
+/// Leading articles stripped during title normalization for duplicate detection.
+const ARTICLES: &[&str] = &[
+    "the", "a", "an", // English
+    "der", "die", "das", // German
+    "le", "la", "les", // French
+];
+
+/// Normalize a book title for comparison and DB storage (`norm_title` column).
+///
+/// Lowercase, remove articles (`the`/`a`/`an`/`der`/`die`/`das`/`le`/`la`/`les`),
+/// remove punctuation, collapse whitespace, trim.
+pub fn normalize_title(title: &str) -> String {
+    let lower = title.to_lowercase();
+
+    // Replace punctuation: apostrophes are dropped (contractions stay
+    // joined), all other non-alphanumeric characters become spaces.
+    let cleaned: String = lower
+        .chars()
+        .filter_map(|c| {
+            if c.is_alphanumeric() || c == ' ' {
+                Some(c)
+            } else if c == '\'' || c == '\u{2019}' {
+                None
+            } else {
+                Some(' ')
+            }
+        })
+        .collect();
+
+    let words: Vec<&str> = cleaned.split_whitespace().collect();
+
+    // Strip leading article if present (only when there are more words).
+    let words = if words.len() > 1 && ARTICLES.contains(&words[0]) {
+        &words[1..]
+    } else {
+        &words
+    };
+
+    words.join(" ")
 }
 
 #[cfg(test)]

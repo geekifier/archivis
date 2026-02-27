@@ -7,7 +7,12 @@ pub struct DuplicateRepository;
 
 impl DuplicateRepository {
     /// Insert a new duplicate link.
+    ///
+    /// Silently skips self-referential links (`book_id_a == book_id_b`).
     pub async fn create(pool: &SqlitePool, link: &DuplicateLink) -> Result<(), DbError> {
+        if link.book_id_a == link.book_id_b {
+            return Ok(());
+        }
         let id = link.id.to_string();
         let book_id_a = link.book_id_a.to_string();
         let book_id_b = link.book_id_b.to_string();

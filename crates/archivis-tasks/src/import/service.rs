@@ -6,7 +6,7 @@ use archivis_core::models::{
 };
 use archivis_db::{
     AuthorRepository, BookFileRepository, BookRepository, DbPool, DuplicateRepository,
-    IdentifierRepository, SeriesRepository, TagRepository,
+    IdentifierRepository, SeriesRepository, SettingRepository, TagRepository,
 };
 use archivis_formats::sanitize::sanitize_text;
 use archivis_formats::{ExtractedMetadata, ParsedFilename};
@@ -103,10 +103,18 @@ impl<S: StorageBackend> ImportService<S> {
             );
         }
 
-        // Determine target book: existing (different format, same ISBN) or new
-        let (book_id, is_new_book) = self
+        // Determine target book: existing (different format, same ISBN) → fuzzy auto-link → new
+        let isbn_link = self
             .find_isbn_book_different_format(&embedded, format)
-            .await?
+            .await?;
+        let fuzzy_link = if isbn_link.is_some() {
+            None
+        } else {
+            self.find_fuzzy_book_different_format(fuzzy_duplicate.as_ref(), format)
+                .await?
+        };
+        let (book_id, is_new_book) = isbn_link
+            .or(fuzzy_link)
             .map_or_else(|| (uuid::Uuid::new_v4(), true), |id| (id, false));
 
         // 7-8: Store file and handle covers
@@ -141,16 +149,23 @@ impl<S: StorageBackend> ImportService<S> {
 
         info!(book_id = %book_id, format = %format, status = %score.status, "imported file");
 
-        // Record fuzzy duplicate relationship for later review
-        self.record_fuzzy_duplicate(fuzzy_duplicate.as_ref(), book_id)
-            .await?;
+        // When auto-linked via fuzzy match, the file was cleanly attached —
+        // no duplicate to record or surface.
+        let report_duplicate = if fuzzy_link.is_some() {
+            None
+        } else {
+            // Record fuzzy duplicate relationship for later review
+            self.record_fuzzy_duplicate(fuzzy_duplicate.as_ref(), book_id)
+                .await?;
+            fuzzy_duplicate
+        };
 
         Ok(ImportResult {
             book_id,
             book_file_id: book_file,
             status: score.status,
             confidence: score.confidence,
-            duplicate: fuzzy_duplicate,
+            duplicate: report_duplicate,
             cover_extracted: embedded.cover_image.is_some(),
         })
     }
@@ -167,6 +182,10 @@ impl<S: StorageBackend> ImportService<S> {
             author_similarity,
         }) = fuzzy_duplicate
         {
+            // Guard: never create a self-referential duplicate link
+            if *existing_book_id == book_id {
+                return Ok(());
+            }
             let confidence = (title_similarity + author_similarity) / 2.0;
             if !DuplicateRepository::exists(&self.db_pool, *existing_book_id, book_id).await? {
                 let link = DuplicateLink::new(*existing_book_id, book_id, "fuzzy", confidence);
@@ -333,6 +352,9 @@ impl<S: StorageBackend> ImportService<S> {
         let author = resolve_author(embedded, parsed);
         let norm_author = similarity::normalize_author(&author);
 
+        let mut best_full: Option<(DuplicateInfo, f32)> = None;
+        let mut best_title_only: Option<(DuplicateInfo, f32)> = None;
+
         for candidate in &candidates {
             let cand_norm_title = similarity::normalize_title(&candidate.book.title);
             let title_sim = similarity::trigram_similarity(&norm_title, &cand_norm_title);
@@ -359,16 +381,27 @@ impl<S: StorageBackend> ImportService<S> {
                     .fold(0.0_f32, f32::max)
             };
 
+            let info = DuplicateInfo::FuzzyMatch {
+                existing_book_id: candidate.book.id,
+                title_similarity: title_sim,
+                author_similarity: author_sim,
+            };
+
             if author_sim >= similarity::AUTHOR_MATCH_THRESHOLD {
-                return Ok(Some(DuplicateInfo::FuzzyMatch {
-                    existing_book_id: candidate.book.id,
-                    title_similarity: title_sim,
-                    author_similarity: author_sim,
-                }));
+                let score = title_sim + author_sim;
+                if best_full.as_ref().map_or(true, |(_, s)| score > *s) {
+                    best_full = Some((info, score));
+                }
+            } else if title_sim >= similarity::TITLE_ONLY_DUPLICATE_THRESHOLD
+                && best_title_only
+                    .as_ref()
+                    .map_or(true, |(_, s)| title_sim > *s)
+            {
+                best_title_only = Some((info, title_sim));
             }
         }
 
-        Ok(None)
+        Ok(best_full.or(best_title_only).map(|(info, _)| info))
     }
 
     /// Find an existing book (via ISBN match) that does NOT have the given format yet.
@@ -396,6 +429,59 @@ impl<S: StorageBackend> ImportService<S> {
             }
         }
         Ok(None)
+    }
+
+    /// Check if a fuzzy duplicate match qualifies for automatic format linking.
+    ///
+    /// Returns `Some(existing_book_id)` when:
+    /// - The `import.auto_link_formats` setting is enabled (default: true)
+    /// - The fuzzy match exceeds the auto-link thresholds (stricter than soft detection)
+    /// - The existing book does not already have the incoming format
+    async fn find_fuzzy_book_different_format(
+        &self,
+        fuzzy_duplicate: Option<&DuplicateInfo>,
+        format: BookFormat,
+    ) -> Result<Option<uuid::Uuid>, ImportError> {
+        use archivis_formats::similarity;
+
+        let Some(DuplicateInfo::FuzzyMatch {
+            existing_book_id,
+            title_similarity,
+            author_similarity,
+        }) = fuzzy_duplicate
+        else {
+            return Ok(None);
+        };
+
+        // Check if auto-linking is enabled (default: true)
+        let enabled = SettingRepository::get(&self.db_pool, "import.auto_link_formats")
+            .await?
+            .map_or(true, |v| v != "false");
+        if !enabled {
+            return Ok(None);
+        }
+
+        // Both similarities must exceed the stricter auto-link thresholds
+        if *title_similarity < similarity::TITLE_AUTO_LINK_THRESHOLD
+            || *author_similarity < similarity::AUTHOR_AUTO_LINK_THRESHOLD
+        {
+            return Ok(None);
+        }
+
+        // Same-format guard: don't auto-link if the existing book already has this format
+        let files = BookFileRepository::get_by_book_id(&self.db_pool, *existing_book_id).await?;
+        if files.iter().any(|f| f.format == format) {
+            return Ok(None);
+        }
+
+        info!(
+            book_id = %existing_book_id,
+            title_sim = title_similarity,
+            author_sim = author_similarity,
+            "auto-linking as additional format to existing book (fuzzy match)"
+        );
+
+        Ok(Some(*existing_book_id))
     }
 
     async fn create_authors(

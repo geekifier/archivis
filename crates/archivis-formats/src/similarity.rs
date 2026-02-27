@@ -6,54 +6,24 @@
 
 use std::collections::HashSet;
 
-/// Leading articles stripped during title normalization.
-const ARTICLES: &[&str] = &[
-    "the", "a", "an", // English
-    "der", "die", "das", // German
-    "le", "la", "les", // French
-];
+pub use archivis_core::models::normalize_title;
 
-/// Default threshold for title matching.
+/// Default threshold for title matching (soft duplicate detection).
 pub const TITLE_MATCH_THRESHOLD: f32 = 0.7;
 
-/// Default threshold for author matching.
+/// Default threshold for author matching (soft duplicate detection).
 pub const AUTHOR_MATCH_THRESHOLD: f32 = 0.6;
 
+/// Stricter title threshold for auto-linking different formats to the same book.
+pub const TITLE_AUTO_LINK_THRESHOLD: f32 = 0.85;
+
+/// Stricter author threshold for auto-linking different formats to the same book.
+pub const AUTHOR_AUTO_LINK_THRESHOLD: f32 = 0.8;
+
+/// Title threshold for flagging soft duplicates when author comparison is inconclusive.
+pub const TITLE_ONLY_DUPLICATE_THRESHOLD: f32 = 0.9;
+
 // ── Public API ──────────────────────────────────────────────────────
-
-/// Normalize a book title for comparison.
-///
-/// Lowercase, remove articles (`the`/`a`/`an`/`der`/`die`/`das`/`le`/`la`/`les`),
-/// remove punctuation, collapse whitespace, trim.
-pub fn normalize_title(title: &str) -> String {
-    let lower = title.to_lowercase();
-
-    // Replace punctuation: apostrophes are dropped (contractions stay
-    // joined), all other non-alphanumeric characters become spaces.
-    let cleaned: String = lower
-        .chars()
-        .filter_map(|c| {
-            if c.is_alphanumeric() || c == ' ' {
-                Some(c)
-            } else if c == '\'' || c == '\u{2019}' {
-                None
-            } else {
-                Some(' ')
-            }
-        })
-        .collect();
-
-    let words: Vec<&str> = cleaned.split_whitespace().collect();
-
-    // Strip leading article if present (only when there are more words).
-    let words = if words.len() > 1 && ARTICLES.contains(&words[0]) {
-        &words[1..]
-    } else {
-        &words
-    };
-
-    words.join(" ")
-}
 
 /// Normalize an author name for comparison.
 ///
@@ -285,6 +255,19 @@ mod tests {
     fn titles_match_empty_returns_false() {
         assert!(!titles_match("", "Dune", TITLE_MATCH_THRESHOLD));
         assert!(!titles_match("Dune", "", TITLE_MATCH_THRESHOLD));
+    }
+
+    // ── auto-link thresholds ──
+
+    #[test]
+    fn auto_link_thresholds_stricter_than_soft_duplicate() {
+        let title_auto = TITLE_AUTO_LINK_THRESHOLD;
+        let title_soft = TITLE_MATCH_THRESHOLD;
+        assert!(title_auto > title_soft);
+
+        let author_auto = AUTHOR_AUTO_LINK_THRESHOLD;
+        let author_soft = AUTHOR_MATCH_THRESHOLD;
+        assert!(author_auto > author_soft);
     }
 
     // ── authors_match ──

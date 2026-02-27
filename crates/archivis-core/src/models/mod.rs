@@ -14,7 +14,7 @@ mod user;
 mod watched_directory;
 
 pub use author::Author;
-pub use book::Book;
+pub use book::{generate_sort_title, normalize_title, Book};
 pub use book_file::BookFile;
 pub use candidate::{CandidateStatus, IdentificationCandidate};
 pub use duplicate::{DuplicateLink, DuplicateStatus};

@@ -99,10 +99,11 @@ impl BookRepository {
             .ok()
             .and_then(|v| v.as_str().map(String::from))
             .unwrap_or_else(|| "unidentified".into());
+        let norm_title = archivis_core::models::normalize_title(&book.title);
 
         sqlx::query!(
-            "INSERT INTO books (id, title, sort_title, description, language, publication_date, publisher_id, added_at, updated_at, rating, page_count, metadata_status, metadata_confidence, cover_path)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO books (id, title, sort_title, description, language, publication_date, publisher_id, added_at, updated_at, rating, page_count, metadata_status, metadata_confidence, cover_path, norm_title)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             id,
             book.title,
             book.sort_title,
@@ -117,6 +118,7 @@ impl BookRepository {
             status,
             book.metadata_confidence,
             book.cover_path,
+            norm_title,
         )
         .execute(pool)
         .await
@@ -324,9 +326,10 @@ impl BookRepository {
             .ok()
             .and_then(|v| v.as_str().map(String::from))
             .unwrap_or_else(|| "unidentified".into());
+        let norm_title = archivis_core::models::normalize_title(&book.title);
 
         let result = sqlx::query!(
-            "UPDATE books SET title = ?, sort_title = ?, description = ?, language = ?, publication_date = ?, publisher_id = ?, updated_at = ?, rating = ?, page_count = ?, metadata_status = ?, metadata_confidence = ?, cover_path = ? WHERE id = ?",
+            "UPDATE books SET title = ?, sort_title = ?, description = ?, language = ?, publication_date = ?, publisher_id = ?, updated_at = ?, rating = ?, page_count = ?, metadata_status = ?, metadata_confidence = ?, cover_path = ?, norm_title = ? WHERE id = ?",
             book.title,
             book.sort_title,
             book.description,
@@ -339,6 +342,7 @@ impl BookRepository {
             status,
             book.metadata_confidence,
             book.cover_path,
+            norm_title,
             id,
         )
         .execute(pool)
@@ -623,26 +627,20 @@ impl BookRepository {
 
     /// Find potential duplicate books by title similarity.
     ///
-    /// Returns books whose normalized `sort_title` starts with the same
-    /// prefix (first 3 characters), enabling efficient DB-level
-    /// pre-filtering before expensive fuzzy matching in Rust.
+    /// Returns books whose `norm_title` starts with the same 3-char prefix,
+    /// enabling efficient DB-level pre-filtering before expensive fuzzy
+    /// matching in Rust.
     pub async fn find_potential_duplicates(
         pool: &SqlitePool,
         title: &str,
         limit: i64,
     ) -> Result<Vec<BookWithAuthors>, DbError> {
-        let prefix = title
-            .to_lowercase()
-            .chars()
-            .filter(|c| c.is_alphanumeric())
-            .take(3)
-            .collect::<String>();
+        let norm = archivis_core::models::normalize_title(title);
+        let prefix: String = norm.chars().take(3).collect();
 
         if prefix.len() < 3 {
             return Ok(Vec::new());
         }
-
-        let like_pattern = format!("{prefix}%");
 
         let rows = sqlx::query_as!(
             DuplicateCandidateRow,
@@ -654,10 +652,10 @@ impl BookRepository {
                FROM books b
                LEFT JOIN book_authors ba ON ba.book_id = b.id
                LEFT JOIN authors a ON a.id = ba.author_id
-               WHERE LOWER(SUBSTR(b.sort_title, 1, 3)) LIKE ?
+               WHERE SUBSTR(b.norm_title, 1, 3) = ?
                GROUP BY b.id
                LIMIT ?"#,
-            like_pattern,
+            prefix,
             limit,
         )
         .fetch_all(pool)
@@ -698,6 +696,35 @@ impl BookRepository {
                 Ok(BookWithAuthors { book, author_names })
             })
             .collect()
+    }
+
+    /// Backfill `norm_title` for rows that still have the empty default.
+    ///
+    /// Called after migrations; idempotent (no-op when all rows are filled).
+    pub async fn backfill_norm_titles(pool: &SqlitePool) -> Result<(), DbError> {
+        let rows: Vec<(String, String)> =
+            sqlx::query_as("SELECT id, title FROM books WHERE norm_title = ''")
+                .fetch_all(pool)
+                .await
+                .map_err(|e| DbError::Query(e.to_string()))?;
+
+        if rows.is_empty() {
+            return Ok(());
+        }
+
+        tracing::info!(count = rows.len(), "backfilling norm_title");
+
+        for (id, title) in &rows {
+            let norm = archivis_core::models::normalize_title(title);
+            sqlx::query("UPDATE books SET norm_title = ? WHERE id = ?")
+                .bind(&norm)
+                .bind(id)
+                .execute(pool)
+                .await
+                .map_err(|e| DbError::Query(e.to_string()))?;
+        }
+
+        Ok(())
     }
 
     /// List books that need identification (below confidence threshold).
