@@ -6,7 +6,12 @@
 	import * as AlertDialog from '$lib/components/ui/alert-dialog/index.js';
 	import * as Select from '$lib/components/ui/select/index.js';
 	import CoverImage from './CoverImage.svelte';
-	import { placeholderHue, formatFileSize, formatIdentifierType } from '$lib/utils.js';
+	import {
+		placeholderHue,
+		formatFileSize,
+		formatIdentifierType,
+		formatFormatLabel
+	} from '$lib/utils.js';
 
 	interface Props {
 		link: DuplicateLinkResponse;
@@ -181,10 +186,10 @@
 			<!-- Side-by-side comparison -->
 			<div class="grid gap-4 md:grid-cols-2">
 				<!-- Book A column -->
-				{@render bookColumn(bookA, bookB)}
+				{@render bookColumn(bookA, bookB, 'left')}
 
 				<!-- Book B column -->
-				{@render bookColumn(bookB, bookA)}
+				{@render bookColumn(bookB, bookA, 'right')}
 			</div>
 
 			{#if mergeError}
@@ -236,8 +241,10 @@
 			<AlertDialog.Title>Confirm Merge</AlertDialog.Title>
 			<AlertDialog.Description>
 				{#if secondaryBook}
-					<strong>{secondaryBook.title}</strong> will be deleted. All its files will be
-					moved to <strong>{primaryBook?.title}</strong>. This action cannot be undone.
+					The catalog entry for <strong>{secondaryBook.title}</strong> will be merged
+					into <strong>{primaryBook?.title}</strong>. All files, identifiers, authors,
+					series, and tags from both books will be combined under the primary entry. No
+					files will be deleted. This action cannot be undone.
 				{/if}
 			</AlertDialog.Description>
 		</AlertDialog.Header>
@@ -254,11 +261,16 @@
 	</AlertDialog.Content>
 </AlertDialog.Root>
 
-{#snippet bookColumn(book: BookDetail, otherBook: BookDetail)}
+{#snippet bookColumn(book: BookDetail, otherBook: BookDetail, position: 'left' | 'right')}
+	{@const isPrimary = primaryId === book.id}
+	{@const facesRight = position === 'left'}
+	<!-- svelte-ignore a11y_click_events_have_key_events -->
+	<!-- svelte-ignore a11y_no_static_element_interactions -->
 	<div
-		class="rounded-lg border p-4 {primaryId === book.id
-			? 'border-primary bg-primary/5'
-			: 'border-border'}"
+		class="cursor-pointer overflow-visible rounded-lg p-4 {isPrimary
+			? 'relative z-10 bg-primary/[0.03]'
+			: ''}"
+		onclick={() => (primaryId = book.id)}
 	>
 		<!-- Primary selection -->
 		<div class="mb-3 flex items-center justify-between">
@@ -273,9 +285,9 @@
 				/>
 				<span class="font-medium">
 					{#if primaryId === book.id}
-						Primary (keep)
+						Primary
 					{:else}
-						Secondary (delete)
+						Secondary
 					{/if}
 				</span>
 			</label>
@@ -287,9 +299,9 @@
 				</span>
 			{:else}
 				<span
-					class="inline-flex rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-800 dark:bg-red-900/30 dark:text-red-400"
+					class="inline-flex rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-800 dark:bg-blue-900/30 dark:text-blue-400"
 				>
-					Delete
+					Merge
 				</span>
 			{/if}
 		</div>
@@ -415,29 +427,85 @@
 				</div>
 			{/if}
 
-			<div>
-				<dt class="text-xs font-medium text-muted-foreground">Files</dt>
-				<dd>
-					{#if book.files.length > 0}
-						<div class="mt-0.5 space-y-0.5">
-							{#each book.files as file (file.id)}
-								<div class="flex items-center gap-1.5 text-xs">
-									<span
-										class="inline-flex rounded bg-primary/10 px-1 py-0.5 text-[10px] font-semibold text-primary"
-									>
-										{file.format.toUpperCase()}
-									</span>
-									<span class="text-muted-foreground">
-										{formatFileSize(file.file_size)}
-									</span>
+			<!-- Files — puzzle-piece visualization -->
+			{#if book.files.length > 0 || otherBook.files.length > 0}
+				<div>
+					<dd>
+						{#if isPrimary}
+							<!-- Primary: unified puzzle block — extends across gap to meet secondary -->
+							{@const hasIncoming = otherBook.files.length > 0}
+							<div class="mt-1 text-xs">
+								<div
+									class="rounded-lg border border-sky-500/30 bg-sky-500/15 px-2 py-1.5 dark:border-sky-400/30 dark:bg-sky-400/15 {hasIncoming
+										? facesRight
+											? 'md:mr-[-2rem] md:rounded-r-none md:border-r-0'
+											: 'md:ml-[-2rem] md:rounded-l-none md:border-l-0'
+										: ''}"
+								>
+									<div class="space-y-1">
+										{#each book.files as file (file.id)}
+											<div class="flex items-center gap-1.5">
+												<span
+													class="inline-flex rounded bg-sky-600/20 px-1 py-0.5 text-[10px] font-semibold text-sky-700 dark:bg-sky-400/20 dark:text-sky-300"
+												>
+													{formatFormatLabel(file.format, file.format_version)}
+												</span>
+												<span class="text-muted-foreground">
+													{formatFileSize(file.file_size)}
+												</span>
+											</div>
+										{/each}
+									</div>
+									{#if hasIncoming}
+										<div class="mt-1.5 border-t border-sky-500/20 pt-1.5 dark:border-sky-400/20">
+											<div class="space-y-1">
+												{#each otherBook.files as file (file.id)}
+													<div class="flex items-center gap-1.5 opacity-50">
+														<span
+															class="inline-flex rounded bg-sky-600/20 px-1 py-0.5 text-[10px] font-semibold text-sky-700 dark:bg-sky-400/20 dark:text-sky-300"
+														>
+															{formatFormatLabel(file.format, file.format_version)}
+														</span>
+														<span class="text-muted-foreground">
+															{formatFileSize(file.file_size)}
+														</span>
+													</div>
+												{/each}
+											</div>
+										</div>
+									{/if}
 								</div>
-							{/each}
-						</div>
-					{:else}
-						<span class="text-muted-foreground">--</span>
-					{/if}
-				</dd>
-			</div>
+							</div>
+						{:else}
+							<!-- Secondary: files being merged away, extends toward primary -->
+							{#if book.files.length > 0}
+								<div
+									class="mt-1 rounded-lg border border-sky-500/30 bg-sky-500/15 px-2 py-1.5 text-xs dark:border-sky-400/30 dark:bg-sky-400/15 {facesRight
+										? 'md:mr-[-1rem] md:rounded-r-none md:border-r-0'
+										: 'md:ml-[-1rem] md:rounded-l-none md:border-l-0'}"
+								>
+									<div class="space-y-1">
+										{#each book.files as file (file.id)}
+											<div class="flex items-center gap-1.5 opacity-50">
+												<span
+													class="inline-flex rounded bg-sky-600/20 px-1 py-0.5 text-[10px] font-semibold text-sky-700 dark:bg-sky-400/20 dark:text-sky-300"
+												>
+													{formatFormatLabel(file.format, file.format_version)}
+												</span>
+												<span class="text-muted-foreground">
+													{formatFileSize(file.file_size)}
+												</span>
+											</div>
+										{/each}
+									</div>
+								</div>
+							{:else}
+								<span class="mt-0.5 text-muted-foreground">--</span>
+							{/if}
+						{/if}
+					</dd>
+				</div>
+			{/if}
 
 			<div class={diffClass(book.metadata_status, otherBook.metadata_status)}>
 				<dt class="text-xs font-medium text-muted-foreground">Status</dt>
