@@ -15,6 +15,7 @@ pub mod state;
 pub mod stats;
 pub mod tags;
 pub mod tasks;
+pub mod watcher;
 
 use axum::Router;
 use tower_http::cors::CorsLayer;
@@ -133,6 +134,14 @@ mod openapi {
             super::settings::handlers::update_settings,
             // Stats
             super::stats::handlers::get_stats,
+            // Watched Directories
+            super::watcher::handlers::list_watched,
+            super::watcher::handlers::add_watched,
+            super::watcher::handlers::get_watched,
+            super::watcher::handlers::update_watched,
+            super::watcher::handlers::remove_watched,
+            super::watcher::handlers::trigger_scan,
+            super::watcher::handlers::detect_fs,
         ),
         components(schemas(
             // Auth
@@ -231,6 +240,13 @@ mod openapi {
             super::settings::service::ConfigSource,
             super::settings::service::ConfigOverride,
             super::settings::registry::SettingType,
+            // Watched Directories
+            super::watcher::types::AddWatchedDirectoryRequest,
+            super::watcher::types::UpdateWatchedDirectoryRequest,
+            super::watcher::types::WatchedDirectoryResponse,
+            super::watcher::types::FsDetectionResponse,
+            super::watcher::types::DetectFsRequest,
+            super::watcher::types::ScanTriggeredResponse,
             // Stats
             super::stats::types::StatsResponse,
             super::stats::types::LibraryStats,
@@ -259,6 +275,7 @@ mod openapi {
             (name = "filesystem", description = "Server filesystem browsing"),
             (name = "settings", description = "Instance settings management"),
             (name = "stats", description = "Library and usage statistics"),
+            (name = "watched-directories", description = "Watched directory management"),
         )
     )]
     pub struct ApiDoc;
@@ -285,7 +302,8 @@ pub fn build_router(state: AppState) -> Router {
         .nest("/duplicates", duplicates::router())
         .nest("/filesystem", filesystem::router())
         .nest("/settings", settings::router())
-        .nest("/stats", stats::router());
+        .nest("/stats", stats::router())
+        .nest("/watched-directories", watcher::router());
 
     let mut router = Router::new()
         .merge(SwaggerUi::new("/api/docs").url("/api/openapi.json", openapi::ApiDoc::openapi()))

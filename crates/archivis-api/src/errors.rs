@@ -32,6 +32,10 @@ pub enum ApiError {
     /// An unexpected internal error.
     #[error("internal server error")]
     Internal(String),
+
+    /// A required service is not available (e.g. watcher disabled).
+    #[error("service unavailable: {0}")]
+    ServiceUnavailable(String),
 }
 
 impl IntoResponse for ApiError {
@@ -48,6 +52,7 @@ impl IntoResponse for ApiError {
                     "internal server error".into(),
                 )
             }
+            Self::ServiceUnavailable(msg) => (StatusCode::SERVICE_UNAVAILABLE, msg.clone()),
             Self::Core(err) => map_core_error(err),
         };
 
