@@ -15,6 +15,7 @@ mod tag;
 mod task;
 mod types;
 mod user;
+mod watched_directory;
 
 pub use author::AuthorRepository;
 pub use book::{
@@ -38,3 +39,4 @@ pub use tag::TagRepository;
 pub use task::{ChildTaskSummary, TaskRepository};
 pub use types::{BookFilter, PaginatedResult, PaginationParams, SortOrder};
 pub use user::UserRepository;
+pub use watched_directory::WatchedDirectoryRepository;

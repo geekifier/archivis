@@ -1,11 +1,12 @@
 use archivis_core::models::{
     Author, Book, BookFile, BookFormat, Bookmark, Identifier, IdentifierType, MetadataSource,
-    MetadataStatus, Publisher, Series, Tag, User, UserRole,
+    MetadataStatus, Publisher, Series, Tag, User, UserRole, WatchMode,
 };
 use archivis_db::{
     create_pool, run_migrations, AuthorRepository, BookFileRepository, BookFilter, BookRepository,
     BookmarkRepository, DbPool, IdentifierRepository, PaginationParams, ReadingProgressRepository,
     SeriesRepository, SortOrder, StatsRepository, TagRepository, UserRepository,
+    WatchedDirectoryRepository,
 };
 use tempfile::TempDir;
 use uuid::Uuid;
@@ -1317,4 +1318,243 @@ async fn bookmark_update_label() {
 
     assert_eq!(bookmarks.len(), 1);
     assert_eq!(bookmarks[0].label.as_deref(), Some("Updated label"));
+}
+
+// ── WatchedDirectoryRepository ─────────────────────────────────
+
+#[tokio::test]
+async fn watched_directory_create_and_get() {
+    let (pool, _dir) = test_pool().await;
+
+    let wd = WatchedDirectoryRepository::create(&pool, "/mnt/books", WatchMode::Poll, None)
+        .await
+        .unwrap();
+
+    assert_eq!(wd.path, "/mnt/books");
+    assert_eq!(wd.watch_mode, WatchMode::Poll);
+    assert!(wd.poll_interval_secs.is_none());
+    assert!(wd.enabled);
+    assert!(wd.last_error.is_none());
+
+    let fetched = WatchedDirectoryRepository::get_by_id(&pool, wd.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(fetched.id, wd.id);
+    assert_eq!(fetched.path, "/mnt/books");
+}
+
+#[tokio::test]
+async fn watched_directory_create_with_native_mode() {
+    let (pool, _dir) = test_pool().await;
+
+    let wd =
+        WatchedDirectoryRepository::create(&pool, "/home/user/books", WatchMode::Native, Some(60))
+            .await
+            .unwrap();
+
+    assert_eq!(wd.watch_mode, WatchMode::Native);
+    assert_eq!(wd.poll_interval_secs, Some(60));
+}
+
+#[tokio::test]
+async fn watched_directory_duplicate_path_rejected() {
+    let (pool, _dir) = test_pool().await;
+
+    WatchedDirectoryRepository::create(&pool, "/mnt/books", WatchMode::Poll, None)
+        .await
+        .unwrap();
+
+    let result =
+        WatchedDirectoryRepository::create(&pool, "/mnt/books", WatchMode::Native, None).await;
+
+    assert!(result.is_err());
+    let err = result.unwrap_err().to_string();
+    assert!(err.contains("already exists"), "unexpected error: {err}");
+}
+
+#[tokio::test]
+async fn watched_directory_list_all() {
+    let (pool, _dir) = test_pool().await;
+
+    WatchedDirectoryRepository::create(&pool, "/mnt/a", WatchMode::Poll, None)
+        .await
+        .unwrap();
+    WatchedDirectoryRepository::create(&pool, "/mnt/b", WatchMode::Native, None)
+        .await
+        .unwrap();
+
+    let all = WatchedDirectoryRepository::list_all(&pool).await.unwrap();
+    assert_eq!(all.len(), 2);
+    // Ordered by path
+    assert_eq!(all[0].path, "/mnt/a");
+    assert_eq!(all[1].path, "/mnt/b");
+}
+
+#[tokio::test]
+async fn watched_directory_list_enabled() {
+    let (pool, _dir) = test_pool().await;
+
+    let wd1 = WatchedDirectoryRepository::create(&pool, "/mnt/a", WatchMode::Poll, None)
+        .await
+        .unwrap();
+    WatchedDirectoryRepository::create(&pool, "/mnt/b", WatchMode::Poll, None)
+        .await
+        .unwrap();
+
+    // Disable the first one
+    WatchedDirectoryRepository::update(&pool, wd1.id, None, None, Some(false))
+        .await
+        .unwrap();
+
+    let enabled = WatchedDirectoryRepository::list_enabled(&pool)
+        .await
+        .unwrap();
+    assert_eq!(enabled.len(), 1);
+    assert_eq!(enabled[0].path, "/mnt/b");
+}
+
+#[tokio::test]
+async fn watched_directory_update() {
+    let (pool, _dir) = test_pool().await;
+
+    let wd = WatchedDirectoryRepository::create(&pool, "/mnt/books", WatchMode::Poll, None)
+        .await
+        .unwrap();
+
+    let updated = WatchedDirectoryRepository::update(
+        &pool,
+        wd.id,
+        Some(WatchMode::Native),
+        Some(Some(45)),
+        Some(false),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(updated.watch_mode, WatchMode::Native);
+    assert_eq!(updated.poll_interval_secs, Some(45));
+    assert!(!updated.enabled);
+}
+
+#[tokio::test]
+async fn watched_directory_update_partial() {
+    let (pool, _dir) = test_pool().await;
+
+    let wd = WatchedDirectoryRepository::create(&pool, "/mnt/books", WatchMode::Poll, Some(30))
+        .await
+        .unwrap();
+
+    // Only update watch_mode, leave others unchanged
+    let updated =
+        WatchedDirectoryRepository::update(&pool, wd.id, Some(WatchMode::Native), None, None)
+            .await
+            .unwrap();
+
+    assert_eq!(updated.watch_mode, WatchMode::Native);
+    assert_eq!(updated.poll_interval_secs, Some(30)); // unchanged
+    assert!(updated.enabled); // unchanged
+}
+
+#[tokio::test]
+async fn watched_directory_update_clear_poll_interval() {
+    let (pool, _dir) = test_pool().await;
+
+    let wd = WatchedDirectoryRepository::create(&pool, "/mnt/books", WatchMode::Poll, Some(30))
+        .await
+        .unwrap();
+    assert_eq!(wd.poll_interval_secs, Some(30));
+
+    // Set poll_interval_secs to None (use global default)
+    let updated = WatchedDirectoryRepository::update(&pool, wd.id, None, Some(None), None)
+        .await
+        .unwrap();
+
+    assert!(updated.poll_interval_secs.is_none());
+}
+
+#[tokio::test]
+async fn watched_directory_set_last_error() {
+    let (pool, _dir) = test_pool().await;
+
+    let wd = WatchedDirectoryRepository::create(&pool, "/mnt/books", WatchMode::Poll, None)
+        .await
+        .unwrap();
+
+    // Set error
+    WatchedDirectoryRepository::set_last_error(&pool, wd.id, Some("permission denied"))
+        .await
+        .unwrap();
+
+    let fetched = WatchedDirectoryRepository::get_by_id(&pool, wd.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(fetched.last_error.as_deref(), Some("permission denied"));
+
+    // Clear error
+    WatchedDirectoryRepository::set_last_error(&pool, wd.id, None)
+        .await
+        .unwrap();
+
+    let fetched = WatchedDirectoryRepository::get_by_id(&pool, wd.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(fetched.last_error.is_none());
+}
+
+#[tokio::test]
+async fn watched_directory_delete() {
+    let (pool, _dir) = test_pool().await;
+
+    let wd = WatchedDirectoryRepository::create(&pool, "/mnt/books", WatchMode::Poll, None)
+        .await
+        .unwrap();
+
+    WatchedDirectoryRepository::delete(&pool, wd.id)
+        .await
+        .unwrap();
+
+    let fetched = WatchedDirectoryRepository::get_by_id(&pool, wd.id)
+        .await
+        .unwrap();
+    assert!(fetched.is_none());
+}
+
+#[tokio::test]
+async fn watched_directory_delete_not_found() {
+    let (pool, _dir) = test_pool().await;
+    let result = WatchedDirectoryRepository::delete(&pool, Uuid::new_v4()).await;
+    assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn watched_directory_exists_by_path() {
+    let (pool, _dir) = test_pool().await;
+
+    assert!(
+        !WatchedDirectoryRepository::exists_by_path(&pool, "/mnt/books")
+            .await
+            .unwrap()
+    );
+
+    WatchedDirectoryRepository::create(&pool, "/mnt/books", WatchMode::Poll, None)
+        .await
+        .unwrap();
+
+    assert!(
+        WatchedDirectoryRepository::exists_by_path(&pool, "/mnt/books")
+            .await
+            .unwrap()
+    );
+}
+
+#[tokio::test]
+async fn watched_directory_get_not_found() {
+    let (pool, _dir) = test_pool().await;
+    let result = WatchedDirectoryRepository::get_by_id(&pool, Uuid::new_v4())
+        .await
+        .unwrap();
+    assert!(result.is_none());
 }

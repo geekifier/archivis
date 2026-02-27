@@ -226,6 +226,18 @@ static SETTINGS: &[SettingMeta] = &[
         sensitive: false,
         options: None,
     },
+    // Watcher settings (bootstrap scope — boot-only enable/disable)
+    SettingMeta {
+        key: "watcher.enabled",
+        label: "Filesystem Watcher",
+        description: "Enable the filesystem watcher subsystem. All other watcher settings are managed at runtime via the API/UI.",
+        section: "watcher",
+        value_type: SettingType::Bool,
+        scope: SettingScope::Bootstrap,
+        requires_restart: true,
+        sensitive: false,
+        options: None,
+    },
     // ISBN Scan settings (runtime scope)
     SettingMeta {
         key: "isbn_scan.scan_on_import",

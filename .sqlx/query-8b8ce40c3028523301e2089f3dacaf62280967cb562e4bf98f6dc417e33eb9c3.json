@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO watched_directories (id, path, watch_mode, poll_interval_secs) VALUES (?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "8b8ce40c3028523301e2089f3dacaf62280967cb562e4bf98f6dc417e33eb9c3"
+}

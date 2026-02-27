@@ -91,6 +91,10 @@ async-trait = "0.1"
 url = "2"
 futures = "0.3"
 
+# Filesystem watching
+notify = "8.2"
+notify-debouncer-full = "0.7"
+
 # Testing
 tempfile = "3"
 

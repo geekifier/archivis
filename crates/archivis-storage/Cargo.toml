@@ -11,10 +11,15 @@ workspace = true
 [dependencies]
 archivis-core = { workspace = true }
 chrono = { workspace = true }
+notify = { workspace = true }
+notify-debouncer-full = { workspace = true }
 sanitise-file-name = "1.0.0"
 sha2 = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+nix = { version = "0.29", features = ["fs"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }

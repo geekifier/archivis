@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE watched_directories SET last_error = ? WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "a78be09b046637eb4686c0ef204e6c9d127ac4bca6df6526e7028893b46a8ee1"
+}

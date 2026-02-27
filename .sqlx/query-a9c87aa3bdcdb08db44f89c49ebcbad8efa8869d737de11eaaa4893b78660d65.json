@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM watched_directories WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "a9c87aa3bdcdb08db44f89c49ebcbad8efa8869d737de11eaaa4893b78660d65"
+}

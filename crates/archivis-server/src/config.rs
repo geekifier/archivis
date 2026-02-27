@@ -78,6 +78,9 @@ pub struct AppConfig {
     /// ISBN content-scan configuration.
     #[serde(default)]
     pub isbn_scan: IsbnScanConfig,
+    /// Filesystem watcher configuration.
+    #[serde(default)]
+    pub watcher: WatcherConfig,
 }
 
 /// Configuration for metadata provider lookups.
@@ -156,6 +159,16 @@ impl Default for HardcoverConfig {
     }
 }
 
+/// Configuration for the filesystem watcher subsystem.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(default)]
+pub struct WatcherConfig {
+    /// Master enable/disable for the filesystem watcher subsystem.
+    /// Boot-only: controls whether the watcher infrastructure is initialized.
+    /// All other watcher settings are managed at runtime via DB/API/UI.
+    pub enabled: bool,
+}
+
 /// Configuration for ISBN content-scan feature.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
@@ -205,6 +218,7 @@ impl Default for AppConfig {
             log_level: "info".to_owned(),
             metadata: MetadataConfig::default(),
             isbn_scan: IsbnScanConfig::default(),
+            watcher: WatcherConfig::default(),
         }
     }
 }
@@ -377,6 +391,7 @@ pub fn detect_env_overrides(cli: &Cli) -> HashMap<String, ConfigOverride> {
         ("isbn_scan.fb2_sections", "ARCHIVIS_ISBN_SCAN__FB2_SECTIONS"),
         ("isbn_scan.txt_bytes", "ARCHIVIS_ISBN_SCAN__TXT_BYTES"),
         ("isbn_scan.mobi_bytes", "ARCHIVIS_ISBN_SCAN__MOBI_BYTES"),
+        ("watcher.enabled", "ARCHIVIS_WATCHER__ENABLED"),
     ];
 
     for &(key, env_var) in env_mappings {
@@ -619,6 +634,11 @@ fn apply_setting_to_config(config: &mut AppConfig, key: &str, value: &serde_json
                 if let Ok(v) = usize::try_from(n) {
                     config.isbn_scan.mobi_bytes = v;
                 }
+            }
+        }
+        "watcher.enabled" => {
+            if let Some(b) = value.as_bool() {
+                config.watcher.enabled = b;
             }
         }
         _ => {}

@@ -179,6 +179,7 @@ mod tests {
             "tags",
             "tasks",
             "users",
+            "watched_directories",
         ];
 
         assert_eq!(tables, expected);

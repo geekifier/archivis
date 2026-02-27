@@ -11,6 +11,7 @@ mod series;
 mod tag;
 mod task;
 mod user;
+mod watched_directory;
 
 pub use author::Author;
 pub use book::Book;
@@ -25,3 +26,4 @@ pub use series::Series;
 pub use tag::Tag;
 pub use task::{Task, TaskProgress, TaskStatus, TaskType};
 pub use user::{Session, User, UserRole};
+pub use watched_directory::{WatchMode, WatchedDirectory};

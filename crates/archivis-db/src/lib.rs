@@ -9,5 +9,5 @@ pub use repositories::{
     DuplicateRepository, FormatFileStat, IdentifierRepository, LibraryOverview, PaginatedResult,
     PaginationParams, PublisherRepository, ReadingProgressRepository, SeriesRepository,
     SessionRepository, SettingRepository, SortOrder, StatsRepository, TagRepository, TaskOverview,
-    TaskRepository, UserRepository,
+    TaskRepository, UserRepository, WatchedDirectoryRepository,
 };

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE watched_directories SET\n                watch_mode = COALESCE(?, watch_mode),\n                poll_interval_secs = CASE WHEN ? THEN ? ELSE poll_interval_secs END,\n                enabled = COALESCE(?, enabled)\n            WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "de3384178cd30af0dbc7dd883c35aac1138dce4a2dfaad4a68558affe6fad1a4"
+}
