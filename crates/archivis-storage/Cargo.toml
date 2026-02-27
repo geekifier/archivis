@@ -14,6 +14,7 @@ chrono = { workspace = true }
 notify = { workspace = true }
 notify-debouncer-full = { workspace = true }
 sanitise-file-name = "1.0.0"
+serde = { workspace = true }
 sha2 = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
@@ -22,4 +23,5 @@ tracing = { workspace = true }
 nix = { version = "0.29", features = ["fs"] }
 
 [dev-dependencies]
+serde_json = { workspace = true }
 tempfile = { workspace = true }

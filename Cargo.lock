@@ -236,6 +236,8 @@ dependencies = [
  "notify",
  "notify-debouncer-full",
  "sanitise-file-name",
+ "serde",
+ "serde_json",
  "sha2",
  "tempfile",
  "tokio",
