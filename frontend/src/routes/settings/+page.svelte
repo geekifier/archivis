@@ -151,6 +151,13 @@
 		editedValues = { ...editedValues, [key]: null };
 	}
 
+	function revertField(key: string) {
+		// Discard pending edit without resetting to default
+		editedValues = Object.fromEntries(
+			Object.entries(editedValues).filter(([k]) => k !== key)
+		);
+	}
+
 	function cancelChanges() {
 		editedValues = {};
 	}
@@ -368,6 +375,12 @@
 												>
 													{entry.override.source}
 												</span>
+											{:else if hasPendingEdit(entry.key)}
+												<span
+													class="inline-flex items-center rounded-full bg-orange-500/10 px-2 py-0.5 text-xs font-medium text-orange-600 dark:text-orange-400"
+												>
+													unsaved
+												</span>
 											{:else if entry.source === 'database'}
 												<span
 													class="inline-flex items-center rounded-full bg-blue-500/10 px-2 py-0.5 text-xs font-medium text-blue-600 dark:text-blue-400"
@@ -475,7 +488,29 @@
 											/>
 										{/if}
 
-										{#if entry.source === 'database'}
+										{#if hasPendingEdit(entry.key)}
+												<Button
+													variant="ghost"
+													size="icon-sm"
+													onclick={() => revertField(entry.key)}
+													aria-label="Undo change"
+													title="Undo change"
+												>
+												<svg
+													class="size-4"
+													xmlns="http://www.w3.org/2000/svg"
+													viewBox="0 0 24 24"
+													fill="none"
+													stroke="currentColor"
+													stroke-width="2"
+													stroke-linecap="round"
+													stroke-linejoin="round"
+												>
+													<path d="m9 14-4-4 4-4" />
+													<path d="M5 10h11a4 4 0 0 1 0 8h-1" />
+												</svg>
+											</Button>
+										{:else if entry.source === 'database'}
 												<Button
 													variant="ghost"
 													size="icon-sm"

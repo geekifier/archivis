@@ -166,6 +166,7 @@ async fn init_config_service(
 
     Arc::new(archivis_api::settings::service::ConfigService::new(
         effective_flat,
+        file_flat,
         configured_flat,
         configured_sources,
         env_overrides,

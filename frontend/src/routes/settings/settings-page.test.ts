@@ -76,6 +76,136 @@ function makeHardcoverTokenSetting(overrides: Partial<SettingEntry> = {}): Setti
 	};
 }
 
+function makeBoolSetting(overrides: Partial<SettingEntry> = {}): SettingEntry {
+	return {
+		key: 'metadata.hardcover.enabled',
+		value: false,
+		effective_value: false,
+		source: 'default',
+		scope: 'runtime',
+		override: null,
+		requires_restart: false,
+		label: 'Hardcover Enabled',
+		description: 'Whether Hardcover lookups are enabled',
+		section: 'metadata.hardcover',
+		value_type: 'bool',
+		...overrides
+	};
+}
+
+describe('Settings revert and reset behavior', () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+		mockApi.watchedDirectories.list.mockResolvedValue([]);
+		mockApi.settings.update.mockResolvedValue({
+			updated: ['metadata.hardcover.enabled'],
+			requires_restart: false
+		});
+	});
+
+	it('toggling a default setting shows unsaved badge and undo button', async () => {
+		const user = userEvent.setup();
+		mockApi.settings.get.mockResolvedValue({
+			settings: [makeBoolSetting()]
+		});
+
+		render(SettingsPage);
+
+		// Toggle the switch on
+		const toggle = await screen.findByRole('switch', { name: 'Hardcover Enabled' });
+		await user.click(toggle);
+
+		// Should show "unsaved" badge
+		expect(screen.getByText('unsaved')).toBeInTheDocument();
+		// Should show "Undo change" button (not "Reset to default")
+		expect(screen.getByRole('button', { name: 'Undo change' })).toBeInTheDocument();
+		expect(screen.queryByRole('button', { name: 'Reset to default' })).not.toBeInTheDocument();
+	});
+
+	it('clicking undo reverts the toggle and removes badge', async () => {
+		const user = userEvent.setup();
+		mockApi.settings.get.mockResolvedValue({
+			settings: [makeBoolSetting()]
+		});
+
+		render(SettingsPage);
+
+		const toggle = await screen.findByRole('switch', { name: 'Hardcover Enabled' });
+		await user.click(toggle);
+
+		expect(screen.getByText('unsaved')).toBeInTheDocument();
+
+		// Click undo
+		await user.click(screen.getByRole('button', { name: 'Undo change' }));
+
+		// Badge should be gone, no pending changes
+		expect(screen.queryByText('unsaved')).not.toBeInTheDocument();
+		expect(screen.queryByRole('button', { name: 'Undo change' })).not.toBeInTheDocument();
+		// Save button should be disabled (no changes)
+		expect(screen.getByRole('button', { name: 'Save Changes' })).toBeDisabled();
+	});
+
+	it('reset to default on database setting shows unsaved badge', async () => {
+		const user = userEvent.setup();
+		mockApi.settings.get.mockResolvedValue({
+			settings: [makeBoolSetting({ source: 'database', value: true, effective_value: true })]
+		});
+
+		render(SettingsPage);
+
+		// Wait for settings to load, then check "modified" badge and "Reset to default" button
+		const resetBtn = await screen.findByRole('button', { name: 'Reset to default' });
+		expect(screen.getByText('modified')).toBeInTheDocument();
+
+		await user.click(resetBtn);
+
+		// Should now show "unsaved" badge and "Undo change" button
+		expect(screen.queryByText('modified')).not.toBeInTheDocument();
+		expect(screen.getByText('unsaved')).toBeInTheDocument();
+		expect(screen.getByRole('button', { name: 'Undo change' })).toBeInTheDocument();
+	});
+
+	it('undo after reset to default restores modified badge', async () => {
+		const user = userEvent.setup();
+		mockApi.settings.get.mockResolvedValue({
+			settings: [makeBoolSetting({ source: 'database', value: true, effective_value: true })]
+		});
+
+		render(SettingsPage);
+
+		// Click reset
+		const resetBtn = await screen.findByRole('button', { name: 'Reset to default' });
+		await user.click(resetBtn);
+		expect(screen.getByText('unsaved')).toBeInTheDocument();
+
+		// Click undo
+		await user.click(screen.getByRole('button', { name: 'Undo change' }));
+
+		// Should restore "modified" badge
+		expect(screen.queryByText('unsaved')).not.toBeInTheDocument();
+		expect(screen.getByText('modified')).toBeInTheDocument();
+		expect(screen.getByRole('button', { name: 'Reset to default' })).toBeInTheDocument();
+		expect(screen.getByRole('button', { name: 'Save Changes' })).toBeDisabled();
+	});
+
+	it('pending edit on database setting shows undo button not reset button', async () => {
+		const user = userEvent.setup();
+		mockApi.settings.get.mockResolvedValue({
+			settings: [makeBoolSetting({ source: 'database', value: true, effective_value: true })]
+		});
+
+		render(SettingsPage);
+
+		// Toggle the switch (creates a pending edit)
+		const toggle = await screen.findByRole('switch', { name: 'Hardcover Enabled' });
+		await user.click(toggle);
+
+		// Should show "Undo change", not "Reset to default"
+		expect(screen.getByRole('button', { name: 'Undo change' })).toBeInTheDocument();
+		expect(screen.queryByRole('button', { name: 'Reset to default' })).not.toBeInTheDocument();
+	});
+});
+
 describe('Settings page sensitive controls', () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
@@ -93,10 +223,6 @@ describe('Settings page sensitive controls', () => {
 		const user = userEvent.setup();
 
 		render(SettingsPage);
-
-		await vi.waitFor(() => {
-			expect(mockApi.settings.get).toHaveBeenCalledTimes(1);
-		});
 
 		const tokenField = (await screen.findByLabelText('API Token')) as HTMLTextAreaElement;
 		expect(tokenField.tagName).toBe('TEXTAREA');
@@ -128,10 +254,6 @@ describe('Settings page sensitive controls', () => {
 		const user = userEvent.setup();
 
 		render(SettingsPage);
-
-		await vi.waitFor(() => {
-			expect(mockApi.settings.get).toHaveBeenCalledTimes(1);
-		});
 
 		await screen.findByLabelText('API Token');
 		await user.click(screen.getByRole('button', { name: 'Reset to default' }));

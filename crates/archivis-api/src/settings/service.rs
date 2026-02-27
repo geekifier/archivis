@@ -27,6 +27,8 @@ pub struct ConfigOverride {
 pub struct ConfigService {
     /// Effective config = final merged values the server is actually using.
     effective_config: HashMap<String, serde_json::Value>,
+    /// Pre-DB values (defaults + config file) — used to restore on reset.
+    baseline: HashMap<String, serde_json::Value>,
     /// Configured values: bootstrap keys from file/default, runtime keys from DB/default.
     configured: RwLock<HashMap<String, serde_json::Value>>,
     /// Per-key: where the configured value came from.
@@ -68,6 +70,7 @@ pub struct UpdateResult {
 impl ConfigService {
     pub fn new(
         effective_config: HashMap<String, serde_json::Value>,
+        baseline: HashMap<String, serde_json::Value>,
         configured: HashMap<String, serde_json::Value>,
         configured_sources: HashMap<String, ConfigSource>,
         overrides: HashMap<String, ConfigOverride>,
@@ -75,6 +78,7 @@ impl ConfigService {
     ) -> Self {
         Self {
             effective_config,
+            baseline,
             configured: RwLock::new(configured),
             configured_sources: RwLock::new(configured_sources),
             overrides,
@@ -213,6 +217,15 @@ impl ConfigService {
             .await
             .map_err(|e| format!("failed to delete setting: {e}"))?;
 
+        // Restore the configured value from baseline (defaults + config file).
+        let mut configured = self.configured.write().expect("configured lock poisoned");
+        if let Some(baseline_value) = self.baseline.get(key) {
+            configured.insert(key.to_string(), baseline_value.clone());
+        } else {
+            configured.remove(key);
+        }
+        drop(configured);
+
         // Remove from configured_sources so source display reverts.
         self.configured_sources
             .write()
@@ -220,5 +233,92 @@ impl ConfigService {
             .remove(key);
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const TEST_KEY: &str = "metadata.hardcover.enabled";
+
+    async fn test_service(
+        baseline: HashMap<String, serde_json::Value>,
+    ) -> (ConfigService, tempfile::TempDir) {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("test.db");
+        let db_pool = archivis_db::create_pool(&db_path).await.unwrap();
+        archivis_db::run_migrations(&db_pool).await.unwrap();
+
+        let configured = baseline.clone();
+        let svc = ConfigService::new(
+            HashMap::new(),
+            baseline,
+            configured,
+            HashMap::new(),
+            HashMap::new(),
+            db_pool,
+        );
+        (svc, tmp)
+    }
+
+    #[tokio::test]
+    async fn reset_restores_baseline_value() {
+        let mut baseline = HashMap::new();
+        baseline.insert(TEST_KEY.to_string(), serde_json::Value::Bool(false));
+
+        let (svc, _tmp) = test_service(baseline).await;
+
+        // Save a setting to DB (override to true)
+        let mut updates = HashMap::new();
+        updates.insert(TEST_KEY.to_string(), serde_json::Value::Bool(true));
+        svc.update(&updates).await.unwrap();
+
+        // Verify it was set to true with source Database
+        let entry = svc
+            .get_all_entries()
+            .into_iter()
+            .find(|e| e.key == TEST_KEY)
+            .unwrap();
+        assert_eq!(entry.value, serde_json::Value::Bool(true));
+        assert_eq!(entry.source, ConfigSource::Database);
+
+        // Reset (send null)
+        let mut reset = HashMap::new();
+        reset.insert(TEST_KEY.to_string(), serde_json::Value::Null);
+        svc.update(&reset).await.unwrap();
+
+        // Verify it reverted to baseline
+        let entry = svc
+            .get_all_entries()
+            .into_iter()
+            .find(|e| e.key == TEST_KEY)
+            .unwrap();
+        assert_eq!(entry.value, serde_json::Value::Bool(false));
+        assert_eq!(entry.source, ConfigSource::Default);
+    }
+
+    #[tokio::test]
+    async fn reset_without_baseline_returns_null() {
+        let (svc, _tmp) = test_service(HashMap::new()).await;
+
+        // Save a setting to DB
+        let mut updates = HashMap::new();
+        updates.insert(TEST_KEY.to_string(), serde_json::Value::Bool(true));
+        svc.update(&updates).await.unwrap();
+
+        // Reset
+        let mut reset = HashMap::new();
+        reset.insert(TEST_KEY.to_string(), serde_json::Value::Null);
+        svc.update(&reset).await.unwrap();
+
+        // Verify value is Null and source is Default
+        let entry = svc
+            .get_all_entries()
+            .into_iter()
+            .find(|e| e.key == TEST_KEY)
+            .unwrap();
+        assert_eq!(entry.value, serde_json::Value::Null);
+        assert_eq!(entry.source, ConfigSource::Default);
     }
 }
