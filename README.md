@@ -109,17 +109,17 @@ just dev
 
 ### Useful commands
 
-| Command               | Description                                        |
-| --------------------- | -------------------------------------------------- |
-| `just dev`            | Run backend + frontend dev servers                 |
-| `just dev-clean`      | Wipe + backend + frontend + create admin           |
-| `just dev-clean-seed` | Same as above + seed test data                     |
-| `just check`          | fmt + clippy + test + deny (run before pushing)    |
-| `just compile`        | Fast compile check (cargo check)                   |
-| `just test`           | Run all backend tests                              |
-| `just build-release`  | Production build                                   |
-| `just sqlx-prepare`   | Regenerate SQLx offline query cache                |
-| `just check-frontend` | Lint and typecheck frontend                        |
+| Command               | Description                                     |
+| --------------------- | ----------------------------------------------- |
+| `just dev`            | Run backend + frontend dev servers              |
+| `just dev-clean`      | Wipe + backend + frontend + create admin        |
+| `just dev-clean-seed` | Same as above + seed test data                  |
+| `just check`          | fmt + clippy + test + deny (run before pushing) |
+| `just compile`        | Fast compile check (cargo check)                |
+| `just test`           | Run all backend tests                           |
+| `just build-release`  | Production build                                |
+| `just sqlx-prepare`   | Regenerate SQLx offline query cache             |
+| `just check-frontend` | Lint and typecheck frontend                     |
 
 ### Docker development
 
@@ -142,6 +142,25 @@ Cargo workspace with crates under `crates/`:
 | `archivis-tasks`    | Background job system              |
 | `archivis-storage`  | File storage abstraction           |
 | `archivis-auth`     | Authentication                     |
+
+## Acknowledgements
+
+Archivis was made by possible by the Free Sofware community and hard work of many individuals, including, but not limited to:
+
+- [foliate-js](https://github.com/johnfactotum/foliate-js) - browser-based e-book rendering engine used by the in-app reader.
+- [Open Library](https://openlibrary.org/developers/api) - metadata and cover lookups.
+- [Hardcover API](https://hardcover.app/) - additional metadata lookups via GraphQL.
+- [SvelteKit](https://svelte.dev/docs/kit/introduction) and [Svelte](https://svelte.dev/) - frontend framework.
+- [Tailwind CSS](https://tailwindcss.com/) and [Bits UI](https://www.bits-ui.com/) - frontend styling and UI primitives.
+- [TanStack Table](https://tanstack.com/table/latest/docs/framework/svelte/svelte-table) - sortable/resizable table model for library list views.
+- [SQLite](https://www.sqlite.org/) - Thank you for being awesome, and staying true to your mission for 25+ years.
+
+- [Calibre](https://calibre-ebook.com/)
+- [Calibre-Web](https://github.com/janeczku/calibre-web)
+- [Global Grey Ebooks](https://www.globalgreyebooks.com/)
+- [libmobi](https://gitlab.com/pgaskin/libmobi)
+- [Project Gutenberg](https://www.gutenberg.org/)
+- [Standard eBooks](https://standardebooks.org/)
 
 ## License
 
