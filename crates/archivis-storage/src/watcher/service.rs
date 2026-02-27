@@ -41,12 +41,15 @@ pub struct WatcherRuntimeConfig {
 
 /// Internal state behind the `Arc<Mutex<>>` for `Send + Sync` safety.
 struct WatcherInner {
-    /// Debouncer for paths using native OS events.
-    native_debouncer: Debouncer<notify::RecommendedWatcher, RecommendedCache>,
-    /// Debouncer for paths using polling.
-    poll_debouncer: Debouncer<notify::PollWatcher, NoCache>,
+    /// Debouncer for paths using native OS events. Wrapped in `Option` so
+    /// `shutdown()` can drop it immediately to release OS resources.
+    native_debouncer: Option<Debouncer<notify::RecommendedWatcher, RecommendedCache>>,
+    /// Debouncer for paths using polling. Wrapped in `Option` for the same reason.
+    poll_debouncer: Option<Debouncer<notify::PollWatcher, NoCache>>,
     /// Set of currently-watched paths and their assigned backend.
     watched_paths: HashSet<PathBuf>,
+    /// Tracks which paths were assigned to the native backend (vs poll).
+    native_paths: HashSet<PathBuf>,
     /// Runtime configuration (debounce window, default poll interval).
     config: WatcherRuntimeConfig,
 }
@@ -108,9 +111,10 @@ impl WatcherService {
 
         Ok(Self {
             inner: Arc::new(Mutex::new(WatcherInner {
-                native_debouncer,
-                poll_debouncer,
+                native_debouncer: Some(native_debouncer),
+                poll_debouncer: Some(poll_debouncer),
                 watched_paths: HashSet::new(),
+                native_paths: HashSet::new(),
                 config,
             })),
             event_rx: Arc::new(Mutex::new(Some(event_rx))),
@@ -140,37 +144,91 @@ impl WatcherService {
 
         match directory.watch_mode {
             WatchMode::Native => {
-                inner
-                    .native_debouncer
-                    .watch(&path, RecursiveMode::Recursive)
-                    .map_err(|e| {
-                        StorageError::Watcher(format!(
-                            "failed to watch {} with native events: {e}",
-                            path.display()
-                        ))
-                    })?;
-                info!(path = %directory.path, "watching with native events");
+                let native = inner.native_debouncer.as_mut().ok_or_else(|| {
+                    StorageError::Watcher("watcher service has been shut down".to_owned())
+                })?;
+
+                match native.watch(&path, RecursiveMode::Recursive) {
+                    Ok(()) => {
+                        info!(path = %directory.path, mode = "native", "watching directory");
+                        inner.native_paths.insert(path.clone());
+                    }
+                    Err(e) => {
+                        let err_str = e.to_string();
+
+                        // Check for inotify watch limit exhaustion or permission errors
+                        // that warrant a fallback to polling mode.
+                        if is_inotify_limit_error(&err_str) {
+                            error!(
+                                path = %directory.path,
+                                "inotify watch limit reached — either increase the limit \
+                                 (`sysctl fs.inotify.max_user_watches=524288`) or switch this \
+                                 path to polling mode; falling back to polling"
+                            );
+
+                            // Attempt fallback to poll mode for this path.
+                            let poll = inner.poll_debouncer.as_mut().ok_or_else(|| {
+                                StorageError::Watcher(
+                                    "watcher service has been shut down".to_owned(),
+                                )
+                            })?;
+
+                            poll.watch(&path, RecursiveMode::Recursive).map_err(|pe| {
+                                StorageError::Watcher(format!(
+                                    "failed to watch {} with polling fallback after inotify \
+                                     limit: {pe}",
+                                    path.display()
+                                ))
+                            })?;
+
+                            info!(
+                                path = %directory.path,
+                                mode = "poll",
+                                "watching directory (inotify fallback)"
+                            );
+                            // Note: not adding to native_paths since we fell back to poll.
+                        } else if is_permission_error(&err_str) {
+                            warn!(
+                                path = %directory.path,
+                                error = %e,
+                                "permission denied watching directory, skipping"
+                            );
+                            return Err(StorageError::Watcher(format!(
+                                "failed to watch {} with native events: {e}",
+                                path.display()
+                            )));
+                        } else {
+                            return Err(StorageError::Watcher(format!(
+                                "failed to watch {} with native events: {e}",
+                                path.display()
+                            )));
+                        }
+                    }
+                }
             }
             WatchMode::Poll => {
                 let interval = directory
                     .poll_interval_secs
                     .map_or(inner.config.default_poll_interval_secs, i64::unsigned_abs);
+
+                let poll = inner.poll_debouncer.as_mut().ok_or_else(|| {
+                    StorageError::Watcher("watcher service has been shut down".to_owned())
+                })?;
+
                 // Note: notify's PollWatcher uses a single global poll interval
                 // configured at creation time. Per-directory intervals would require
                 // separate PollWatcher instances (future enhancement).
-                inner
-                    .poll_debouncer
-                    .watch(&path, RecursiveMode::Recursive)
-                    .map_err(|e| {
-                        StorageError::Watcher(format!(
-                            "failed to watch {} with polling: {e}",
-                            path.display()
-                        ))
-                    })?;
+                poll.watch(&path, RecursiveMode::Recursive).map_err(|e| {
+                    StorageError::Watcher(format!(
+                        "failed to watch {} with polling: {e}",
+                        path.display()
+                    ))
+                })?;
                 info!(
                     path = %directory.path,
+                    mode = "poll",
                     interval_secs = interval,
-                    "watching with polling"
+                    "watching directory"
                 );
             }
         }
@@ -192,8 +250,16 @@ impl WatcherService {
         // Try both debouncers — only one will have the path registered.
         // `unwatch` returns an error if the path isn't watched by that watcher,
         // which is expected for the "wrong" backend.
-        let native_result = inner.native_debouncer.unwatch(path);
-        let poll_result = inner.poll_debouncer.unwatch(path);
+        let native_result = inner
+            .native_debouncer
+            .as_mut()
+            .map_or(Ok(()), |d| d.unwatch(path));
+        let poll_result = inner
+            .poll_debouncer
+            .as_mut()
+            .map_or(Ok(()), |d| d.unwatch(path));
+
+        inner.native_paths.remove(path);
         drop(inner);
 
         if native_result.is_err() && poll_result.is_err() {
@@ -215,19 +281,46 @@ impl WatcherService {
         self.event_rx.lock().await.take()
     }
 
-    /// Graceful shutdown — stop all watchers and close the event channel.
+    /// Graceful shutdown — stop all watchers, drop debouncers to release OS
+    /// resources, and drain remaining events from the channel.
     pub async fn shutdown(&self) {
         let mut inner = self.inner.lock().await;
 
-        // Collect paths first to avoid borrowing `inner` mutably twice.
+        // Unwatch all paths from their respective backends.
         let paths: Vec<PathBuf> = inner.watched_paths.drain().collect();
         for path in &paths {
-            let _ = inner.native_debouncer.unwatch(path);
-            let _ = inner.poll_debouncer.unwatch(path);
+            if let Some(d) = inner.native_debouncer.as_mut() {
+                let _ = d.unwatch(path);
+            }
+            if let Some(d) = inner.poll_debouncer.as_mut() {
+                let _ = d.unwatch(path);
+            }
         }
+        inner.native_paths.clear();
+
+        // Drop both debouncers to release OS watch handles and background threads.
+        inner.native_debouncer.take();
+        inner.poll_debouncer.take();
         drop(inner);
 
-        info!("watcher service shut down");
+        // Drain any remaining events from the channel. The receiver may have
+        // already been taken by the processor; if so, this is a no-op.
+        let mut event_rx_guard = self.event_rx.lock().await;
+        if let Some(rx) = event_rx_guard.as_mut() {
+            let mut drained = 0usize;
+            while rx.try_recv().is_ok() {
+                drained += 1;
+            }
+            if drained > 0 {
+                debug!(
+                    count = drained,
+                    "drained remaining watcher events during shutdown"
+                );
+            }
+        }
+        drop(event_rx_guard);
+
+        info!("Filesystem watcher stopped");
     }
 }
 
@@ -271,13 +364,23 @@ fn process_single_event(debounced: &DebouncedEvent, tx: &mpsc::Sender<WatcherEve
         // Determine event type and apply filters.
         let watcher_event = if event.kind.is_create() || event.kind.is_modify() {
             if !should_process_file(path) {
+                let reason = if is_hidden_file(path) {
+                    "hidden file"
+                } else if is_temp_file(path) {
+                    "temporary file"
+                } else {
+                    "unsupported extension"
+                };
+                debug!(path = %path.display(), reason, "file event filtered");
                 continue;
             }
+            info!(path = %path.display(), "new file detected");
             WatcherEvent::FileChanged { path: path.clone() }
         } else if event.kind.is_remove() {
             // For removals, still apply extension filter but not temp file filter
             // (the file is gone, we can't check further).
             if !has_supported_extension(path) {
+                debug!(path = %path.display(), reason = "unsupported extension", "file event filtered");
                 continue;
             }
             WatcherEvent::FileRemoved { path: path.clone() }
@@ -290,6 +393,22 @@ fn process_single_event(debounced: &DebouncedEvent, tx: &mpsc::Sender<WatcherEve
             warn!(path = %path.display(), "watcher event channel full or closed, dropping event");
         }
     }
+}
+
+// ── Error classification helpers ─────────────────────────────────────
+
+/// Returns `true` if the error indicates inotify watch limit exhaustion (ENOSPC).
+fn is_inotify_limit_error(err: &str) -> bool {
+    let lower = err.to_lowercase();
+    lower.contains("inotify") || lower.contains("enospc") || lower.contains("no space left")
+}
+
+/// Returns `true` if the error indicates a permission denial.
+fn is_permission_error(err: &str) -> bool {
+    let lower = err.to_lowercase();
+    lower.contains("permission denied")
+        || lower.contains("access denied")
+        || lower.contains("eperm")
 }
 
 // ── Filtering functions (public for testing) ─────────────────────────
@@ -514,5 +633,97 @@ mod tests {
         };
         assert_eq!(config.debounce_ms, 2000);
         assert_eq!(config.default_poll_interval_secs, 30);
+    }
+
+    // ── Error classification helpers ────────────────────────────
+
+    #[test]
+    fn inotify_limit_error_detection() {
+        assert!(is_inotify_limit_error("inotify_add_watch returned ENOSPC"));
+        assert!(is_inotify_limit_error("inotify watch limit reached"));
+        assert!(is_inotify_limit_error("No space left on device (ENOSPC)"));
+        assert!(is_inotify_limit_error("ENOSPC: no space left"));
+        assert!(!is_inotify_limit_error("permission denied"));
+        assert!(!is_inotify_limit_error("file not found"));
+    }
+
+    #[test]
+    fn permission_error_detection() {
+        assert!(is_permission_error("Permission denied"));
+        assert!(is_permission_error("EPERM: operation not permitted"));
+        assert!(is_permission_error("access denied to /books/private"));
+        assert!(!is_permission_error("inotify watch limit reached"));
+        assert!(!is_permission_error("file not found"));
+    }
+
+    // ── Shutdown behavior ───────────────────────────────────────
+
+    #[tokio::test]
+    async fn shutdown_clears_watched_paths() {
+        let config = WatcherRuntimeConfig {
+            debounce_ms: 500,
+            default_poll_interval_secs: 10,
+        };
+        let service = WatcherService::new(config).unwrap();
+
+        // Watch a real temp directory with poll mode (always works).
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = archivis_core::models::WatchedDirectory {
+            id: uuid::Uuid::new_v4(),
+            path: tmp.path().to_string_lossy().to_string(),
+            watch_mode: WatchMode::Poll,
+            poll_interval_secs: None,
+            enabled: true,
+            last_error: None,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        };
+        service.watch(&dir).await.unwrap();
+
+        // Verify it's being watched.
+        assert!(service
+            .inner
+            .lock()
+            .await
+            .watched_paths
+            .contains(tmp.path()));
+
+        // Shutdown and verify everything is cleaned up.
+        service.shutdown().await;
+
+        let inner = service.inner.lock().await;
+        let paths_empty = inner.watched_paths.is_empty();
+        let native_dropped = inner.native_debouncer.is_none();
+        let poll_dropped = inner.poll_debouncer.is_none();
+        drop(inner);
+
+        assert!(paths_empty);
+        assert!(native_dropped);
+        assert!(poll_dropped);
+    }
+
+    #[tokio::test]
+    async fn watch_after_shutdown_returns_error() {
+        let config = WatcherRuntimeConfig {
+            debounce_ms: 500,
+            default_poll_interval_secs: 10,
+        };
+        let service = WatcherService::new(config).unwrap();
+        service.shutdown().await;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = archivis_core::models::WatchedDirectory {
+            id: uuid::Uuid::new_v4(),
+            path: tmp.path().to_string_lossy().to_string(),
+            watch_mode: WatchMode::Poll,
+            poll_interval_secs: None,
+            enabled: true,
+            last_error: None,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        };
+        let result = service.watch(&dir).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("shut down"));
     }
 }

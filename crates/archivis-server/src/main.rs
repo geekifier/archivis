@@ -87,7 +87,7 @@ async fn main() {
     let provider_registry = init_metadata_providers(&config.metadata);
 
     // 5. Task queue, workers, and services
-    let router = init_services_and_router(
+    let (router, watcher_service) = init_services_and_router(
         db_pool,
         storage,
         auth_service,
@@ -114,6 +114,11 @@ async fn main() {
     if let Err(err) = server.await {
         tracing::error!(%err, "Server error");
         std::process::exit(1);
+    }
+
+    // Graceful shutdown: stop filesystem watchers before exiting.
+    if let Some(ws) = &watcher_service {
+        ws.read().await.shutdown().await;
     }
 
     tracing::info!("Archivis stopped");
@@ -170,6 +175,8 @@ async fn init_config_service(
 
 /// Initialize the task queue, background workers, and all application services,
 /// then build the Axum router.
+///
+/// Returns the router and an optional watcher service handle for graceful shutdown.
 async fn init_services_and_router(
     db_pool: archivis_db::DbPool,
     storage: LocalStorage,
@@ -177,7 +184,7 @@ async fn init_services_and_router(
     provider_registry: Arc<ProviderRegistry>,
     config: &AppConfig,
     config_service: Arc<archivis_api::settings::service::ConfigService>,
-) -> axum::Router {
+) -> (axum::Router, Option<Arc<RwLock<WatcherService>>>) {
     let (task_queue, dispatch_rx) = TaskQueue::new(db_pool.clone());
     let task_queue = Arc::new(task_queue);
 
@@ -245,6 +252,10 @@ async fn init_services_and_router(
         data_dir: config.data_dir.clone(),
         frontend_dir: config.frontend_dir.clone(),
     };
+
+    // Keep a clone of the watcher handle for graceful shutdown.
+    let watcher_handle = watcher_service.clone();
+
     let state = AppState::new(
         db_pool,
         task_queue,
@@ -257,7 +268,7 @@ async fn init_services_and_router(
         config_service,
         watcher_service,
     );
-    archivis_api::build_router(state)
+    (archivis_api::build_router(state), watcher_handle)
 }
 
 /// Create and register background task workers.
@@ -362,9 +373,56 @@ async fn init_watcher(
     };
 
     let directories = archivis_db::WatchedDirectoryRepository::list_enabled(db_pool).await?;
+
+    // Validate paths before starting the watcher.
+    let mut valid_directories = Vec::with_capacity(directories.len());
+    for dir in directories {
+        let path = std::path::Path::new(&dir.path);
+        if !path.exists() {
+            tracing::warn!(
+                path = %dir.path,
+                "watched directory does not exist, skipping (will be retried on next restart)"
+            );
+            continue;
+        }
+        if !path.is_dir() {
+            tracing::warn!(
+                path = %dir.path,
+                "watched path is not a directory, skipping"
+            );
+            continue;
+        }
+        match path.metadata() {
+            Ok(meta) => {
+                if meta.permissions().readonly() {
+                    // On Unix, readonly() checks the write bit, but what we really care
+                    // about is readability. We try to read the directory instead.
+                }
+                // Attempt to read the directory to verify access.
+                if let Err(e) = std::fs::read_dir(path) {
+                    tracing::warn!(
+                        path = %dir.path,
+                        error = %e,
+                        "watched directory not accessible, skipping"
+                    );
+                    continue;
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    path = %dir.path,
+                    error = %e,
+                    "cannot read metadata for watched directory, skipping"
+                );
+                continue;
+            }
+        }
+        valid_directories.push(dir);
+    }
+
     let watcher_service = WatcherService::new(watcher_config)?;
     let event_rx = watcher_service.event_receiver().await;
-    watcher_service.start(directories).await?;
+    watcher_service.start(valid_directories).await?;
 
     // Spawn the event processing loop if we got the receiver.
     if let Some(event_rx) = event_rx {

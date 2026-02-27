@@ -72,7 +72,7 @@
 					Monitor directories for new ebook files and automatically import them.
 				</p>
 			</div>
-			{#if !watcherDisabled && !loading}
+			{#if !loading}
 				<Button variant="outline" size="sm" onclick={handleAddNew}>
 					<svg
 						class="mr-1.5 size-4"
@@ -159,7 +159,7 @@
 		<div class="flex items-center justify-center px-6 py-8">
 			<span class="text-sm text-muted-foreground">Loading watched directories...</span>
 		</div>
-	{:else if !watcherDisabled && !error}
+	{:else if !error}
 		<!-- Directory list -->
 		{#if directories.length === 0}
 			<div class="px-6 py-8 text-center">

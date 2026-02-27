@@ -272,16 +272,41 @@ async fn handle_file_removed(
     }
 }
 
-/// Handle a watcher `Error` event: log and persist to `watched_directories.last_error`.
+/// Handle a watcher `Error` event: classify, log, and persist to
+/// `watched_directories.last_error`.
+///
+/// Error classification:
+/// - **Directory disappeared** (unmount, deletion): logged at `error` level.
+///   The DB record is kept — the directory may reappear (NFS remount, USB
+///   reconnect).
+/// - **Permission denied**: logged at `warn` level with the specific subpath.
+/// - **Other errors**: logged at `error` level with full context.
 async fn handle_error(error: &str, path: Option<&std::path::Path>, db_pool: &DbPool) {
-    if let Some(path) = path {
-        error!(
-            path = %path.display(),
-            error = %error,
-            "watcher error"
-        );
+    let lower = error.to_lowercase();
 
-        // Try to find the watched directory this path belongs to and persist the error.
+    if let Some(path) = path {
+        if is_path_gone_error(&lower) {
+            error!(
+                path = %path.display(),
+                error = %error,
+                "watched directory disappeared — it may reappear if remounted; \
+                 keeping DB record"
+            );
+        } else if is_permission_error(&lower) {
+            warn!(
+                path = %path.display(),
+                error = %error,
+                "permission denied accessing watched path"
+            );
+        } else {
+            error!(
+                path = %path.display(),
+                error = %error,
+                "watcher error"
+            );
+        }
+
+        // Persist the error to the matching watched directory's last_error column.
         if let Err(e) = persist_watcher_error(db_pool, path, error).await {
             warn!(
                 path = %path.display(),
@@ -292,6 +317,23 @@ async fn handle_error(error: &str, path: Option<&std::path::Path>, db_pool: &DbP
     } else {
         error!(error = %error, "watcher error (no path context)");
     }
+}
+
+/// Returns `true` if the error indicates a watched path no longer exists
+/// (e.g., unmounted NFS share, deleted directory).
+fn is_path_gone_error(lower_error: &str) -> bool {
+    lower_error.contains("no such file")
+        || lower_error.contains("not found")
+        || lower_error.contains("enoent")
+        || lower_error.contains("does not exist")
+}
+
+/// Returns `true` if the error indicates a permission denial.
+fn is_permission_error(lower_error: &str) -> bool {
+    lower_error.contains("permission denied")
+        || lower_error.contains("access denied")
+        || lower_error.contains("eperm")
+        || lower_error.contains("eacces")
 }
 
 /// Persist a watcher error to the matching watched directory's `last_error` column.
@@ -549,5 +591,29 @@ mod tests {
     async fn compute_file_hash_nonexistent_file() {
         let result = compute_file_hash(std::path::Path::new("/nonexistent/file.epub")).await;
         assert!(result.is_err());
+    }
+
+    // ── Error classification ─────────────────────────────────────────
+
+    #[test]
+    fn path_gone_error_detection() {
+        // Note: these functions receive already-lowercased strings from `handle_error`.
+        assert!(is_path_gone_error("no such file or directory"));
+        assert!(is_path_gone_error("path not found: /mnt/nfs/books"));
+        assert!(is_path_gone_error("enoent: entity does not exist"));
+        assert!(is_path_gone_error("directory does not exist"));
+        assert!(!is_path_gone_error("permission denied"));
+        assert!(!is_path_gone_error("inotify watch limit reached"));
+    }
+
+    #[test]
+    fn permission_error_detection() {
+        // Note: these functions receive already-lowercased strings from `handle_error`.
+        assert!(is_permission_error("permission denied"));
+        assert!(is_permission_error("access denied to /books/private"));
+        assert!(is_permission_error("eperm: operation not permitted"));
+        assert!(is_permission_error("eacces: permission denied"));
+        assert!(!is_permission_error("no such file or directory"));
+        assert!(!is_permission_error("inotify limit reached"));
     }
 }

@@ -160,13 +160,19 @@ impl Default for HardcoverConfig {
 }
 
 /// Configuration for the filesystem watcher subsystem.
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct WatcherConfig {
     /// Master enable/disable for the filesystem watcher subsystem.
     /// Boot-only: controls whether the watcher infrastructure is initialized.
     /// All other watcher settings are managed at runtime via DB/API/UI.
     pub enabled: bool,
+}
+
+impl Default for WatcherConfig {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
 }
 
 /// Configuration for ISBN content-scan feature.

@@ -118,13 +118,10 @@ describe('WatchedDirectoriesSettings', () => {
 		render(WatchedDirectoriesSettings);
 
 		await vi.waitFor(() => {
-			expect(mockApi.watchedDirectories.list).toHaveBeenCalled();
+			expect(screen.getByText(/Filesystem watching is disabled/)).toBeInTheDocument();
 		});
 
-		const banner = screen.queryByText(/Filesystem watching is disabled/);
-		if (banner) {
-			expect(banner).toBeInTheDocument();
-		}
+		expect(screen.getByText(/watcher\.enabled = true/)).toBeInTheDocument();
 	});
 
 	it('shows error state on non-503 API failure', async () => {
@@ -133,13 +130,8 @@ describe('WatchedDirectoriesSettings', () => {
 		render(WatchedDirectoriesSettings);
 
 		await vi.waitFor(() => {
-			expect(mockApi.watchedDirectories.list).toHaveBeenCalled();
+			expect(screen.getByText('Network error')).toBeInTheDocument();
 		});
-
-		const errorText = screen.queryByText('Network error');
-		if (errorText) {
-			expect(errorText).toBeInTheDocument();
-		}
 	});
 
 	it('displays watch mode badge for polling directory', async () => {
