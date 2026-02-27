@@ -83,6 +83,9 @@ pub enum StorageError {
 
     #[error("insufficient storage space")]
     InsufficientSpace,
+
+    #[error("watcher error: {0}")]
+    Watcher(String),
 }
 
 /// Authentication and authorization errors.
