@@ -17,7 +17,7 @@ pub use book::Book;
 pub use book_file::BookFile;
 pub use candidate::{CandidateStatus, IdentificationCandidate};
 pub use duplicate::{DuplicateLink, DuplicateStatus};
-pub use enums::{BookFormat, IdentifierType, MetadataSource, MetadataStatus};
+pub use enums::{BookFormat, IdentifierType, MetadataSource, MetadataStatus, ScoringProfile};
 pub use identifier::Identifier;
 pub use publisher::Publisher;
 pub use reading_progress::{Bookmark, ReadingProgress};

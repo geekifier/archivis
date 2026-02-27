@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use archivis_core::models::ScoringProfile;
 use clap::Parser;
 use figment::{
     providers::{Env, Format, Serialized, Toml},
@@ -96,6 +97,8 @@ pub struct MetadataConfig {
     pub auto_identify_threshold: f32,
     /// Maximum concurrent identification tasks.
     pub max_concurrent_identifies: usize,
+    /// How strictly to score embedded metadata quality.
+    pub scoring_profile: ScoringProfile,
 }
 
 impl Default for MetadataConfig {
@@ -107,6 +110,7 @@ impl Default for MetadataConfig {
             hardcover: HardcoverConfig::default(),
             auto_identify_threshold: 0.6,
             max_concurrent_identifies: 2,
+            scoring_profile: ScoringProfile::default(),
         }
     }
 }
@@ -333,6 +337,10 @@ pub fn detect_env_overrides(cli: &Cli) -> HashMap<String, ConfigOverride> {
             "ARCHIVIS_METADATA__MAX_CONCURRENT_IDENTIFIES",
         ),
         (
+            "metadata.scoring_profile",
+            "ARCHIVIS_METADATA__SCORING_PROFILE",
+        ),
+        (
             "metadata.open_library.enabled",
             "ARCHIVIS_METADATA__OPEN_LIBRARY__ENABLED",
         ),
@@ -516,6 +524,13 @@ fn apply_setting_to_config(config: &mut AppConfig, key: &str, value: &serde_json
             if let Some(n) = value.as_u64() {
                 if let Ok(v) = usize::try_from(n) {
                     config.metadata.max_concurrent_identifies = v;
+                }
+            }
+        }
+        "metadata.scoring_profile" => {
+            if let Some(s) = value.as_str() {
+                if let Ok(profile) = s.parse::<ScoringProfile>() {
+                    config.metadata.scoring_profile = profile;
                 }
             }
         }

@@ -158,6 +158,17 @@ static SETTINGS: &[SettingMeta] = &[
         sensitive: false,
         options: None,
     },
+    SettingMeta {
+        key: "metadata.scoring_profile",
+        label: "Scoring Profile",
+        description: "How strictly to score embedded metadata quality. Strict: ISBN required for Identified. Balanced: rich metadata can reach Identified. Permissive: trusts embedded metadata more.",
+        section: "metadata",
+        value_type: SettingType::Select,
+        scope: SettingScope::Runtime,
+        requires_restart: false,
+        sensitive: false,
+        options: Some(&["strict", "balanced", "permissive"]),
+    },
     // Open Library
     SettingMeta {
         key: "metadata.open_library.enabled",

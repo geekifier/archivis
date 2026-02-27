@@ -254,6 +254,7 @@ fn init_workers(
 ) -> HashMap<archivis_core::models::TaskType, Arc<dyn Worker>> {
     let import_config = ImportConfig {
         data_dir: config.data_dir.clone(),
+        scoring_profile: config.metadata.scoring_profile,
         ..ImportConfig::default()
     };
     let import_service = Arc::new(ImportService::new(
@@ -266,6 +267,7 @@ fn init_workers(
         storage.clone(),
         ImportConfig {
             data_dir: config.data_dir.clone(),
+            scoring_profile: config.metadata.scoring_profile,
             ..ImportConfig::default()
         },
     )));

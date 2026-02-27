@@ -37,6 +37,7 @@ impl<S: StorageBackend> ImportService<S> {
     ///
     /// Returns an [`ImportResult`] on success, describing the created or matched
     /// book and file records.
+    #[allow(clippy::too_many_lines)]
     pub async fn import_file(&self, source_path: &Path) -> Result<ImportResult, ImportError> {
         // 1-5: Read, detect, extract, parse, score
         let data = tokio::fs::read(source_path).await?;
@@ -48,7 +49,11 @@ impl<S: StorageBackend> ImportService<S> {
         }
         let embedded = extract_metadata(format, &data);
         let parsed = archivis_formats::filename::parse_path(source_path);
-        let score = archivis_formats::scoring::score_metadata(&embedded, Some(&parsed));
+        let score = archivis_formats::scoring::score_metadata(
+            &embedded,
+            Some(&parsed),
+            &self.config.scoring_profile,
+        );
 
         // 6: Hash check and ISBN duplicate check
         let hash = compute_sha256(&data);

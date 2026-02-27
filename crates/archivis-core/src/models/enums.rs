@@ -161,6 +161,44 @@ impl FromStr for IdentifierType {
     }
 }
 
+/// Controls how strictly metadata quality is scored during import.
+///
+/// Different profiles suit different use cases:
+/// - `Strict`: ISBN-centric — best for library cleanup where provenance matters.
+/// - `Balanced`: allows rich embedded metadata to reach "Identified" without ISBN.
+/// - `Permissive`: trusts embedded metadata more, suitable for well-tagged collections.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScoringProfile {
+    Strict,
+    #[default]
+    Balanced,
+    Permissive,
+}
+
+impl fmt::Display for ScoringProfile {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Strict => write!(f, "Strict"),
+            Self::Balanced => write!(f, "Balanced"),
+            Self::Permissive => write!(f, "Permissive"),
+        }
+    }
+}
+
+impl FromStr for ScoringProfile {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "strict" => Ok(Self::Strict),
+            "balanced" => Ok(Self::Balanced),
+            "permissive" => Ok(Self::Permissive),
+            _ => Err(format!("unknown scoring profile: {s}")),
+        }
+    }
+}
+
 /// Tracks where a piece of metadata originated, for conflict resolution.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "type", content = "name", rename_all = "snake_case")]
@@ -349,5 +387,45 @@ mod tests {
         assert_eq!(json, r#"{"type":"content_scan"}"#);
         let deserialized: MetadataSource = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized, source);
+    }
+
+    // ── ScoringProfile ──────────────────────────────────────────────
+
+    #[test]
+    fn scoring_profile_default_is_balanced() {
+        assert_eq!(ScoringProfile::default(), ScoringProfile::Balanced);
+    }
+
+    #[test]
+    fn scoring_profile_display() {
+        assert_eq!(ScoringProfile::Strict.to_string(), "Strict");
+        assert_eq!(ScoringProfile::Balanced.to_string(), "Balanced");
+        assert_eq!(ScoringProfile::Permissive.to_string(), "Permissive");
+    }
+
+    #[test]
+    fn scoring_profile_from_str() {
+        assert_eq!(
+            "strict".parse::<ScoringProfile>().unwrap(),
+            ScoringProfile::Strict,
+        );
+        assert_eq!(
+            "Balanced".parse::<ScoringProfile>().unwrap(),
+            ScoringProfile::Balanced,
+        );
+        assert_eq!(
+            "PERMISSIVE".parse::<ScoringProfile>().unwrap(),
+            ScoringProfile::Permissive,
+        );
+        assert!("unknown".parse::<ScoringProfile>().is_err());
+    }
+
+    #[test]
+    fn scoring_profile_serde_roundtrip() {
+        let profile = ScoringProfile::Balanced;
+        let json = serde_json::to_string(&profile).unwrap();
+        assert_eq!(json, r#""balanced""#);
+        let deserialized: ScoringProfile = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, profile);
     }
 }

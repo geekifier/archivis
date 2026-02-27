@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use archivis_core::errors::{DbError, FormatError, StorageError};
+use archivis_core::models::ScoringProfile;
 use archivis_formats::sanitize::SanitizeOptions;
 use uuid::Uuid;
 
@@ -13,6 +14,8 @@ pub struct ImportConfig {
     pub thumbnail_sizes: ThumbnailSizes,
     /// Options for sanitizing metadata text fields during import.
     pub sanitize_options: SanitizeOptions,
+    /// Scoring profile for metadata quality evaluation.
+    pub scoring_profile: ScoringProfile,
 }
 
 impl Default for ImportConfig {
@@ -21,6 +24,7 @@ impl Default for ImportConfig {
             data_dir: PathBuf::from(".local"),
             thumbnail_sizes: ThumbnailSizes::default(),
             sanitize_options: SanitizeOptions::default(),
+            scoring_profile: ScoringProfile::default(),
         }
     }
 }

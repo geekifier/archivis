@@ -3,7 +3,7 @@
 //! Evaluates the completeness of extracted metadata and assigns a confidence
 //! score (0.0–1.0) that determines the resulting [`MetadataStatus`].
 
-use archivis_core::models::{IdentifierType, MetadataStatus};
+use archivis_core::models::{IdentifierType, MetadataStatus, ScoringProfile};
 
 use crate::{ExtractedMetadata, ParsedFilename};
 
@@ -37,6 +37,17 @@ const TITLE_ONLY_BONUS: f32 = 0.1;
 
 /// Bonus when embedded and filename metadata agree on title.
 const CROSS_VALIDATION_BONUS: f32 = 0.2;
+
+// ── Richness bonus (profile-dependent) ──────────────────────────────
+
+/// Number of richness fields checked.
+const RICHNESS_FIELDS: usize = 5;
+
+/// Maximum richness bonus for `Balanced` profile.
+const BALANCED_RICHNESS_MAX: f32 = 0.30;
+
+/// Maximum richness bonus for `Permissive` profile.
+const PERMISSIVE_RICHNESS_MAX: f32 = 0.50;
 
 // ── Known garbage values ─────────────────────────────────────────────
 
@@ -80,9 +91,14 @@ const PLACEHOLDER_ISBNS: &[&str] = &[
 
 /// Score extracted metadata from embedded sources, optionally cross-validated
 /// against filename-derived metadata.
+///
+/// The `profile` controls how much weight is given to metadata richness
+/// (description, language, publisher, subjects, publication date) beyond the
+/// core signals (ISBN, title, author, cross-validation).
 pub fn score_metadata(
     embedded: &ExtractedMetadata,
     filename: Option<&ParsedFilename>,
+    profile: &ScoringProfile,
 ) -> MetadataScore {
     let mut confidence = 0.0_f32;
 
@@ -116,6 +132,9 @@ pub fn score_metadata(
         }
     }
 
+    // Metadata richness bonus (profile-dependent)
+    confidence += richness_bonus(embedded, *profile);
+
     confidence = confidence.min(1.0);
 
     let status = if confidence >= IDENTIFIED_THRESHOLD {
@@ -127,6 +146,49 @@ pub fn score_metadata(
     };
 
     MetadataScore { confidence, status }
+}
+
+/// Compute a richness bonus based on how many optional metadata fields are populated.
+///
+/// Checked fields: description, language, publisher, subjects (at least 1),
+/// and publication date. The bonus scales linearly with the number of fields
+/// present, up to the profile's maximum.
+fn richness_bonus(embedded: &ExtractedMetadata, profile: ScoringProfile) -> f32 {
+    let max_bonus = match profile {
+        ScoringProfile::Strict => return 0.0,
+        ScoringProfile::Balanced => BALANCED_RICHNESS_MAX,
+        ScoringProfile::Permissive => PERMISSIVE_RICHNESS_MAX,
+    };
+
+    let mut count: u32 = 0;
+
+    if embedded
+        .description
+        .as_deref()
+        .is_some_and(|d| !d.is_empty())
+    {
+        count += 1;
+    }
+    if embedded.language.as_deref().is_some_and(|l| !l.is_empty()) {
+        count += 1;
+    }
+    if embedded.publisher.as_deref().is_some_and(|p| !p.is_empty()) {
+        count += 1;
+    }
+    if !embedded.subjects.is_empty() {
+        count += 1;
+    }
+    if embedded
+        .publication_date
+        .as_deref()
+        .is_some_and(|d| !d.is_empty())
+    {
+        count += 1;
+    }
+
+    #[allow(clippy::cast_precision_loss)]
+    let ratio = count as f32 / RICHNESS_FIELDS as f32;
+    ratio * max_bonus
 }
 
 // ── Validation helpers ───────────────────────────────────────────────
@@ -248,7 +310,7 @@ mod tests {
     fn isbn_plus_title_author_scores_high() {
         // Valid ISBN-13: 978-3-16-148410-0 → checksum OK
         let meta = meta_with_isbn13("9783161484100");
-        let score = score_metadata(&meta, None);
+        let score = score_metadata(&meta, None, &ScoringProfile::Strict);
 
         // 0.4 (ISBN) + 0.3 (title+author) = 0.7
         assert!(
@@ -267,7 +329,7 @@ mod tests {
             source: MetadataSource::Embedded,
             ..ExtractedMetadata::default()
         };
-        let score = score_metadata(&meta, None);
+        let score = score_metadata(&meta, None, &ScoringProfile::Strict);
 
         // 0.3 (title+author)
         assert!(
@@ -285,7 +347,7 @@ mod tests {
             source: MetadataSource::Embedded,
             ..ExtractedMetadata::default()
         };
-        let score = score_metadata(&meta, None);
+        let score = score_metadata(&meta, None, &ScoringProfile::Strict);
 
         // 0.1 (title only)
         assert!(
@@ -302,7 +364,7 @@ mod tests {
             source: MetadataSource::Embedded,
             ..ExtractedMetadata::default()
         };
-        let score = score_metadata(&meta, None);
+        let score = score_metadata(&meta, None, &ScoringProfile::Strict);
 
         assert!(
             score.confidence.abs() < f32::EPSILON,
@@ -320,7 +382,7 @@ mod tests {
             source: MetadataSource::Embedded,
             ..ExtractedMetadata::default()
         };
-        let score = score_metadata(&meta, None);
+        let score = score_metadata(&meta, None, &ScoringProfile::Strict);
 
         // Only title bonus, garbage author doesn't count.
         assert!(
@@ -338,7 +400,7 @@ mod tests {
             source: MetadataSource::Embedded,
             ..ExtractedMetadata::default()
         };
-        let score = score_metadata(&meta, None);
+        let score = score_metadata(&meta, None, &ScoringProfile::Strict);
 
         // Neither title nor title+author bonus.
         assert!(
@@ -351,7 +413,7 @@ mod tests {
     #[test]
     fn placeholder_isbn_rejected() {
         let meta = meta_with_isbn13("0000000000000");
-        let score = score_metadata(&meta, None);
+        let score = score_metadata(&meta, None, &ScoringProfile::Strict);
 
         // ISBN is placeholder, so no ISBN bonus. Title+author still count.
         assert!(
@@ -387,7 +449,7 @@ mod tests {
     fn invalid_isbn_checksum_not_counted() {
         // ISBN-13 with bad checksum
         let meta = meta_with_isbn13("9783161484109");
-        let score = score_metadata(&meta, None);
+        let score = score_metadata(&meta, None, &ScoringProfile::Strict);
 
         // No ISBN bonus (bad checksum).
         assert!(
@@ -410,7 +472,7 @@ mod tests {
             author: Some("Frank Herbert".into()),
             ..Default::default()
         };
-        let score = score_metadata(&meta, Some(&filename));
+        let score = score_metadata(&meta, Some(&filename), &ScoringProfile::Strict);
 
         // 0.3 (title+author) + 0.2 (cross-validation) = 0.5
         assert!(
@@ -433,7 +495,7 @@ mod tests {
             title: Some("Dune".into()),
             ..Default::default()
         };
-        let score = score_metadata(&meta, Some(&filename));
+        let score = score_metadata(&meta, Some(&filename), &ScoringProfile::Strict);
 
         // "dunethenovel" starts with "dune" → cross-validation matches.
         // 0.3 (title+author) + 0.2 (cross-validation) = 0.5
@@ -456,7 +518,7 @@ mod tests {
             title: Some("Foundation".into()),
             ..Default::default()
         };
-        let score = score_metadata(&meta, Some(&filename));
+        let score = score_metadata(&meta, Some(&filename), &ScoringProfile::Strict);
 
         // Titles don't match → no cross-validation bonus.
         assert!(
@@ -475,7 +537,7 @@ mod tests {
             title: Some("A Good Book".into()),
             ..Default::default()
         };
-        let score = score_metadata(&meta, Some(&filename));
+        let score = score_metadata(&meta, Some(&filename), &ScoringProfile::Strict);
 
         // 0.4 + 0.3 + 0.2 = 0.9
         assert!(
@@ -499,7 +561,7 @@ mod tests {
             source: MetadataSource::Embedded,
             ..ExtractedMetadata::default()
         };
-        let score = score_metadata(&meta, None);
+        let score = score_metadata(&meta, None, &ScoringProfile::Strict);
 
         // 0.4 (ISBN) + 0.3 (title+author) = 0.7
         assert!(
@@ -536,5 +598,128 @@ mod tests {
         assert!(!titles_match("", "Dune"));
         assert!(!titles_match("Dune", ""));
         assert!(!titles_match("", ""));
+    }
+
+    // ── Richness / profile tests ────────────────────────────────────
+
+    /// Helper: metadata with title+author and all five richness fields populated.
+    fn rich_meta_no_isbn() -> ExtractedMetadata {
+        ExtractedMetadata {
+            title: Some("Pride and Prejudice".into()),
+            authors: vec!["Jane Austen".into()],
+            description: Some("A classic novel of manners.".into()),
+            language: Some("en".into()),
+            publisher: Some("Global Grey".into()),
+            subjects: vec!["Fiction".into(), "Romance".into()],
+            publication_date: Some("1813-01-28".into()),
+            source: MetadataSource::Embedded,
+            ..ExtractedMetadata::default()
+        }
+    }
+
+    #[test]
+    fn strict_profile_no_richness_bonus() {
+        let meta = rich_meta_no_isbn();
+        let score = score_metadata(&meta, None, &ScoringProfile::Strict);
+
+        // 0.3 (title+author), no richness
+        assert!(
+            (score.confidence - 0.3).abs() < f32::EPSILON,
+            "expected 0.3, got {}",
+            score.confidence
+        );
+        assert_eq!(score.status, MetadataStatus::NeedsReview);
+    }
+
+    #[test]
+    fn balanced_profile_rich_metadata_reaches_identified() {
+        let meta = rich_meta_no_isbn();
+        let score = score_metadata(&meta, None, &ScoringProfile::Balanced);
+
+        // 0.3 (title+author) + 0.30 (5/5 richness) = 0.60
+        let expected = 0.3 + BALANCED_RICHNESS_MAX;
+        assert!(
+            (score.confidence - expected).abs() < f32::EPSILON,
+            "expected {expected}, got {}",
+            score.confidence
+        );
+        assert_eq!(score.status, MetadataStatus::Identified);
+    }
+
+    #[test]
+    fn balanced_with_cross_validation_reaches_identified() {
+        let meta = rich_meta_no_isbn();
+        let filename = ParsedFilename {
+            title: Some("Pride and Prejudice".into()),
+            ..Default::default()
+        };
+        let score = score_metadata(&meta, Some(&filename), &ScoringProfile::Balanced);
+
+        // 0.3 + 0.2 (cross-val) + 0.30 (richness) = 0.80
+        let expected = 0.3 + 0.2 + BALANCED_RICHNESS_MAX;
+        assert!(
+            (score.confidence - expected).abs() < f32::EPSILON,
+            "expected {expected}, got {}",
+            score.confidence
+        );
+        assert_eq!(score.status, MetadataStatus::Identified);
+    }
+
+    #[test]
+    fn permissive_profile_rich_metadata_scores_higher() {
+        let meta = rich_meta_no_isbn();
+        let score = score_metadata(&meta, None, &ScoringProfile::Permissive);
+
+        // 0.3 (title+author) + 0.50 (5/5 richness) = 0.80
+        let expected = 0.3 + PERMISSIVE_RICHNESS_MAX;
+        assert!(
+            (score.confidence - expected).abs() < f32::EPSILON,
+            "expected {expected}, got {}",
+            score.confidence
+        );
+        assert_eq!(score.status, MetadataStatus::Identified);
+    }
+
+    #[test]
+    fn partial_richness_scales_linearly() {
+        let meta = ExtractedMetadata {
+            title: Some("Test Book".into()),
+            authors: vec!["Some Writer".into()],
+            description: Some("A description".into()),
+            language: Some("en".into()),
+            // No publisher, no subjects, no publication_date → 2/5
+            source: MetadataSource::Embedded,
+            ..ExtractedMetadata::default()
+        };
+        let score = score_metadata(&meta, None, &ScoringProfile::Balanced);
+
+        // 0.3 (title+author) + (2/5 * 0.30) = 0.3 + 0.12 = 0.42
+        let expected = (2.0_f32 / 5.0).mul_add(BALANCED_RICHNESS_MAX, 0.3);
+        assert!(
+            (score.confidence - expected).abs() < f32::EPSILON,
+            "expected {expected}, got {}",
+            score.confidence
+        );
+    }
+
+    #[test]
+    fn richness_with_isbn_still_caps_at_one() {
+        let mut meta = rich_meta_no_isbn();
+        meta.identifiers.push(ExtractedIdentifier {
+            identifier_type: IdentifierType::Isbn13,
+            value: "9783161484100".into(),
+        });
+        let filename = ParsedFilename {
+            title: Some("Pride and Prejudice".into()),
+            ..Default::default()
+        };
+        let score = score_metadata(&meta, Some(&filename), &ScoringProfile::Permissive);
+
+        // 0.4 + 0.3 + 0.2 + 0.50 = 1.40 → capped at 1.0
+        assert!(
+            (score.confidence - 1.0).abs() < f32::EPSILON,
+            "expected 1.0, got {}",
+            score.confidence
+        );
     }
 }
