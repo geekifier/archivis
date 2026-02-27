@@ -54,6 +54,16 @@ export function createMockApi() {
 			undoCandidate: vi.fn(),
 			batch: vi.fn(),
 			all: vi.fn()
+		},
+		reader: {
+			getProgress: vi.fn(),
+			updateProgress: vi.fn(),
+			clearProgress: vi.fn(),
+			continueReading: vi.fn(),
+			listBookmarks: vi.fn(),
+			createBookmark: vi.fn(),
+			deleteBookmark: vi.fn(),
+			fetchFileBlob: vi.fn()
 		}
 	};
 }

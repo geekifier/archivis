@@ -2,6 +2,7 @@
 	import { onMount } from 'svelte';
 	import { reader } from '$lib/stores/reader.svelte.js';
 	import type { TocItem } from '$lib/api/types.js';
+	import { buildReaderCSS } from '$lib/utils/reader-css.js';
 
 	interface RelocateDetail {
 		cfi: string | null;
@@ -46,60 +47,6 @@
 	let view: FoliateView | null = null;
 	let bookOpened = false;
 
-	const themes: Record<string, { bg: string; fg: string; link: string }> = {
-		light: { bg: '#ffffff', fg: '#1a1a1a', link: '#0066cc' },
-		dark: { bg: '#1a1a1a', fg: '#e0e0e0', link: '#6db3f2' },
-		sepia: { bg: '#f4ecd8', fg: '#5b4636', link: '#7b5b3a' }
-	};
-
-	const fontMap: Record<string, string> = {
-		default: 'inherit',
-		serif: "'Georgia', 'Times New Roman', serif",
-		'sans-serif': "'Inter', 'Helvetica Neue', sans-serif",
-		monospace: "'Consolas', 'JetBrains Mono', monospace"
-	};
-
-	function buildReaderCSS(): string {
-		const prefs = reader.preferences;
-		const theme = themes[prefs.theme] ?? themes.light;
-		const fontFamily = fontMap[prefs.fontFamily] ?? 'inherit';
-
-		return `
-			@namespace epub "http://www.idpf.org/2007/ops";
-			html {
-				background-color: ${theme.bg} !important;
-				color: ${theme.fg} !important;
-			}
-			body {
-				background-color: ${theme.bg} !important;
-				color: ${theme.fg} !important;
-				font-family: ${fontFamily} !important;
-				font-size: ${prefs.fontSize}% !important;
-			}
-			a:link {
-				color: ${theme.link};
-			}
-			a:visited {
-				color: ${theme.link};
-				opacity: 0.8;
-			}
-			p, li, blockquote, dd {
-				line-height: ${prefs.lineHeight};
-				hanging-punctuation: allow-end last;
-				widows: 2;
-			}
-			pre {
-				white-space: pre-wrap !important;
-			}
-			aside[epub|type~="endnote"],
-			aside[epub|type~="footnote"],
-			aside[epub|type~="note"],
-			aside[epub|type~="rearnote"] {
-				display: none;
-			}
-		`;
-	}
-
 	function applyRendererAttributes(): void {
 		if (!view?.renderer) return;
 		const prefs = reader.preferences;
@@ -116,17 +63,48 @@
 	function injectCSS(): void {
 		if (!view?.renderer) return;
 		try {
-			const css = buildReaderCSS();
+			const css = buildReaderCSS(reader.preferences);
 			view.renderer.setStyles(css);
 		} catch {
 			// Style injection may fail for some formats
 		}
 	}
 
-	// Reactively apply preference changes
+	/**
+	 * Apply reader CSS directly to a section's document.
+	 *
+	 * foliate-js creates two <style> elements per section ($styleBefore at top,
+	 * $style at bottom of <head>) and re-applies stored styles via setStyles()
+	 * in its onLoad callback. However, setStyles() looks up the current view's
+	 * document via this.#view, which still points to the *previous* section at
+	 * callback time — so the styles silently fail to apply to the new section.
+	 *
+	 * We work around this by finding foliate's own $style element (last <style>
+	 * without attributes in <head>) and writing our CSS into it. This avoids a
+	 * duplicate <style> element, so subsequent setStyles() calls (triggered by
+	 * $effect when preferences change) update the same element with no conflict.
+	 */
+	function applyStylesToDocument(doc: Document): void {
+		try {
+			const css = buildReaderCSS(reader.preferences);
+			// Find the last bare <style> in <head> — that's foliate's $style element.
+			const styles = doc.head?.querySelectorAll('style:not([data-archivis])');
+			const target = styles?.[styles.length - 1];
+			if (target) {
+				target.textContent = css;
+			}
+		} catch {
+			// Style injection may fail for some formats
+		}
+	}
+
+	// Reactively apply preference changes.
+	// IMPORTANT: read all reactive dependencies BEFORE the early-return guard.
+	// `view` and `bookOpened` are plain variables (not $state) — Svelte can't
+	// track them, so if the effect returns before reaching reactive reads it
+	// will never re-run.  By subscribing to preferences unconditionally the
+	// effect stays alive and fires whenever any preference changes.
 	$effect(() => {
-		if (!view || !bookOpened) return;
-		// Access all preference properties to subscribe
 		const _prefs = reader.preferences;
 		void _prefs.fontSize;
 		void _prefs.fontFamily;
@@ -137,8 +115,21 @@
 		void _prefs.maxWidth;
 		void _prefs.maxColumns;
 
+		if (!view || !bookOpened) return;
+
 		applyRendererAttributes();
 		injectCSS();
+
+		// Also apply directly to currently loaded section documents as a
+		// fallback — setStyles() may silently fail if the paginator's
+		// internal view reference is stale (see applyStylesToDocument docs).
+		try {
+			for (const { doc } of view.renderer.getContents()) {
+				applyStylesToDocument(doc);
+			}
+		} catch {
+			// getContents may not be available for some renderers
+		}
 	});
 
 	onMount(() => {
@@ -180,11 +171,13 @@
 				onRelocate?.(detail);
 			});
 
-			// Listen for load events (fired per section)
+			// Apply reader styles to each newly loaded section.
+			// foliate-js's internal setStyles() has a timing issue where
+			// the view reference hasn't been updated yet, so we apply
+			// styles directly to the document's existing <style> element.
 			el.addEventListener('load', (e: Event) => {
 				const { doc } = (e as CustomEvent).detail as { doc: Document; index: number };
-				// Inject theme CSS into each loaded document
-				injectDocumentCSS(doc);
+				applyStylesToDocument(doc);
 			});
 
 			// eslint-disable-next-line svelte/no-dom-manipulating -- foliate-js custom element must be mounted imperatively
@@ -216,31 +209,6 @@
 			const msg = err instanceof Error ? err.message : 'Unknown error opening book';
 			onError?.(new Error(msg));
 		}
-	}
-
-	function injectDocumentCSS(doc: Document): void {
-		const prefs = reader.preferences;
-		const theme = themes[prefs.theme] ?? themes.light;
-		const fontFamily = fontMap[prefs.fontFamily] ?? 'inherit';
-
-		const style = doc.createElement('style');
-		style.setAttribute('data-archivis-reader', 'true');
-		style.textContent = `
-			html {
-				background-color: ${theme.bg} !important;
-				color: ${theme.fg} !important;
-			}
-			body {
-				background-color: ${theme.bg} !important;
-				color: ${theme.fg} !important;
-				font-family: ${fontFamily} !important;
-				font-size: ${prefs.fontSize}% !important;
-				line-height: ${prefs.lineHeight} !important;
-			}
-			a:link { color: ${theme.link}; }
-			a:visited { color: ${theme.link}; opacity: 0.8; }
-		`;
-		doc.head.append(style);
 	}
 
 	function loadScript(src: string): Promise<void> {
