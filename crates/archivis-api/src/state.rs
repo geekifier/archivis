@@ -5,9 +5,11 @@ use archivis_auth::{AuthService, LocalAuthAdapter};
 use archivis_db::DbPool;
 use archivis_metadata::ProviderRegistry;
 use archivis_storage::local::LocalStorage;
+use archivis_storage::watcher::WatcherService;
 use archivis_tasks::identify::IdentificationService;
 use archivis_tasks::merge::MergeService;
 use archivis_tasks::queue::TaskQueue;
+use tokio::sync::RwLock;
 
 use crate::settings::service::ConfigService;
 
@@ -38,6 +40,8 @@ struct AppStateInner {
     merge_service: Arc<MergeService<LocalStorage>>,
     config: ApiConfig,
     config_service: Arc<ConfigService>,
+    /// Optional — `None` when the watcher subsystem is disabled.
+    watcher_service: Option<Arc<RwLock<WatcherService>>>,
 }
 
 impl AppState {
@@ -52,6 +56,7 @@ impl AppState {
         merge_service: Arc<MergeService<LocalStorage>>,
         config: ApiConfig,
         config_service: Arc<ConfigService>,
+        watcher_service: Option<Arc<RwLock<WatcherService>>>,
     ) -> Self {
         Self {
             inner: Arc::new(AppStateInner {
@@ -64,6 +69,7 @@ impl AppState {
                 merge_service,
                 config,
                 config_service,
+                watcher_service,
             }),
         }
     }
@@ -102,5 +108,9 @@ impl AppState {
 
     pub fn config_service(&self) -> &ConfigService {
         &self.inner.config_service
+    }
+
+    pub fn watcher_service(&self) -> Option<&Arc<RwLock<WatcherService>>> {
+        self.inner.watcher_service.as_ref()
     }
 }

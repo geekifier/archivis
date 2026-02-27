@@ -1,0 +1,62 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id, book_id, format, format_version, storage_path, file_size, hash, added_at FROM book_files WHERE storage_path = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "book_id",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "format",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "format_version",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "storage_path",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "file_size",
+        "ordinal": 5,
+        "type_info": "Integer"
+      },
+      {
+        "name": "hash",
+        "ordinal": 6,
+        "type_info": "Text"
+      },
+      {
+        "name": "added_at",
+        "ordinal": 7,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "63a851cae04742fa4f6ec23cef232ddc0329f7554e951b7fcbbe6a78126629be"
+}

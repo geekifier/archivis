@@ -383,6 +383,7 @@ mod tests {
                 frontend_dir,
             },
             config_service,
+            None,
         )
     }
 

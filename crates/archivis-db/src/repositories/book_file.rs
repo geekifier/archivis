@@ -110,6 +110,24 @@ impl BookFileRepository {
         Ok(result.rows_affected())
     }
 
+    /// Look up book files by their storage path (used by watcher to detect
+    /// existing files and handle removals).
+    pub async fn get_by_storage_path(
+        pool: &SqlitePool,
+        storage_path: &str,
+    ) -> Result<Vec<BookFile>, DbError> {
+        let rows = sqlx::query_as!(
+            BookFileRow,
+            "SELECT id, book_id, format, format_version, storage_path, file_size, hash, added_at FROM book_files WHERE storage_path = ?",
+            storage_path,
+        )
+        .fetch_all(pool)
+        .await
+        .map_err(|e| DbError::Query(e.to_string()))?;
+
+        rows.into_iter().map(BookFileRow::into_book_file).collect()
+    }
+
     pub async fn delete(pool: &SqlitePool, id: Uuid) -> Result<(), DbError> {
         let id_str = id.to_string();
         let result = sqlx::query!("DELETE FROM book_files WHERE id = ?", id_str)

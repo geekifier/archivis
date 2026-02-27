@@ -10,17 +10,19 @@ use archivis_metadata::{
     HardcoverProvider, MetadataHttpClient, MetadataResolver, OpenLibraryProvider, ProviderRegistry,
 };
 use archivis_storage::local::LocalStorage;
+use archivis_storage::watcher::{service::WatcherRuntimeConfig, WatcherService};
 use archivis_tasks::identify::IdentificationService;
 use archivis_tasks::import::{BulkImportService, ImportConfig, ImportService};
 use archivis_tasks::isbn_scan::{IsbnScanConfig as TaskIsbnScanConfig, IsbnScanService};
 use archivis_tasks::merge::MergeService;
 use archivis_tasks::queue::{self, TaskQueue, Worker};
 use archivis_tasks::workers::{
-    IdentifyWorker, ImportDirectoryWorker, ImportFileWorker, IsbnScanWorker,
+    watcher_processor, IdentifyWorker, ImportDirectoryWorker, ImportFileWorker, IsbnScanWorker,
 };
 use clap::Parser;
 use config::{AppConfig, Cli};
 use tokio::net::TcpListener;
+use tokio::sync::RwLock;
 
 #[tokio::main]
 async fn main() {
@@ -218,6 +220,20 @@ async fn init_services_and_router(
         tracing::warn!(%err, "Failed to recover interrupted tasks");
     }
 
+    // Initialize filesystem watcher if enabled
+    let watcher_service = if config.watcher.enabled {
+        match init_watcher(&db_pool, &task_queue).await {
+            Ok(ws) => Some(ws),
+            Err(err) => {
+                tracing::error!(%err, "Failed to initialize watcher service");
+                None
+            }
+        }
+    } else {
+        tracing::info!("Filesystem watcher disabled");
+        None
+    };
+
     // Build merge service
     let merge_service = Arc::new(MergeService::new(
         db_pool.clone(),
@@ -239,6 +255,7 @@ async fn init_services_and_router(
         merge_service,
         api_config,
         config_service,
+        watcher_service,
     );
     archivis_api::build_router(state)
 }
@@ -315,6 +332,53 @@ fn init_workers(
     );
 
     workers
+}
+
+/// Initialize the filesystem watcher service, load runtime settings from DB,
+/// start watching configured directories, and spawn the event processing loop.
+async fn init_watcher(
+    db_pool: &archivis_db::DbPool,
+    task_queue: &Arc<TaskQueue>,
+) -> Result<Arc<RwLock<WatcherService>>, Box<dyn std::error::Error + Send + Sync>> {
+    // Load runtime watcher settings from DB, falling back to defaults.
+    let debounce_ms = archivis_db::SettingRepository::get(db_pool, "watcher.debounce_ms")
+        .await
+        .ok()
+        .flatten()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(2000);
+
+    let default_poll_interval_secs =
+        archivis_db::SettingRepository::get(db_pool, "watcher.default_poll_interval_secs")
+            .await
+            .ok()
+            .flatten()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(30);
+
+    let watcher_config = WatcherRuntimeConfig {
+        debounce_ms,
+        default_poll_interval_secs,
+    };
+
+    let directories = archivis_db::WatchedDirectoryRepository::list_enabled(db_pool).await?;
+    let watcher_service = WatcherService::new(watcher_config)?;
+    let event_rx = watcher_service.event_receiver().await;
+    watcher_service.start(directories).await?;
+
+    // Spawn the event processing loop if we got the receiver.
+    if let Some(event_rx) = event_rx {
+        let task_queue_clone = Arc::clone(task_queue);
+        let db_pool_clone = db_pool.clone();
+        tokio::spawn(async move {
+            watcher_processor::run(event_rx, task_queue_clone, db_pool_clone).await;
+        });
+    }
+
+    let watcher_arc = Arc::new(RwLock::new(watcher_service));
+    tracing::info!("Filesystem watcher initialized");
+
+    Ok(watcher_arc)
 }
 
 /// Build and configure the metadata provider registry from the application config.
