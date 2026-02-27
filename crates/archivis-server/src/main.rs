@@ -283,6 +283,7 @@ fn init_workers(
     let import_config = ImportConfig {
         data_dir: config.data_dir.clone(),
         scoring_profile: config.metadata.scoring_profile,
+        auto_link_formats: config.import.auto_link_formats,
         ..ImportConfig::default()
     };
     let import_service = Arc::new(ImportService::new(
@@ -296,6 +297,7 @@ fn init_workers(
         ImportConfig {
             data_dir: config.data_dir.clone(),
             scoring_profile: config.metadata.scoring_profile,
+            auto_link_formats: config.import.auto_link_formats,
             ..ImportConfig::default()
         },
     )));

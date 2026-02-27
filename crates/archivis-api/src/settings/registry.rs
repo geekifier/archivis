@@ -238,6 +238,21 @@ static SETTINGS: &[SettingMeta] = &[
         sensitive: false,
         options: None,
     },
+    // Import settings (runtime scope)
+    SettingMeta {
+        key: "import.auto_link_formats",
+        label: "Auto-link multiple formats",
+        description: "When importing a file whose title and author closely match an existing \
+                      book in a different format, automatically attach it as an additional \
+                      format instead of creating a separate book entry. Disable if auto-linking \
+                      produces incorrect matches for your library.",
+        section: "import",
+        value_type: SettingType::Bool,
+        scope: SettingScope::Runtime,
+        requires_restart: false,
+        sensitive: false,
+        options: None,
+    },
     // ISBN Scan settings (runtime scope)
     SettingMeta {
         key: "isbn_scan.scan_on_import",

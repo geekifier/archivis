@@ -81,6 +81,9 @@ pub struct AppConfig {
     /// Filesystem watcher configuration.
     #[serde(default)]
     pub watcher: WatcherConfig,
+    /// Import behavior configuration.
+    #[serde(default)]
+    pub import: ImportAppConfig,
 }
 
 /// Configuration for metadata provider lookups.
@@ -175,6 +178,23 @@ impl Default for WatcherConfig {
     }
 }
 
+/// Configuration for import behavior.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct ImportAppConfig {
+    /// Automatically link files as additional formats when a fuzzy title+author
+    /// match exists for a different format.
+    pub auto_link_formats: bool,
+}
+
+impl Default for ImportAppConfig {
+    fn default() -> Self {
+        Self {
+            auto_link_formats: true,
+        }
+    }
+}
+
 /// Configuration for ISBN content-scan feature.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
@@ -225,6 +245,7 @@ impl Default for AppConfig {
             metadata: MetadataConfig::default(),
             isbn_scan: IsbnScanConfig::default(),
             watcher: WatcherConfig::default(),
+            import: ImportAppConfig::default(),
         }
     }
 }
@@ -398,6 +419,10 @@ pub fn detect_env_overrides(cli: &Cli) -> HashMap<String, ConfigOverride> {
         ("isbn_scan.txt_bytes", "ARCHIVIS_ISBN_SCAN__TXT_BYTES"),
         ("isbn_scan.mobi_bytes", "ARCHIVIS_ISBN_SCAN__MOBI_BYTES"),
         ("watcher.enabled", "ARCHIVIS_WATCHER__ENABLED"),
+        (
+            "import.auto_link_formats",
+            "ARCHIVIS_IMPORT__AUTO_LINK_FORMATS",
+        ),
     ];
 
     for &(key, env_var) in env_mappings {
@@ -647,6 +672,11 @@ fn apply_setting_to_config(config: &mut AppConfig, key: &str, value: &serde_json
                 config.watcher.enabled = b;
             }
         }
+        "import.auto_link_formats" => {
+            if let Some(b) = value.as_bool() {
+                config.import.auto_link_formats = b;
+            }
+        }
         _ => {}
     }
 }
@@ -819,5 +849,47 @@ frontend_dir = "/opt/archivis/frontend"
         assert_eq!(sources["isbn_scan.confidence"], ConfigSource::Database);
         // Unchanged bootstrap key → Default
         assert_eq!(sources["listen_address"], ConfigSource::Default);
+    }
+
+    /// Every setting in the registry must be backed by an `AppConfig` field so
+    /// that `flatten_config(AppConfig::default())` returns the correct default
+    /// and the API can surface it. This test catches the class of bug where a
+    /// setting is added to the registry without a corresponding `AppConfig` field.
+    #[test]
+    fn all_registry_settings_have_app_config_defaults() {
+        use archivis_api::settings::registry::{self, SettingType};
+
+        let flat = flatten_config(&AppConfig::default());
+        for meta in registry::all_settings() {
+            assert!(
+                flat.contains_key(meta.key),
+                "Registry setting '{}' has no corresponding field in AppConfig. \
+                 Every registered setting must be backed by an AppConfig field \
+                 so the API returns its default correctly.",
+                meta.key
+            );
+            let val = &flat[meta.key];
+            match meta.value_type {
+                SettingType::Bool => assert!(
+                    val.is_boolean(),
+                    "'{}' default is not a boolean: {}",
+                    meta.key,
+                    val
+                ),
+                SettingType::Integer | SettingType::Float => assert!(
+                    val.is_number(),
+                    "'{}' default is not a number: {}",
+                    meta.key,
+                    val
+                ),
+                SettingType::String | SettingType::Select => assert!(
+                    val.is_string(),
+                    "'{}' default is not a string: {}",
+                    meta.key,
+                    val
+                ),
+                SettingType::OptionalString => {} // null or string, both fine
+            }
+        }
     }
 }

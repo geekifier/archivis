@@ -16,6 +16,8 @@ pub struct ImportConfig {
     pub sanitize_options: SanitizeOptions,
     /// Scoring profile for metadata quality evaluation.
     pub scoring_profile: ScoringProfile,
+    /// Automatically link files as additional formats via fuzzy match.
+    pub auto_link_formats: bool,
 }
 
 impl Default for ImportConfig {
@@ -25,6 +27,7 @@ impl Default for ImportConfig {
             thumbnail_sizes: ThumbnailSizes::default(),
             sanitize_options: SanitizeOptions::default(),
             scoring_profile: ScoringProfile::default(),
+            auto_link_formats: true,
         }
     }
 }

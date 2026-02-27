@@ -453,10 +453,10 @@ impl<S: StorageBackend> ImportService<S> {
             return Ok(None);
         };
 
-        // Check if auto-linking is enabled (default: true)
+        // Check if auto-linking is enabled (default from config, overridable via DB setting)
         let enabled = SettingRepository::get(&self.db_pool, "import.auto_link_formats")
             .await?
-            .map_or(true, |v| v != "false");
+            .map_or(self.config.auto_link_formats, |v| v != "false");
         if !enabled {
             return Ok(None);
         }
