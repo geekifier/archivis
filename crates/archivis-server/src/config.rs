@@ -149,7 +149,7 @@ pub struct HardcoverConfig {
 impl Default for HardcoverConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
+            enabled: false,
             api_token: None,
             max_requests_per_minute: 50,
         }
@@ -756,7 +756,7 @@ frontend_dir = "/opt/archivis/frontend"
         assert!(config.contact_email.is_none());
         assert!(config.open_library.enabled);
         assert_eq!(config.open_library.max_requests_per_minute, 100);
-        assert!(config.hardcover.enabled);
+        assert!(!config.hardcover.enabled);
         assert!(config.hardcover.api_token.is_none());
         assert_eq!(config.hardcover.max_requests_per_minute, 50);
         assert!((config.auto_identify_threshold - 0.6).abs() < f32::EPSILON);

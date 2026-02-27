@@ -345,6 +345,12 @@ fn init_metadata_providers(metadata_config: &config::MetadataConfig) -> Arc<Prov
         metadata_config.enabled && metadata_config.hardcover.enabled,
     );
 
+    if metadata_config.hardcover.enabled && metadata_config.hardcover.api_token.is_none() {
+        tracing::warn!(
+            "Hardcover provider is enabled but no API token is configured — provider will be unavailable"
+        );
+    }
+
     let mut registry = ProviderRegistry::new();
     registry.register(Arc::new(ol_provider));
     registry.register(Arc::new(hc_provider));
