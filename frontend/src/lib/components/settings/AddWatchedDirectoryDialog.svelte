@@ -5,12 +5,12 @@
 		WatchedDirectoryResponse,
 		WatchMode
 	} from '$lib/api/types.js';
-	import { Button } from '$lib/components/ui/button/index.js';
-	import { Input } from '$lib/components/ui/input/index.js';
-	import { Switch } from '$lib/components/ui/switch/index.js';
-	import { Label } from '$lib/components/ui/label/index.js';
-	import * as Dialog from '$lib/components/ui/dialog/index.js';
 	import PathPicker from '$lib/components/library/PathPicker.svelte';
+	import { Button } from '$lib/components/ui/button/index.js';
+	import * as Dialog from '$lib/components/ui/dialog/index.js';
+	import { Input } from '$lib/components/ui/input/index.js';
+	import { Label } from '$lib/components/ui/label/index.js';
+	import { Switch } from '$lib/components/ui/switch/index.js';
 
 	interface Props {
 		open: boolean;
@@ -29,6 +29,9 @@
 	let pollInterval = $state(30);
 	let adding = $state(false);
 	let addError = $state<string | null>(null);
+	let pathInput = $state('');
+	let pathValidating = $state(false);
+	let pathError = $state<string | null>(null);
 
 	// Toggle states
 	let importExisting = $state(false);
@@ -89,6 +92,8 @@
 	export function resetAndOpen() {
 		editingDir = null;
 		watchPath = '';
+		pathInput = '';
+		pathError = null;
 		watchMode = 'poll';
 		pollInterval = 30;
 		detection = null;
@@ -119,8 +124,26 @@
 		}
 	}
 
+	async function handleManualPath() {
+		const trimmed = pathInput.trim();
+		if (!trimmed) return;
+		pathValidating = true;
+		pathError = null;
+		try {
+			const result = await api.filesystem.browse(trimmed, true);
+			watchPath = result.path;
+			pathInput = result.path;
+			runDetection(result.path);
+		} catch (err) {
+			pathError = err instanceof Error ? err.message : 'Invalid path';
+		} finally {
+			pathValidating = false;
+		}
+	}
+
 	function handlePathSelected(path: string) {
 		watchPath = path;
+		pathInput = path;
 		runDetection(path);
 	}
 
@@ -187,14 +210,24 @@
 								id="watch-path"
 								type="text"
 								placeholder="/path/to/watch"
-								bind:value={watchPath}
-								readonly
+								bind:value={pathInput}
+								disabled={pathValidating}
+								onkeydown={(e: KeyboardEvent) => {
+									if (e.key === 'Enter') handleManualPath();
+								}}
 							/>
 						</div>
 						<Button variant="outline" size="sm" onclick={() => (pickerOpen = true)}>
 							Browse
 						</Button>
 					</div>
+					{#if pathError}
+						<p class="mt-1 text-xs text-destructive">{pathError}</p>
+					{:else if pathInput.trim() && pathInput.trim() !== watchPath}
+						<p class="text-center mt-2 text-sm text-muted-foreground ml-40">
+							Press ⏎ to confirm
+						</p>
+					{/if}
 				</div>
 			{:else}
 				<div>

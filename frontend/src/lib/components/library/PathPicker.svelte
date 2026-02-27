@@ -133,13 +133,27 @@
 		<!-- Breadcrumb navigation -->
 		<nav class="flex flex-wrap items-center gap-0.5 text-sm" aria-label="Path breadcrumbs">
 			<button
-				class="rounded px-1 py-0.5 text-sm hover:bg-muted {breadcrumbs.length === 0
-					? 'font-medium text-foreground'
+				class="rounded px-1 py-0.5 hover:bg-muted {breadcrumbs.length === 0
+					? 'text-foreground'
 					: 'text-muted-foreground hover:text-foreground'}"
 				onclick={() => navigateTo('/')}
 				disabled={loading}
+				title="Root"
 			>
-				/
+				<svg
+					class="size-3.5"
+					viewBox="0 0 24 24"
+					fill="none"
+					stroke="currentColor"
+					stroke-width="2"
+					stroke-linecap="round"
+					stroke-linejoin="round"
+				>
+					<line x1="22" x2="2" y1="12" y2="12" />
+					<path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z" />
+					<line x1="6" x2="6.01" y1="16" y2="16" />
+					<line x1="10" x2="10.01" y1="16" y2="16" />
+				</svg>
 			</button>
 			{#each breadcrumbs as crumb, i (crumb.path)}
 				<span class="text-muted-foreground/50">/</span>
