@@ -7,6 +7,8 @@
 	} from '$lib/api/types.js';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
+	import { Switch } from '$lib/components/ui/switch/index.js';
+	import { Label } from '$lib/components/ui/label/index.js';
 	import * as Dialog from '$lib/components/ui/dialog/index.js';
 	import PathPicker from '$lib/components/library/PathPicker.svelte';
 
@@ -28,6 +30,11 @@
 	let adding = $state(false);
 	let addError = $state<string | null>(null);
 
+	// Toggle states
+	let importExisting = $state(false);
+	let deleteSourceAfterImport = $state(false);
+	let deleteSourceLoading = $state(false);
+
 	// Editing mode reuse
 	let editingDir = $state<WatchedDirectoryResponse | null>(null);
 
@@ -40,6 +47,33 @@
 			detection.native_likely_works !== 'likely'
 	);
 
+	async function loadDeleteSourceSetting() {
+		deleteSourceLoading = true;
+		try {
+			const response = await api.settings.get();
+			const entry = response.settings.find(
+				(s) => s.key === 'watcher.delete_source_after_import'
+			);
+			if (entry) {
+				deleteSourceAfterImport = entry.effective_value === true;
+			}
+		} catch {
+			// Silently fall back to default (false)
+		} finally {
+			deleteSourceLoading = false;
+		}
+	}
+
+	async function handleDeleteSourceToggle(checked: boolean) {
+		deleteSourceAfterImport = checked;
+		try {
+			await api.settings.update({ 'watcher.delete_source_after_import': checked });
+		} catch {
+			// Revert on failure
+			deleteSourceAfterImport = !checked;
+		}
+	}
+
 	export function openForEdit(dir: WatchedDirectoryResponse) {
 		editingDir = dir;
 		watchPath = dir.path;
@@ -49,6 +83,7 @@
 		detectError = null;
 		addError = null;
 		open = true;
+		loadDeleteSourceSetting();
 	}
 
 	export function resetAndOpen() {
@@ -59,7 +94,9 @@
 		detection = null;
 		detectError = null;
 		addError = null;
+		importExisting = false;
 		open = true;
+		loadDeleteSourceSetting();
 	}
 
 	function handleOpenChange(isOpen: boolean) {
@@ -107,6 +144,13 @@
 					poll_interval_secs: watchMode === 'poll' ? pollInterval : undefined
 				});
 				onadd(dir);
+
+				// Fire-and-forget: trigger scan for existing files
+				if (importExisting) {
+					api.watchedDirectories.triggerScan(dir.id).catch(() => {
+						// Scan trigger is best-effort; ignore errors
+					});
+				}
 			}
 			open = false;
 		} catch (err) {
@@ -158,6 +202,44 @@
 					<p class="font-mono text-sm text-muted-foreground">{watchPath}</p>
 				</div>
 			{/if}
+
+			<!-- Toggle settings -->
+			{#if !isEditing}
+				<div class="flex items-center justify-between gap-4">
+					<div class="space-y-0.5">
+						<Label for="import-existing" class="text-sm font-medium">
+							Import existing files
+						</Label>
+						<p class="text-xs text-muted-foreground">
+							Scan and import all ebook files already present in this directory when it
+							is first added.
+						</p>
+					</div>
+					<Switch
+						id="import-existing"
+						checked={importExisting}
+						onCheckedChange={(checked) => (importExisting = checked)}
+					/>
+				</div>
+			{/if}
+
+			<div class="flex items-center justify-between gap-4">
+				<div class="space-y-0.5">
+					<Label for="delete-source" class="text-sm font-medium">
+						Delete source after import
+					</Label>
+					<p class="text-xs text-muted-foreground">
+						Remove the original file from this directory after it has been successfully
+						imported into the library.
+					</p>
+				</div>
+				<Switch
+					id="delete-source"
+					checked={deleteSourceAfterImport}
+					disabled={deleteSourceLoading}
+					onCheckedChange={(checked) => handleDeleteSourceToggle(checked)}
+				/>
+			</div>
 
 			<!-- Detection result -->
 			{#if detecting}
