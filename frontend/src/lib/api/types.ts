@@ -82,6 +82,7 @@ export interface TagEntry {
 export interface FileEntry {
 	id: string;
 	format: BookFormat;
+	format_version?: string | null;
 	file_size: number;
 	hash: string;
 	added_at: string;

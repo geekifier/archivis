@@ -41,6 +41,12 @@ export function formatIdentifierType(type: string): string {
 	return labels[type] ?? type;
 }
 
+/** Format a book file format with optional spec version (e.g. "EPUB 3.0", "PDF 1.7"). */
+export function formatFormatLabel(format: string, formatVersion?: string | null): string {
+	const label = format.toUpperCase();
+	return formatVersion ? `${label} ${formatVersion}` : label;
+}
+
 /** Format a MetadataSource object into a display string. */
 export function formatMetadataSource(source: { type: string; name?: string }): string {
 	switch (source.type) {
