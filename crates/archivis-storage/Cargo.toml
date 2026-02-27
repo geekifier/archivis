@@ -25,3 +25,4 @@ nix = { version = "0.29", features = ["fs"] }
 [dev-dependencies]
 serde_json = { workspace = true }
 tempfile = { workspace = true }
+uuid = { workspace = true }

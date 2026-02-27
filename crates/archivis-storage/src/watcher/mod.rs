@@ -4,7 +4,7 @@ pub mod service;
 use std::path::PathBuf;
 
 pub use fs_detect::{detect_fs_type, FsDetectionResult, NativeSupport};
-pub use service::WatcherService;
+pub use service::{WatcherRuntimeConfig, WatcherService};
 
 /// Events emitted by the watcher service after filtering and normalization.
 ///
