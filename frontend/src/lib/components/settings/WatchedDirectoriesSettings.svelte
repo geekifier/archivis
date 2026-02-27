@@ -11,6 +11,21 @@
 	let watcherDisabled = $state(false);
 	let dialogOpen = $state(false);
 	let dialogComponent = $state<AddWatchedDirectoryDialog | null>(null);
+	let deleteSourceAfterImport = $state(false);
+
+	async function loadDeleteSourceSetting() {
+		try {
+			const response = await api.settings.get();
+			const entry = response.settings.find(
+				(s) => s.key === 'watcher.delete_source_after_import'
+			);
+			if (entry) {
+				deleteSourceAfterImport = entry.effective_value === true;
+			}
+		} catch {
+			// Fall back to default (false)
+		}
+	}
 
 	async function fetchDirectories() {
 		loading = true;
@@ -60,6 +75,7 @@
 
 	$effect(() => {
 		fetchDirectories();
+		loadDeleteSourceSetting();
 	});
 </script>
 
@@ -173,6 +189,7 @@
 				{#each directories as dir (dir.id)}
 					<WatchedDirectoryRow
 						directory={dir}
+						{deleteSourceAfterImport}
 						onupdate={handleUpdate}
 						ondelete={handleDelete}
 						onedit={handleEdit}

@@ -6,12 +6,13 @@
 
 	interface Props {
 		directory: WatchedDirectoryResponse;
+		deleteSourceAfterImport: boolean;
 		onupdate: (dir: WatchedDirectoryResponse) => void;
 		ondelete: (id: string) => void;
 		onedit: (dir: WatchedDirectoryResponse) => void;
 	}
 
-	let { directory, onupdate, ondelete, onedit }: Props = $props();
+	let { directory, deleteSourceAfterImport, onupdate, ondelete, onedit }: Props = $props();
 
 	let toggling = $state(false);
 	let scanning = $state(false);
@@ -53,6 +54,16 @@
 		directory.watch_mode === 'native'
 			? 'native'
 			: `polling \u00B7 ${directory.effective_poll_interval_secs}s`
+	);
+
+	const deleteBadgeClass = $derived(
+		deleteSourceAfterImport
+			? 'bg-red-500/10 text-red-700 dark:text-red-400'
+			: 'bg-green-500/10 text-green-700 dark:text-green-400'
+	);
+
+	const deleteBadgeText = $derived(
+		deleteSourceAfterImport ? 'Delete Imported Files' : 'Keep Imported Files'
 	);
 
 	async function toggleEnabled() {
@@ -119,12 +130,13 @@
 					{modeBadgeText}
 				</span>
 
-				<!-- Detection hint -->
-				{#if directory.detected_fs}
-					<span class="text-xs text-muted-foreground">
-						Detected: {directory.detected_fs.fs_type}
-					</span>
-				{/if}
+				<!-- Delete source badge -->
+				<span
+					class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium {deleteBadgeClass}"
+				>
+					{deleteBadgeText}
+				</span>
+
 			</div>
 
 			<!-- Error display -->
