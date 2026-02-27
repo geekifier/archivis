@@ -631,3 +631,49 @@ export interface StatsResponse {
 	usage: UsageStats;
 	db: DbStats | null;
 }
+
+// --- Watched directory types ---
+
+export type WatchMode = 'native' | 'poll';
+
+export interface FsDetectionResponse {
+	/** Detected filesystem type (e.g., "ext4", "NFS", "CIFS", "FUSE", "unknown"). */
+	fs_type: string;
+	/** Whether native OS events are expected to work: "likely", "unlikely", or "unknown". */
+	native_likely_works: 'likely' | 'unlikely' | 'unknown';
+	/** User-facing explanation of the detection result. */
+	explanation: string;
+}
+
+export interface WatchedDirectoryResponse {
+	id: string;
+	path: string;
+	watch_mode: WatchMode;
+	poll_interval_secs: number | null;
+	effective_poll_interval_secs: number;
+	enabled: boolean;
+	last_error: string | null;
+	detected_fs: FsDetectionResponse | null;
+	created_at: string;
+	updated_at: string;
+}
+
+export interface AddWatchedDirectoryRequest {
+	path: string;
+	watch_mode?: WatchMode;
+	poll_interval_secs?: number | null;
+}
+
+export interface UpdateWatchedDirectoryRequest {
+	watch_mode?: WatchMode;
+	poll_interval_secs?: number | null;
+	enabled?: boolean;
+}
+
+export interface DetectFsRequest {
+	path: string;
+}
+
+export interface ScanTriggeredResponse {
+	task_id: string;
+}

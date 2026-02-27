@@ -5,6 +5,7 @@
 	import { api } from '$lib/api/index.js';
 	import type { SettingEntry } from '$lib/api/types.js';
 	import { Button } from '$lib/components/ui/button/index.js';
+	import WatchedDirectoriesSettings from '$lib/components/settings/WatchedDirectoriesSettings.svelte';
 
 	// Admin guard
 	$effect(() => {
@@ -279,6 +280,9 @@
 			<span>{error}</span>
 		</div>
 	{/if}
+
+	<!-- Watched Directories section (always visible, handles its own loading) -->
+	<WatchedDirectoriesSettings />
 
 	{#if loading}
 		<div class="flex items-center justify-center py-12">

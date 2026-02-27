@@ -2,6 +2,7 @@ import { goto } from '$app/navigation';
 import { parseApiError } from './errors.js';
 import type {
 	AddIdentifierRequest,
+	AddWatchedDirectoryRequest,
 	AuthorResponse,
 	AuthStatusResponse,
 	BatchIsbnScanResponse,
@@ -17,9 +18,11 @@ import type {
 	CreateAuthorRequest,
 	CreateBookmarkRequest,
 	CreatePublisherRequest,
+	DetectFsRequest,
 	DuplicateCountResponse,
 	DuplicateLinkResponse,
 	FlagDuplicateRequest,
+	FsDetectionResponse,
 	IdentifyAllResponse,
 	IdentifyResponse,
 	IsbnScanResponse,
@@ -35,6 +38,7 @@ import type {
 	PublisherResponse,
 	ReadingProgressResponse,
 	ScanManifestResponse,
+	ScanTriggeredResponse,
 	SeriesResponse,
 	SetBookAuthorsRequest,
 	SetBookSeriesRequest,
@@ -48,8 +52,10 @@ import type {
 	UpdateIdentifierRequest,
 	UpdateProgressRequest,
 	UpdateSettingsResponse,
+	UpdateWatchedDirectoryRequest,
 	UploadResponse,
-	User
+	User,
+	WatchedDirectoryResponse
 } from './types.js';
 
 const BASE_URL = '/api';
@@ -575,6 +581,49 @@ export const api = {
 		}
 	},
 
+	watchedDirectories: {
+		/** List all watched directories. */
+		list(): Promise<WatchedDirectoryResponse[]> {
+			return request<WatchedDirectoryResponse[]>('GET', '/watched-directories');
+		},
+
+		/** Add a new watched directory. */
+		add(data: AddWatchedDirectoryRequest): Promise<WatchedDirectoryResponse> {
+			return request<WatchedDirectoryResponse>('POST', '/watched-directories', data);
+		},
+
+		/** Update an existing watched directory. */
+		update(
+			id: string,
+			data: UpdateWatchedDirectoryRequest
+		): Promise<WatchedDirectoryResponse> {
+			return request<WatchedDirectoryResponse>(
+				'PUT',
+				`/watched-directories/${encodeURIComponent(id)}`,
+				data
+			);
+		},
+
+		/** Delete a watched directory. */
+		delete(id: string): Promise<void> {
+			return request<void>('DELETE', `/watched-directories/${encodeURIComponent(id)}`);
+		},
+
+		/** Trigger a manual full scan of a watched directory. */
+		triggerScan(id: string): Promise<ScanTriggeredResponse> {
+			return request<ScanTriggeredResponse>(
+				'POST',
+				`/watched-directories/${encodeURIComponent(id)}/scan`
+			);
+		},
+
+		/** Detect filesystem type for a given path. */
+		detectFilesystem(path: string): Promise<FsDetectionResponse> {
+			const body: DetectFsRequest = { path };
+			return request<FsDetectionResponse>('POST', '/watched-directories/detect', body);
+		}
+	},
+
 	stats: {
 		/** Fetch library and usage statistics. */
 		get(): Promise<StatsResponse> {
@@ -687,6 +736,7 @@ export const api = {
 export { ApiError } from './errors.js';
 export type {
 	AddIdentifierRequest,
+	AddWatchedDirectoryRequest,
 	ApiErrorResponse,
 	AuthorEntry,
 	AuthorResponse,
@@ -712,11 +762,13 @@ export type {
 	CreateAuthorRequest,
 	CreateBookmarkRequest,
 	CreatePublisherRequest,
+	DetectFsRequest,
 	DuplicateCountResponse,
 	DuplicateLinkResponse,
 	FileEntry,
 	FlagDuplicateRequest,
 	FormatSummary,
+	FsDetectionResponse,
 	FsEntry,
 	IdentifierEntry,
 	IdentifyAllResponse,
@@ -736,6 +788,7 @@ export type {
 	PublisherResponse,
 	ReadingProgressResponse,
 	ScanManifestResponse,
+	ScanTriggeredResponse,
 	SeriesEntry,
 	SeriesResponse,
 	SetBookAuthorsRequest,
@@ -761,7 +814,10 @@ export type {
 	UpdateIdentifierRequest,
 	UpdateProgressRequest,
 	UpdateSettingsResponse,
+	UpdateWatchedDirectoryRequest,
 	UploadResponse,
 	User,
-	UserRole
+	UserRole,
+	WatchedDirectoryResponse,
+	WatchMode
 } from './types.js';

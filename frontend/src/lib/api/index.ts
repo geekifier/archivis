@@ -1,6 +1,7 @@
 export { api, getSessionToken, setSessionToken, ApiError } from './client.js';
 export type {
 	AddIdentifierRequest,
+	AddWatchedDirectoryRequest,
 	ApiErrorResponse,
 	AuthorEntry,
 	AuthorResponse,
@@ -20,11 +21,13 @@ export type {
 	ConfigSource,
 	ContinueReadingItem,
 	CreateBookmarkRequest,
+	DetectFsRequest,
 	DuplicateCountResponse,
 	DuplicateLinkResponse,
 	FileEntry,
 	FlagDuplicateRequest,
 	FormatSummary,
+	FsDetectionResponse,
 	FsEntry,
 	IdentifierEntry,
 	IdentifyAllResponse,
@@ -42,6 +45,7 @@ export type {
 	PaginatedTags,
 	ReadingProgressResponse,
 	ScanManifestResponse,
+	ScanTriggeredResponse,
 	SeriesEntry,
 	SeriesResponse,
 	SetBookAuthorsRequest,
@@ -66,7 +70,10 @@ export type {
 	UpdateIdentifierRequest,
 	UpdateProgressRequest,
 	UpdateSettingsResponse,
+	UpdateWatchedDirectoryRequest,
 	UploadResponse,
 	User,
-	UserRole
+	UserRole,
+	WatchedDirectoryResponse,
+	WatchMode
 } from './client.js';

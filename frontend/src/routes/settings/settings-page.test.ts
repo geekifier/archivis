@@ -9,6 +9,14 @@ const { mockApi, mockAuth } = vi.hoisted(() => {
 		settings: {
 			get: vi.fn(),
 			update: vi.fn()
+		},
+		watchedDirectories: {
+			list: vi.fn(),
+			add: vi.fn(),
+			update: vi.fn(),
+			delete: vi.fn(),
+			triggerScan: vi.fn(),
+			detectFilesystem: vi.fn()
 		}
 	};
 
@@ -29,7 +37,18 @@ const { mockApi, mockAuth } = vi.hoisted(() => {
 });
 
 vi.mock('$lib/api/index.js', () => ({
-	api: mockApi
+	api: mockApi,
+	ApiError: class ApiError extends Error {
+		status: number;
+		constructor(status: number, message: string) {
+			super(message);
+			this.status = status;
+			this.name = 'ApiError';
+		}
+		get userMessage() {
+			return this.message;
+		}
+	}
 }));
 
 vi.mock('$lib/stores/auth.svelte.js', () => ({
@@ -67,6 +86,7 @@ describe('Settings page sensitive controls', () => {
 			updated: ['metadata.hardcover.api_token'],
 			requires_restart: false
 		});
+		mockApi.watchedDirectories.list.mockResolvedValue([]);
 	});
 
 	it('uses a textarea for token replacement and saves the entered value', async () => {
