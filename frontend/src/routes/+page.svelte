@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { SvelteSet } from 'svelte/reactivity';
+	import { SvelteSet, SvelteURLSearchParams } from 'svelte/reactivity';
 	import { api, type PaginatedBooks } from '$lib/api/index.js';
 	import type { SortField, SortOrder } from '$lib/api/index.js';
 	import { Button } from '$lib/components/ui/button/index.js';
@@ -10,6 +10,9 @@
 	import BookListView from '$lib/components/library/BookListView.svelte';
 	import Pagination from '$lib/components/library/Pagination.svelte';
 	import BatchEditPanel from '$lib/components/library/BatchEditPanel.svelte';
+	import { page } from '$app/state';
+	import { goto } from '$app/navigation';
+	import type { BookFormat, MetadataStatus } from '$lib/api/types.js';
 
 	const PER_PAGE = 24;
 	const DEBOUNCE_MS = 300;
@@ -31,18 +34,35 @@
 		return stored === 'list' ? 'list' : 'grid';
 	}
 
+	// Restore state from URL search params (supports browser back-navigation)
+	const _params = page.url.searchParams;
+	const _initPage = Math.max(1, parseInt(_params.get('page') || '1', 10) || 1);
+	const _initQuery = _params.get('q') || '';
+	const _initSort = _params.get('sort') as SortField | null;
+	const _initOrder = _params.get('order') as SortOrder | null;
+	const _initSortIdx =
+		_initSort && _initOrder
+			? sortOptions.findIndex((o) => o.field === _initSort && o.order === _initOrder)
+			: -1;
+	const _initFormat = _params.get('format') as BookFormat | null;
+	const _initStatus = _params.get('status') as MetadataStatus | null;
+
+	filters.clearFilters();
+	if (_initFormat) filters.setFormat(_initFormat);
+	if (_initStatus) filters.setStatus(_initStatus);
+
 	let viewMode = $state<ViewMode>(loadViewPreference());
-	let searchInput = $state('');
-	let activeQuery = $state('');
-	let sortIndex = $state(0);
-	let currentPage = $state(1);
+	let searchInput = $state(_initQuery);
+	let activeQuery = $state(_initQuery);
+	let sortIndex = $state(_initSortIdx >= 0 ? _initSortIdx : 0);
+	let currentPage = $state(_initPage);
 	let loading = $state(true);
 	let data = $state<PaginatedBooks | null>(null);
 	let error = $state<string | null>(null);
 	let debounceTimer: ReturnType<typeof setTimeout> | undefined;
 
-	let activeSortBy = $state<SortField>(sortOptions[0].field);
-	let activeSortOrder = $state<SortOrder>(sortOptions[0].order);
+	let activeSortBy = $state<SortField>(_initSort || sortOptions[0].field);
+	let activeSortOrder = $state<SortOrder>(_initOrder || sortOptions[0].order);
 
 	// --- Identify All state ---
 	let identifyAllDialogOpen = $state(false);
@@ -60,15 +80,6 @@
 
 	const selectedCount = $derived(selectedIds.size);
 	const selectedArray = $derived(Array.from(selectedIds));
-
-	const sortBy = $derived(sortOptions[sortIndex].field);
-	const sortOrder = $derived(sortOptions[sortIndex].order);
-
-	// Keep activeSortBy/Order in sync with dropdown changes
-	$effect(() => {
-		activeSortBy = sortBy;
-		activeSortOrder = sortOrder;
-	});
 
 	const includeParam = $derived(viewMode === 'list' ? 'authors,series,files' : 'authors,files');
 
@@ -99,6 +110,8 @@
 
 	function handleSortChange(e: Event) {
 		sortIndex = Number((e.target as HTMLSelectElement).value);
+		activeSortBy = sortOptions[sortIndex].field;
+		activeSortOrder = sortOptions[sortIndex].order;
 	}
 
 	function handlePageChange(page: number) {
@@ -176,14 +189,36 @@
 		currentPage = currentPage;
 	}
 
-	// Reset to page 1 when search, sort, or filters change
+	// Reset to page 1 when search, sort, or filters change (but not on initial mount)
+	let _prevQuery = _initQuery;
+	let _prevSortBy: SortField = _initSort || sortOptions[0].field;
+	let _prevSortOrder: SortOrder = _initOrder || sortOptions[0].order;
+	let _prevFormat: BookFormat | null = _initFormat;
+	let _prevStatus: MetadataStatus | null = _initStatus;
+
 	$effect(() => {
-		void activeQuery;
-		void activeSortBy;
-		void activeSortOrder;
-		void filters.activeFormat;
-		void filters.activeStatus;
-		currentPage = 1;
+		const q = activeQuery;
+		const sb = activeSortBy;
+		const so = activeSortOrder;
+		const fmt = filters.activeFormat;
+		const st = filters.activeStatus;
+
+		const changed =
+			q !== _prevQuery ||
+			sb !== _prevSortBy ||
+			so !== _prevSortOrder ||
+			fmt !== _prevFormat ||
+			st !== _prevStatus;
+
+		_prevQuery = q;
+		_prevSortBy = sb;
+		_prevSortOrder = so;
+		_prevFormat = fmt;
+		_prevStatus = st;
+
+		if (changed) {
+			currentPage = 1;
+		}
 	});
 
 	// Fetch books when query params change
@@ -219,6 +254,23 @@
 			.finally(() => {
 				loading = false;
 			});
+	});
+
+	// Sync state to URL for back-navigation support
+	$effect(() => {
+		const params = new SvelteURLSearchParams();
+		if (currentPage > 1) params.set('page', String(currentPage));
+		if (activeQuery) params.set('q', activeQuery);
+		if (activeSortBy !== sortOptions[0].field || activeSortOrder !== sortOptions[0].order) {
+			params.set('sort', activeSortBy);
+			params.set('order', activeSortOrder);
+		}
+		if (filters.activeFormat) params.set('format', filters.activeFormat);
+		if (filters.activeStatus) params.set('status', filters.activeStatus);
+
+		const search = params.toString();
+		const url = search ? `/?${search}` : '/';
+		goto(url, { replaceState: true, noScroll: true, keepFocus: true });
 	});
 
 	// Cleanup SSE on unmount

@@ -495,8 +495,8 @@
 
 <div class="mx-auto max-w-5xl space-y-6">
 	<!-- Back navigation -->
-	<a
-		href="/"
+	<button
+		onclick={() => history.back()}
 		class="inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
 	>
 		<svg
@@ -512,7 +512,7 @@
 			<path d="m15 18-6-6 6-6" />
 		</svg>
 		Back to Library
-	</a>
+	</button>
 
 	{#if loading}
 		<!-- Loading skeleton -->
@@ -538,7 +538,7 @@
 				<p class="mt-1 text-sm text-muted-foreground">
 					The book you're looking for doesn't exist or has been removed.
 				</p>
-				<Button variant="outline" class="mt-4" href="/">Back to Library</Button>
+				<Button variant="outline" class="mt-4" onclick={() => history.back()}>Back to Library</Button>
 			</div>
 		</div>
 	{:else if error}
