@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
+use serde::de::{self, SeqAccess, Visitor};
+use serde::{Deserialize, Deserializer, Serialize};
 use tracing::debug;
 
 use archivis_core::models::IdentifierType;
@@ -30,7 +31,7 @@ query LookupISBN($isbn: String!) {
     pages
     release_date
     edition_format
-    language { name }
+    language { language }
     publisher { name }
     cached_image
     cached_contributors
@@ -65,7 +66,7 @@ query LookupISBN($isbn: String!) {
     pages
     release_date
     edition_format
-    language { name }
+    language { language }
     publisher { name }
     cached_image
     cached_contributors
@@ -124,7 +125,7 @@ query GetBooks($ids: [Int!]!) {
       pages
       release_date
       publisher { name }
-      language { name }
+      language { language }
       cached_image
     }
     cached_tags
@@ -310,11 +311,11 @@ impl HardcoverProvider {
         let cover_url = parse_cached_image(edition.cached_image.as_ref())
             .or_else(|| book.and_then(|b| parse_cached_image(b.cached_image.as_ref())));
 
-        // Language from edition.language.name, normalized to ISO 639-1.
+        // Language from edition.language.language, normalized to ISO 639-1.
         let language = edition
             .language
             .as_ref()
-            .and_then(|l| normalize_language(&l.name));
+            .and_then(|l| normalize_language(&l.language));
 
         // Build identifiers.
         let identifiers = build_edition_identifiers(edition, book.and_then(|b| b.id), queried_isbn);
@@ -362,7 +363,7 @@ impl HardcoverProvider {
         let cover_url = edition.and_then(|e| parse_cached_image(e.cached_image.as_ref()));
         let language = edition
             .and_then(|e| e.language.as_ref())
-            .and_then(|l| normalize_language(&l.name));
+            .and_then(|l| normalize_language(&l.language));
 
         let mut identifiers = Vec::new();
 
@@ -515,6 +516,100 @@ impl MetadataProvider for HardcoverProvider {
 
 // ── GraphQL request/response types ──────────────────────────────────
 
+/// Deserialize an `Option<Vec<i64>>` that tolerates string-encoded integers.
+///
+/// The Hardcover API declares `ids: [Int]` in its GraphQL schema but the
+/// actual JSON payload sometimes returns the values as strings
+/// (e.g. `["788634"]` instead of `[788634]`). This visitor accepts both
+/// representations as well as mixed arrays.
+fn deserialize_ids<'de, D>(deserializer: D) -> Result<Option<Vec<i64>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct IdsVisitor;
+
+    impl<'de> Visitor<'de> for IdsVisitor {
+        type Value = Option<Vec<i64>>;
+
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("null or an array of integers/string-encoded integers")
+        }
+
+        fn visit_none<E: de::Error>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+
+        fn visit_unit<E: de::Error>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+
+        fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+            let mut ids = Vec::with_capacity(seq.size_hint().unwrap_or(0));
+            while let Some(val) = seq.next_element::<serde_json::Value>()? {
+                let id = match &val {
+                    serde_json::Value::Number(n) => n.as_i64().ok_or_else(|| {
+                        de::Error::custom(format!("number is not a valid i64: {n}"))
+                    })?,
+                    serde_json::Value::String(s) => s.parse::<i64>().map_err(|_| {
+                        de::Error::custom(format!("string is not a valid i64: \"{s}\""))
+                    })?,
+                    other => {
+                        return Err(de::Error::custom(format!(
+                            "expected integer or string, got: {other}"
+                        )));
+                    }
+                };
+                ids.push(id);
+            }
+            Ok(Some(ids))
+        }
+    }
+
+    deserializer.deserialize_any(IdsVisitor)
+}
+
+/// Deserialize an `Option<i64>` that tolerates a string-encoded integer.
+fn deserialize_optional_i64<'de, D>(deserializer: D) -> Result<Option<i64>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct OptI64Visitor;
+
+    impl Visitor<'_> for OptI64Visitor {
+        type Value = Option<i64>;
+
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("null, an integer, or a string-encoded integer")
+        }
+
+        fn visit_none<E: de::Error>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+
+        fn visit_unit<E: de::Error>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+
+        fn visit_i64<E: de::Error>(self, v: i64) -> Result<Self::Value, E> {
+            Ok(Some(v))
+        }
+
+        fn visit_u64<E: de::Error>(self, v: u64) -> Result<Self::Value, E> {
+            i64::try_from(v)
+                .map(Some)
+                .map_err(|_| de::Error::custom(format!("u64 out of i64 range: {v}")))
+        }
+
+        fn visit_str<E: de::Error>(self, v: &str) -> Result<Self::Value, E> {
+            v.parse::<i64>()
+                .map(Some)
+                .map_err(|_| de::Error::custom(format!("string is not a valid i64: \"{v}\"")))
+        }
+    }
+
+    deserializer.deserialize_any(OptI64Visitor)
+}
+
 /// GraphQL request body.
 #[derive(Serialize)]
 struct GraphqlRequest {
@@ -533,6 +628,7 @@ struct EditionsResponse {
 #[derive(Debug, Deserialize)]
 struct HcEdition {
     #[allow(dead_code)]
+    #[serde(default, deserialize_with = "deserialize_optional_i64")]
     id: Option<i64>,
     isbn_13: Option<String>,
     isbn_10: Option<String>,
@@ -553,6 +649,7 @@ struct HcEdition {
 /// Book (work) data embedded in an edition response.
 #[derive(Debug, Deserialize)]
 struct HcBookInEdition {
+    #[serde(default, deserialize_with = "deserialize_optional_i64")]
     id: Option<i64>,
     title: Option<String>,
     description: Option<String>,
@@ -573,6 +670,7 @@ struct SearchResponse {
 /// Hardcover search result.
 #[derive(Debug, Deserialize)]
 struct HcSearch {
+    #[serde(default, deserialize_with = "deserialize_ids")]
     ids: Option<Vec<i64>>,
     #[allow(dead_code)]
     results: Option<serde_json::Value>,
@@ -587,6 +685,7 @@ struct BooksResponse {
 /// Hardcover book (work) from the books query.
 #[derive(Debug, Deserialize)]
 struct HcBook {
+    #[serde(default, deserialize_with = "deserialize_optional_i64")]
     id: Option<i64>,
     title: Option<String>,
     description: Option<String>,
@@ -636,9 +735,12 @@ struct HcAuthor {
 }
 
 /// Language name wrapper.
+///
+/// The Hardcover `languages` table uses `language` (not `name`) for the
+/// human-readable language string.
 #[derive(Debug, Deserialize)]
 struct HcLanguage {
-    name: String,
+    language: String,
 }
 
 /// Publisher name wrapper.
@@ -1172,7 +1274,7 @@ mod tests {
                 "pages": 412,
                 "release_date": "1965-08-01",
                 "edition_format": "paperback",
-                "language": { "name": "English" },
+                "language": { "language": "English" },
                 "publisher": { "name": "Chilton Books" },
                 "cached_image": "{\"url\": \"https://cdn.hardcover.app/covers/dune.jpg\"}",
                 "cached_contributors": null,
@@ -1204,7 +1306,7 @@ mod tests {
         assert_eq!(edition.title.as_deref(), Some("Dune"));
         assert_eq!(edition.pages, Some(412));
         assert_eq!(edition.release_date.as_deref(), Some("1965-08-01"));
-        assert_eq!(edition.language.as_ref().unwrap().name, "English");
+        assert_eq!(edition.language.as_ref().unwrap().language, "English");
         assert_eq!(edition.publisher.as_ref().unwrap().name, "Chilton Books");
 
         let book = edition.book.as_ref().unwrap();
@@ -1228,7 +1330,7 @@ mod tests {
                 "pages": 412,
                 "release_date": "1965-08-01",
                 "edition_format": "paperback",
-                "language": { "name": "English" },
+                "language": { "language": "English" },
                 "publisher": { "name": "Chilton Books" },
                 "cached_image": "{\"url\": \"https://cdn.hardcover.app/covers/dune.jpg\"}",
                 "cached_contributors": null,
@@ -1388,6 +1490,34 @@ mod tests {
         assert!(response.search.is_none());
     }
 
+    #[test]
+    fn parse_search_response_string_ids() {
+        let json = r#"{
+            "search": {
+                "ids": ["100", "200", "300"],
+                "results": null
+            }
+        }"#;
+
+        let response: SearchResponse = serde_json::from_str(json).unwrap();
+        let search = response.search.unwrap();
+        assert_eq!(search.ids.unwrap(), vec![100, 200, 300]);
+    }
+
+    #[test]
+    fn parse_search_response_mixed_ids() {
+        let json = r#"{
+            "search": {
+                "ids": [100, "200", 300],
+                "results": null
+            }
+        }"#;
+
+        let response: SearchResponse = serde_json::from_str(json).unwrap();
+        let search = response.search.unwrap();
+        assert_eq!(search.ids.unwrap(), vec![100, 200, 300]);
+    }
+
     // ── Books response parsing ──────────────────────────────────────
 
     #[test]
@@ -1412,7 +1542,7 @@ mod tests {
                     "pages": 412,
                     "release_date": "1965-08-01",
                     "publisher": { "name": "Chilton Books" },
-                    "language": { "name": "English" },
+                    "language": { "language": "English" },
                     "cached_image": {"url": "https://cdn.hardcover.app/covers/dune.jpg"}
                 },
                 "cached_tags": [{"tag": "Science Fiction"}]
@@ -1452,6 +1582,28 @@ mod tests {
         assert!((metadata.rating.unwrap() - 4.25).abs() < f32::EPSILON);
         // Exact title match -> 0.8 confidence.
         assert!((metadata.confidence - 0.8).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn parse_books_response_string_id() {
+        let json = r#"{
+            "books": [{
+                "id": "67890",
+                "title": "Dune",
+                "description": null,
+                "rating": null,
+                "contributions": [],
+                "book_series": [],
+                "default_cover_edition": null,
+                "cached_tags": null
+            }]
+        }"#;
+
+        let response: BooksResponse = serde_json::from_str(json).unwrap();
+        let books = response.books.unwrap();
+        assert_eq!(books.len(), 1);
+        assert_eq!(books[0].id, Some(67890));
+        assert_eq!(books[0].title.as_deref(), Some("Dune"));
     }
 
     // ── Search string construction ──────────────────────────────────
