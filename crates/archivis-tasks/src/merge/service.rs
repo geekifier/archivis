@@ -76,6 +76,9 @@ impl<S: StorageBackend> MergeService<S> {
             BookFileRepository::reassign_to_book(&self.db_pool, secondary_id, primary_id).await?;
         debug!(count = moved, "moved files from secondary to primary");
 
+        // 2b. Deduplicate files with identical hashes on the primary book
+        self.deduplicate_files(primary_id).await?;
+
         // 3. Merge identifiers: copy from secondary, skip duplicates
         self.merge_identifiers(primary_id, &primary, &secondary)
             .await?;
@@ -116,6 +119,47 @@ impl<S: StorageBackend> MergeService<S> {
         // 12. Return updated primary
         let result = BookRepository::get_with_relations(&self.db_pool, primary_id).await?;
         Ok(result)
+    }
+
+    /// Remove duplicate files on a book (same hash), keeping the earliest entry.
+    async fn deduplicate_files(&self, book_id: Uuid) -> Result<(), MergeError> {
+        let files = BookFileRepository::get_by_book_id(&self.db_pool, book_id).await?;
+
+        let mut seen: std::collections::HashMap<&str, &archivis_core::models::BookFile> =
+            std::collections::HashMap::new();
+        let mut to_delete = Vec::new();
+
+        for file in &files {
+            match seen.entry(&file.hash) {
+                std::collections::hash_map::Entry::Occupied(existing) => {
+                    // Keep the one with the earlier added_at
+                    if file.added_at < existing.get().added_at {
+                        to_delete.push(existing.get().id);
+                        *existing.into_mut() = file;
+                    } else {
+                        to_delete.push(file.id);
+                    }
+                }
+                std::collections::hash_map::Entry::Vacant(slot) => {
+                    slot.insert(file);
+                }
+            }
+        }
+
+        for id in &to_delete {
+            BookFileRepository::delete(&self.db_pool, *id).await?;
+            debug!(file_id = %id, book_id = %book_id, "removed duplicate file entry");
+        }
+
+        if !to_delete.is_empty() {
+            info!(
+                book_id = %book_id,
+                removed = to_delete.len(),
+                "deduplicated files after merge"
+            );
+        }
+
+        Ok(())
     }
 
     /// Copy identifiers from secondary that don't already exist on primary.
