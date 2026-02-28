@@ -8,6 +8,7 @@ pub struct ProviderMetadata {
     /// Provider name, e.g. `"open_library"`, `"hardcover"`.
     pub provider_name: String,
     pub title: Option<String>,
+    pub subtitle: Option<String>,
     pub authors: Vec<ProviderAuthor>,
     pub description: Option<String>,
     pub language: Option<String>,
@@ -67,6 +68,7 @@ mod tests {
         let metadata = ProviderMetadata {
             provider_name: "open_library".to_string(),
             title: Some("Dune".to_string()),
+            subtitle: None,
             authors: vec![ProviderAuthor {
                 name: "Frank Herbert".to_string(),
                 role: Some("author".to_string()),
@@ -111,6 +113,7 @@ mod tests {
         let metadata = ProviderMetadata {
             provider_name: "test".to_string(),
             title: None,
+            subtitle: None,
             authors: vec![],
             description: None,
             language: None,

@@ -281,6 +281,10 @@ impl<S: StorageBackend> ImportService<S> {
 
             let mut book = Book::new(&clean_title);
             book.id = book_id;
+            book.subtitle = embedded
+                .subtitle
+                .as_deref()
+                .and_then(|s| sanitize_text(s, sanitize_opts));
             book.description = clean_description;
             book.language.clone_from(&embedded.language);
             book.page_count = embedded.page_count;

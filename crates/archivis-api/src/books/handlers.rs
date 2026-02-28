@@ -193,6 +193,13 @@ pub async fn update_book(
         }
         book.set_title(clean);
     }
+    if let Some(ref subtitle) = body.subtitle {
+        book.subtitle = if subtitle.is_empty() {
+            None
+        } else {
+            sanitize_text(subtitle, &sanitize_opts)
+        };
+    }
     if let Some(ref description) = body.description {
         book.description = sanitize_text(description, &sanitize_opts);
     }

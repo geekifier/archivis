@@ -1,0 +1,104 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id, title, subtitle, sort_title, description, language, publication_date, publisher_id, added_at, updated_at, rating, page_count, metadata_status, metadata_confidence, cover_path FROM books WHERE metadata_confidence < ? AND metadata_status != ? ORDER BY added_at DESC LIMIT ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "title",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "subtitle",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "sort_title",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "description",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "language",
+        "ordinal": 5,
+        "type_info": "Text"
+      },
+      {
+        "name": "publication_date",
+        "ordinal": 6,
+        "type_info": "Text"
+      },
+      {
+        "name": "publisher_id",
+        "ordinal": 7,
+        "type_info": "Text"
+      },
+      {
+        "name": "added_at",
+        "ordinal": 8,
+        "type_info": "Text"
+      },
+      {
+        "name": "updated_at",
+        "ordinal": 9,
+        "type_info": "Text"
+      },
+      {
+        "name": "rating",
+        "ordinal": 10,
+        "type_info": "Float"
+      },
+      {
+        "name": "page_count",
+        "ordinal": 11,
+        "type_info": "Integer"
+      },
+      {
+        "name": "metadata_status",
+        "ordinal": 12,
+        "type_info": "Text"
+      },
+      {
+        "name": "metadata_confidence",
+        "ordinal": 13,
+        "type_info": "Float"
+      },
+      {
+        "name": "cover_path",
+        "ordinal": 14,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      true,
+      true,
+      true,
+      true,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "62cb535516a349e7f6ccac74cc566cdba6f50d80d85b335140d1bd241d6074f1"
+}

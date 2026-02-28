@@ -640,6 +640,13 @@ fn merge_book_fields(
         }
     }
 
+    // Subtitle: fill if empty (sanitized)
+    if !exclude_fields.contains("subtitle") && book.subtitle.is_none() {
+        if let Some(ref subtitle) = provider_meta.subtitle {
+            book.subtitle = sanitize_text(subtitle, &sanitize_opts);
+        }
+    }
+
     // Description: fill if empty (sanitized)
     if !exclude_fields.contains("description") && book.description.is_none() {
         if let Some(ref desc) = provider_meta.description {
@@ -825,6 +832,7 @@ mod tests {
             metadata: ProviderMetadata {
                 provider_name: "test".to_string(),
                 title: Some("Test Book".to_string()),
+                subtitle: None,
                 authors: vec![],
                 description: None,
                 language: None,

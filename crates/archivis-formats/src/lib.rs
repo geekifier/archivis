@@ -18,6 +18,7 @@ use archivis_core::models::{IdentifierType, MetadataSource};
 #[derive(Debug, Clone)]
 pub struct ExtractedMetadata {
     pub title: Option<String>,
+    pub subtitle: Option<String>,
     pub authors: Vec<String>,
     pub description: Option<String>,
     pub language: Option<String>,
@@ -39,6 +40,7 @@ impl Default for ExtractedMetadata {
     fn default() -> Self {
         Self {
             title: None,
+            subtitle: None,
             authors: Vec::new(),
             description: None,
             language: None,

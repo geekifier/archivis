@@ -10,6 +10,7 @@ use super::enums::MetadataStatus;
 pub struct Book {
     pub id: Uuid,
     pub title: String,
+    pub subtitle: Option<String>,
     pub sort_title: String,
     pub description: Option<String>,
     pub language: Option<String>,
@@ -43,6 +44,7 @@ impl Book {
         Self {
             id: Uuid::new_v4(),
             title,
+            subtitle: None,
             sort_title,
             description: None,
             language: None,

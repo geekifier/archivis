@@ -323,6 +323,7 @@ impl HardcoverProvider {
         ProviderMetadata {
             provider_name: PROVIDER_NAME.to_string(),
             title,
+            subtitle: None, // Hardcover API doesn't provide subtitles.
             authors,
             description,
             language,
@@ -400,6 +401,7 @@ impl HardcoverProvider {
         ProviderMetadata {
             provider_name: PROVIDER_NAME.to_string(),
             title,
+            subtitle: None, // Hardcover API doesn't provide subtitles.
             authors,
             description,
             language,

@@ -64,6 +64,7 @@ pub struct CoverParams {
 #[derive(Debug, Deserialize, Validate, ToSchema)]
 pub struct UpdateBookRequest {
     pub title: Option<String>,
+    pub subtitle: Option<String>,
     pub description: Option<String>,
     pub language: Option<String>,
     #[schema(value_type = Option<String>, example = "2024-01-15")]
@@ -236,6 +237,7 @@ pub struct BatchUpdateError {
 pub struct BookSummary {
     pub id: Uuid,
     pub title: String,
+    pub subtitle: Option<String>,
     pub sort_title: String,
     pub description: Option<String>,
     pub language: Option<String>,
@@ -268,6 +270,7 @@ pub struct BookSummary {
 pub struct BookDetail {
     pub id: Uuid,
     pub title: String,
+    pub subtitle: Option<String>,
     pub sort_title: String,
     pub description: Option<String>,
     pub language: Option<String>,
@@ -353,6 +356,7 @@ impl From<BookWithRelations> for BookDetail {
         Self {
             id: bwr.book.id,
             title: bwr.book.title,
+            subtitle: bwr.book.subtitle,
             sort_title: bwr.book.sort_title,
             description: bwr.book.description,
             language: bwr.book.language,
@@ -384,6 +388,7 @@ impl From<Book> for BookSummary {
         Self {
             id: book.id,
             title: book.title,
+            subtitle: book.subtitle,
             sort_title: book.sort_title,
             description: book.description,
             language: book.language,

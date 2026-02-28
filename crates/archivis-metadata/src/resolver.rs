@@ -578,6 +578,9 @@ fn are_same_book(a: &ScoredCandidate, b: &ScoredCandidate) -> bool {
 ///
 /// Only fills in fields that are `None` or empty in the target.
 fn merge_metadata(target: &mut ProviderMetadata, source: &ProviderMetadata) {
+    if target.subtitle.is_none() {
+        target.subtitle.clone_from(&source.subtitle);
+    }
     if target.description.is_none() {
         target.description.clone_from(&source.description);
     }
@@ -677,6 +680,7 @@ mod tests {
         ProviderMetadata {
             provider_name: provider.to_string(),
             title: Some(title.to_string()),
+            subtitle: None,
             authors: authors
                 .iter()
                 .map(|a| ProviderAuthor {
@@ -1102,6 +1106,7 @@ mod tests {
         let mut target = ProviderMetadata {
             provider_name: "open_library".to_string(),
             title: Some("Dune".to_string()),
+            subtitle: None,
             authors: vec![],
             description: None,
             language: Some("en".to_string()),
@@ -1122,6 +1127,7 @@ mod tests {
         let source = ProviderMetadata {
             provider_name: "hardcover".to_string(),
             title: Some("Dune (different subtitle)".to_string()),
+            subtitle: None,
             authors: vec![],
             description: Some("A sci-fi classic".to_string()),
             language: Some("fr".to_string()), // Different — should NOT overwrite.

@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::io::{Cursor, Read};
 
 use archivis_core::errors::FormatError;
@@ -114,6 +115,14 @@ struct OpfParseState {
     meta_content: Option<String>,
     meta_property: Option<String>,
     format_version: Option<String>,
+    /// The `id` attribute of the current `<dc:title>` element being parsed.
+    current_title_id: Option<String>,
+    /// Collected `<dc:title>` elements: (optional id, text).
+    title_candidates: Vec<(Option<String>, String)>,
+    /// Maps `#id` → `title-type` value from `<meta property="title-type" refines="#id">`.
+    title_type_refinements: HashMap<String, String>,
+    /// The `refines` attribute of the current `<meta>` element.
+    meta_refines: Option<String>,
 }
 
 /// Parse the OPF package document and extract metadata.
@@ -129,6 +138,10 @@ fn parse_opf(opf_xml: &str) -> Result<ExtractedMetadata, FormatError> {
         meta_content: None,
         meta_property: None,
         format_version: None,
+        current_title_id: None,
+        title_candidates: Vec::new(),
+        title_type_refinements: HashMap::new(),
+        meta_refines: None,
     };
 
     loop {
@@ -153,6 +166,14 @@ fn parse_opf(opf_xml: &str) -> Result<ExtractedMetadata, FormatError> {
     }
 
     meta.format_version = state.format_version;
+
+    // Resolve title and subtitle from EPUB 3 title-type refinements.
+    resolve_titles(
+        &mut meta,
+        &state.title_candidates,
+        &state.title_type_refinements,
+    );
+
     Ok(meta)
 }
 
@@ -174,7 +195,10 @@ fn handle_opf_start(e: &quick_xml::events::BytesStart<'_>, state: &mut OpfParseS
     }
 
     match name {
-        b"title" => state.current_element = Some(DcElement::Title),
+        b"title" => {
+            state.current_element = Some(DcElement::Title);
+            state.current_title_id = find_attr(e, b"id");
+        }
         b"creator" => {
             state.current_element = Some(DcElement::Creator);
             state.current_opf_role = find_attr(e, b"role");
@@ -192,6 +216,7 @@ fn handle_opf_start(e: &quick_xml::events::BytesStart<'_>, state: &mut OpfParseS
         b"meta" => {
             state.meta_name = find_attr(e, b"name");
             state.meta_property = find_attr(e, b"property");
+            state.meta_refines = find_attr(e, b"refines");
             state.current_element = Some(DcElement::Meta);
         }
         _ => {}
@@ -225,7 +250,11 @@ fn handle_opf_text(
         return;
     }
     match elem {
-        DcElement::Title => meta.title = Some(text),
+        DcElement::Title => {
+            state
+                .title_candidates
+                .push((state.current_title_id.take(), text));
+        }
         DcElement::Creator => {
             let dominated_by_role = state
                 .current_opf_role
@@ -265,6 +294,16 @@ fn handle_opf_end(
     }
 
     if name == b"meta" && state.current_element == Some(DcElement::Meta) {
+        // Capture EPUB 3 title-type refinements: <meta property="title-type" refines="#id">main|subtitle</meta>
+        if state.meta_property.as_deref() == Some("title-type") {
+            if let (Some(refines), Some(ref content)) = (&state.meta_refines, &state.meta_content) {
+                let id = refines.strip_prefix('#').unwrap_or(refines).to_owned();
+                state
+                    .title_type_refinements
+                    .insert(id, content.to_lowercase());
+            }
+        }
+
         process_meta_element(
             state.meta_name.as_deref(),
             state.meta_content.as_deref(),
@@ -274,6 +313,7 @@ fn handle_opf_end(
         state.meta_name = None;
         state.meta_property = None;
         state.meta_content = None;
+        state.meta_refines = None;
     }
 
     state.current_element = None;
@@ -334,6 +374,47 @@ fn process_meta_element(
             }
             _ => {}
         }
+    }
+}
+
+/// Resolve title and subtitle from collected `<dc:title>` candidates and
+/// EPUB 3 `title-type` refinements.
+///
+/// If refinements map a candidate to `main`, it becomes the title.
+/// If one maps to `subtitle`, it becomes the subtitle.
+/// When no refinements exist, the first candidate is used as the title
+/// (backwards-compatible with EPUB 2).
+fn resolve_titles(
+    meta: &mut ExtractedMetadata,
+    candidates: &[(Option<String>, String)],
+    refinements: &HashMap<String, String>,
+) {
+    if candidates.is_empty() {
+        return;
+    }
+
+    if refinements.is_empty() {
+        // No EPUB 3 refinements — use first candidate as title.
+        meta.title = Some(candidates[0].1.clone());
+        return;
+    }
+
+    // Find candidates by their title-type refinement.
+    for (id, text) in candidates {
+        if let Some(ref title_id) = id {
+            if let Some(title_type) = refinements.get(title_id) {
+                match title_type.as_str() {
+                    "main" => meta.title = Some(text.clone()),
+                    "subtitle" => meta.subtitle = Some(text.clone()),
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    // If no candidate was marked as "main", fall back to the first candidate.
+    if meta.title.is_none() {
+        meta.title = Some(candidates[0].1.clone());
     }
 }
 
@@ -1113,6 +1194,97 @@ mod tests {
         let meta = extract_epub_metadata(&data).unwrap();
 
         assert!(meta.identifiers.is_empty());
+    }
+
+    #[test]
+    fn epub3_title_type_refinements_prefers_main() {
+        let opf = r##"<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0"
+         unique-identifier="uid">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title id="t1">Building a Second Brain</dc:title>
+    <dc:title id="t2">A Proven Method to Organize Your Digital Life</dc:title>
+    <meta refines="#t1" property="title-type">main</meta>
+    <meta refines="#t2" property="title-type">subtitle</meta>
+  </metadata>
+  <manifest/>
+  <spine/>
+</package>"##;
+
+        let data = build_epub_with_opf(opf, &[]);
+        let meta = extract_epub_metadata(&data).unwrap();
+
+        assert_eq!(meta.title.as_deref(), Some("Building a Second Brain"));
+        assert_eq!(
+            meta.subtitle.as_deref(),
+            Some("A Proven Method to Organize Your Digital Life")
+        );
+    }
+
+    #[test]
+    fn epub3_title_type_reversed_order() {
+        // Subtitle appears before main in XML — order should not matter.
+        let opf = r##"<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title id="sub">The Subtitle First</dc:title>
+    <dc:title id="main">The Main Title</dc:title>
+    <meta refines="#sub" property="title-type">subtitle</meta>
+    <meta refines="#main" property="title-type">main</meta>
+  </metadata>
+  <manifest/>
+  <spine/>
+</package>"##;
+
+        let data = build_epub_with_opf(opf, &[]);
+        let meta = extract_epub_metadata(&data).unwrap();
+
+        assert_eq!(meta.title.as_deref(), Some("The Main Title"));
+        assert_eq!(meta.subtitle.as_deref(), Some("The Subtitle First"));
+    }
+
+    #[test]
+    fn epub3_multiple_titles_no_refinements_uses_first() {
+        let opf = r#"<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>First Title</dc:title>
+    <dc:title>Second Title</dc:title>
+  </metadata>
+  <manifest/>
+  <spine/>
+</package>"#;
+
+        let data = build_epub_with_opf(opf, &[]);
+        let meta = extract_epub_metadata(&data).unwrap();
+
+        // Without refinements, first candidate should be used.
+        assert_eq!(meta.title.as_deref(), Some("First Title"));
+        assert!(meta.subtitle.is_none());
+    }
+
+    #[test]
+    fn epub3_subtitle_extracted() {
+        let opf = r##"<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title id="main-title">Atomic Habits</dc:title>
+    <dc:title id="sub-title">An Easy &amp; Proven Way to Build Good Habits</dc:title>
+    <meta refines="#main-title" property="title-type">main</meta>
+    <meta refines="#sub-title" property="title-type">subtitle</meta>
+  </metadata>
+  <manifest/>
+  <spine/>
+</package>"##;
+
+        let data = build_epub_with_opf(opf, &[]);
+        let meta = extract_epub_metadata(&data).unwrap();
+
+        assert_eq!(meta.title.as_deref(), Some("Atomic Habits"));
+        assert_eq!(
+            meta.subtitle.as_deref(),
+            Some("An Easy & Proven Way to Build Good Habits")
+        );
     }
 
     #[test]

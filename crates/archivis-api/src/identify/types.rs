@@ -16,6 +16,7 @@ pub struct CandidateResponse {
     pub provider_name: String,
     pub score: f32,
     pub title: Option<String>,
+    pub subtitle: Option<String>,
     pub authors: Vec<String>,
     pub description: Option<String>,
     pub publisher: Option<String>,

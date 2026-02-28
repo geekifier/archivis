@@ -356,38 +356,48 @@ fn candidate_to_response(candidate: IdentificationCandidate) -> CandidateRespons
     // Try to deserialize the stored JSON into ProviderMetadata for structured fields
     let provider_meta: Option<ProviderMetadata> = serde_json::from_value(candidate.metadata).ok();
 
-    let (title, authors, description, publisher, publication_date, isbn, series, cover_url) =
-        provider_meta.as_ref().map_or_else(
-            || (None, vec![], None, None, None, None, None, None),
-            |meta| {
-                (
-                    meta.title.clone(),
-                    meta.authors.iter().map(|a| a.name.clone()).collect(),
-                    meta.description.clone(),
-                    meta.publisher.clone(),
-                    meta.publication_date.clone(),
-                    meta.identifiers
-                        .iter()
-                        .find(|id| {
-                            id.identifier_type == archivis_core::models::IdentifierType::Isbn13
-                                || id.identifier_type
-                                    == archivis_core::models::IdentifierType::Isbn10
-                        })
-                        .map(|id| id.value.clone()),
-                    meta.series.as_ref().map(|s| SeriesInfo {
-                        name: s.name.clone(),
-                        position: s.position,
-                    }),
-                    meta.cover_url.clone(),
-                )
-            },
-        );
+    let (
+        title,
+        subtitle,
+        authors,
+        description,
+        publisher,
+        publication_date,
+        isbn,
+        series,
+        cover_url,
+    ) = provider_meta.as_ref().map_or_else(
+        || (None, None, vec![], None, None, None, None, None, None),
+        |meta| {
+            (
+                meta.title.clone(),
+                meta.subtitle.clone(),
+                meta.authors.iter().map(|a| a.name.clone()).collect(),
+                meta.description.clone(),
+                meta.publisher.clone(),
+                meta.publication_date.clone(),
+                meta.identifiers
+                    .iter()
+                    .find(|id| {
+                        id.identifier_type == archivis_core::models::IdentifierType::Isbn13
+                            || id.identifier_type == archivis_core::models::IdentifierType::Isbn10
+                    })
+                    .map(|id| id.value.clone()),
+                meta.series.as_ref().map(|s| SeriesInfo {
+                    name: s.name.clone(),
+                    position: s.position,
+                }),
+                meta.cover_url.clone(),
+            )
+        },
+    );
 
     CandidateResponse {
         id: candidate.id,
         provider_name: candidate.provider_name,
         score: candidate.score,
         title,
+        subtitle,
         authors,
         description,
         publisher,

@@ -286,9 +286,12 @@ impl OpenLibraryProvider {
             });
         }
 
+        let subtitle = edition.subtitle.clone();
+
         ProviderMetadata {
             provider_name: PROVIDER_NAME.to_string(),
             title,
+            subtitle,
             authors: authors.to_vec(),
             description,
             language,
@@ -386,6 +389,7 @@ impl OpenLibraryProvider {
                 ProviderMetadata {
                     provider_name: PROVIDER_NAME.to_string(),
                     title,
+                    subtitle: None, // Search results don't include subtitles.
                     authors,
                     description: None, // Search results don't include descriptions.
                     language: None,    // Search results don't include language reliably.
@@ -494,6 +498,7 @@ impl MetadataProvider for OpenLibraryProvider {
 struct OlEdition {
     key: Option<String>,
     title: Option<String>,
+    subtitle: Option<String>,
     authors: Option<Vec<OlAuthorRef>>,
     publishers: Option<Vec<String>>,
     publish_date: Option<String>,
@@ -1134,6 +1139,7 @@ mod tests {
         let edition = OlEdition {
             key: Some("/books/OL7353617M".to_string()),
             title: Some("Dune".to_string()),
+            subtitle: None,
             authors: None,
             publishers: Some(vec!["Chilton Books".to_string()]),
             publish_date: Some("1965".to_string()),
@@ -1317,6 +1323,7 @@ mod tests {
         let edition = OlEdition {
             key: Some("/books/OL12345M".to_string()),
             title: Some("Test Book".to_string()),
+            subtitle: None,
             authors: None,
             publishers: None,
             publish_date: None,
