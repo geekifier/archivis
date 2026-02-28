@@ -3,6 +3,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
+use archivis_db::BookFileRepository;
 use archivis_storage::local::LocalStorage;
 use archivis_tasks::import::{
     BulkImportResult, BulkImportService, FileOutcome, ImportConfig, ImportProgress, ImportService,
@@ -367,4 +368,109 @@ async fn progress_callbacks_are_invoked() {
 
     // on_import_complete should have been called exactly once.
     assert_eq!(progress.import_complete_called.load(Ordering::Relaxed), 1);
+}
+
+/// Create a minimal valid PDF file as bytes with title and author metadata.
+fn create_test_pdf(title: &str, author: &str) -> Vec<u8> {
+    use lopdf::{dictionary, Document, Object, Stream};
+
+    let mut doc = Document::with_version("1.4");
+
+    let content = Stream::new(
+        dictionary! {},
+        b"BT /F1 12 Tf 100 700 Td (Hello) Tj ET".to_vec(),
+    );
+    let content_id = doc.add_object(content);
+
+    let font = dictionary! {
+        "Type" => "Font",
+        "Subtype" => "Type1",
+        "BaseFont" => "Helvetica",
+    };
+    let font_id = doc.add_object(font);
+
+    let resources = dictionary! {
+        "Font" => dictionary! {
+            "F1" => font_id,
+        },
+    };
+
+    let page = dictionary! {
+        "Type" => "Page",
+        "MediaBox" => vec![0.into(), 0.into(), 612.into(), 792.into()],
+        "Contents" => content_id,
+        "Resources" => resources,
+    };
+    let page_id = doc.add_object(page);
+
+    let pages = dictionary! {
+        "Type" => "Pages",
+        "Kids" => vec![page_id.into()],
+        "Count" => 1,
+    };
+    let page_tree_id = doc.add_object(pages);
+
+    if let Ok(Object::Dictionary(ref mut dict)) = doc.get_object_mut(page_id) {
+        dict.set("Parent", page_tree_id);
+    }
+
+    let catalog_id = doc.add_object(dictionary! {
+        "Type" => "Catalog",
+        "Pages" => page_tree_id,
+    });
+    doc.trailer.set("Root", catalog_id);
+
+    let info = dictionary! {
+        "Title" => Object::string_literal(title),
+        "Author" => Object::string_literal(author),
+    };
+    let info_id = doc.add_object(info);
+    doc.trailer.set("Info", info_id);
+
+    let mut buf = Vec::new();
+    doc.save_to(&mut buf).unwrap();
+    buf
+}
+
+#[tokio::test]
+async fn import_directory_links_multi_format_files() {
+    let tmp = TempDir::new().unwrap();
+    let service = setup_bulk_env(&tmp).await;
+
+    let books_dir = tmp.path().join("books");
+    std::fs::create_dir_all(&books_dir).unwrap();
+
+    // Same book in two formats
+    let epub = create_test_epub("Children of Memory", "Adrian Tchaikovsky");
+    std::fs::write(books_dir.join("children_of_memory.epub"), &epub).unwrap();
+
+    let pdf = create_test_pdf("Children of Memory", "Adrian Tchaikovsky");
+    std::fs::write(books_dir.join("children_of_memory.pdf"), &pdf).unwrap();
+
+    let result = service
+        .import_directory(&books_dir, &NoopProgress)
+        .await
+        .unwrap();
+
+    assert_eq!(result.imported.len(), 2, "both files should import");
+    assert!(result.failed.is_empty(), "no failures expected");
+
+    // Both should be linked to the same book
+    let book_ids: std::collections::HashSet<_> =
+        result.imported.iter().map(|r| r.book_id).collect();
+    assert_eq!(
+        book_ids.len(),
+        1,
+        "both formats should share one book record"
+    );
+
+    let book_id = *book_ids.iter().next().unwrap();
+    let pool = archivis_db::create_pool(&tmp.path().join("test.db"))
+        .await
+        .unwrap();
+    let files = BookFileRepository::get_by_book_id(&pool, book_id)
+        .await
+        .unwrap();
+    assert_eq!(files.len(), 2, "book should have 2 format files");
+    pool.close().await;
 }

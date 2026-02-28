@@ -31,3 +31,4 @@ uuid = { workspace = true }
 tempfile = { workspace = true }
 sqlx = { workspace = true }
 zip = { version = "2", default-features = false, features = ["deflate"] }
+lopdf = "0.34"

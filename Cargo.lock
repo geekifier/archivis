@@ -256,6 +256,7 @@ dependencies = [
  "archivis-storage",
  "chrono",
  "image",
+ "lopdf",
  "reqwest",
  "resvg",
  "serde",
