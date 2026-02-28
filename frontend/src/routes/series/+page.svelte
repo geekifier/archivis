@@ -61,10 +61,34 @@
 		}
 	}
 
+	const columnSortField: Record<string, 'name' | 'book_count'> = {
+		name: 'name',
+		book_count: 'book_count'
+	};
+
 	function handleSortChange(e: Event) {
 		sortIndex = Number((e.target as HTMLSelectElement).value);
 		activeSortBy = sortOptions[sortIndex].field;
 		activeSortOrder = sortOptions[sortIndex].order;
+	}
+
+	function handleHeaderSort(columnId: string) {
+		const field = columnSortField[columnId];
+		if (!field) return;
+		if (activeSortBy === field) {
+			activeSortOrder = activeSortOrder === 'asc' ? 'desc' : 'asc';
+		} else {
+			activeSortBy = field;
+			activeSortOrder = 'asc';
+		}
+		const idx = sortOptions.findIndex((o) => o.field === activeSortBy && o.order === activeSortOrder);
+		sortIndex = idx >= 0 ? idx : -1;
+	}
+
+	function sortIndicator(columnId: string): string {
+		const field = columnSortField[columnId];
+		if (!field || activeSortBy !== field) return '';
+		return activeSortOrder === 'asc' ? ' \u2191' : ' \u2193';
 	}
 
 	function handlePageChange(p: number) {
@@ -220,11 +244,21 @@
 			<table class="w-full text-sm">
 				<thead>
 					<tr class="border-b border-border bg-muted/50">
-						<th class="px-4 py-2.5 text-left font-medium text-muted-foreground">Name</th>
+						<th
+							class="cursor-pointer select-none px-4 py-2.5 text-left font-medium text-muted-foreground hover:text-foreground"
+							onclick={() => handleHeaderSort('name')}
+						>
+							Name<span class="ml-1 text-xs">{sortIndicator('name')}</span>
+						</th>
 						<th class="hidden px-4 py-2.5 text-left font-medium text-muted-foreground md:table-cell"
 							>Description</th
 						>
-						<th class="px-4 py-2.5 text-right font-medium text-muted-foreground">Books</th>
+						<th
+							class="cursor-pointer select-none px-4 py-2.5 text-right font-medium text-muted-foreground hover:text-foreground"
+							onclick={() => handleHeaderSort('book_count')}
+						>
+							Books<span class="ml-1 text-xs">{sortIndicator('book_count')}</span>
+						</th>
 					</tr>
 				</thead>
 				<tbody>
