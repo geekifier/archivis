@@ -231,7 +231,7 @@ static SETTINGS: &[SettingMeta] = &[
         key: "watcher.enabled",
         label: "Filesystem Watcher",
         description: "Enable the filesystem watcher subsystem. All other watcher settings are managed at runtime via the API/UI.",
-        section: "watcher",
+        section: "server",
         value_type: SettingType::Bool,
         scope: SettingScope::Bootstrap,
         requires_restart: true,
