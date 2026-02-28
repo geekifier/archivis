@@ -240,6 +240,30 @@
 										{cfg.label}
 									</span>
 								{/if}
+							{:else if cell.column.id === 'authors'}
+								{@const authors = cell.row.original.authors ?? []}
+								<span class="block truncate text-muted-foreground">
+									{#each authors as author, i (author.id)}
+										{#if i > 0}, {/if}
+										{#if selectionMode}
+											{author.name}
+										{:else}
+											<a href="/authors/{author.id}" class="hover:text-primary hover:underline">{author.name}</a>
+										{/if}
+									{/each}
+								</span>
+							{:else if cell.column.id === 'series'}
+								{@const series = cell.row.original.series ?? []}
+								{#if series.length > 0}
+									{@const s = series[0]}
+									<span class="block truncate text-muted-foreground">
+										{#if selectionMode}
+											{s.name}{#if s.position != null} #{s.position}{/if}
+										{:else}
+											<a href="/series/{s.id}" class="hover:text-primary hover:underline">{s.name}</a>{#if s.position != null}&nbsp;<span class="text-muted-foreground/70">#{s.position}</span>{/if}
+										{/if}
+									</span>
+								{/if}
 							{:else}
 								<span class="block truncate text-muted-foreground">
 									<FlexRender content={cell.column.columnDef.cell} context={cell.getContext()} />

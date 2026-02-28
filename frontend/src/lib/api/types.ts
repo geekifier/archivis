@@ -55,7 +55,9 @@ export type SortField =
 	| 'sort_title'
 	| 'updated_at'
 	| 'rating'
-	| 'metadata_status';
+	| 'metadata_status'
+	| 'author'
+	| 'series';
 export type SortOrder = 'asc' | 'desc';
 
 export interface AuthorEntry {

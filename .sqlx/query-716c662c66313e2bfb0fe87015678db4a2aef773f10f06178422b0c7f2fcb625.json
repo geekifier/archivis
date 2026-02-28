@@ -1,0 +1,98 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT b.id, b.title, b.sort_title, b.description, b.language, b.publication_date, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.metadata_confidence, b.cover_path FROM books b WHERE (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) AND (? IS NULL OR b.publisher_id = ?) ORDER BY (SELECT MIN(s.name) FROM book_series bs JOIN series s ON s.id = bs.series_id WHERE bs.book_id = b.id) DESC, (SELECT MIN(bs.position) FROM book_series bs WHERE bs.book_id = b.id) DESC LIMIT ? OFFSET ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "title",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "sort_title",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "description",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "language",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "publication_date",
+        "ordinal": 5,
+        "type_info": "Text"
+      },
+      {
+        "name": "publisher_id",
+        "ordinal": 6,
+        "type_info": "Text"
+      },
+      {
+        "name": "added_at",
+        "ordinal": 7,
+        "type_info": "Text"
+      },
+      {
+        "name": "updated_at",
+        "ordinal": 8,
+        "type_info": "Text"
+      },
+      {
+        "name": "rating",
+        "ordinal": 9,
+        "type_info": "Float"
+      },
+      {
+        "name": "page_count",
+        "ordinal": 10,
+        "type_info": "Integer"
+      },
+      {
+        "name": "metadata_status",
+        "ordinal": 11,
+        "type_info": "Text"
+      },
+      {
+        "name": "metadata_confidence",
+        "ordinal": 12,
+        "type_info": "Float"
+      },
+      {
+        "name": "cover_path",
+        "ordinal": 13,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 14
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "716c662c66313e2bfb0fe87015678db4a2aef773f10f06178422b0c7f2fcb625"
+}

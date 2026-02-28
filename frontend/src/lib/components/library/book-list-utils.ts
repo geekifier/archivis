@@ -4,7 +4,9 @@ import type { BookSummary, SortField } from '$lib/api/types.js';
 export const columnToSortField: Record<string, SortField> = {
 	title: 'title',
 	added_at: 'added_at',
-	metadata_status: 'metadata_status'
+	metadata_status: 'metadata_status',
+	authors: 'author',
+	series: 'series'
 };
 
 /** Status badge configuration for each metadata status. */
