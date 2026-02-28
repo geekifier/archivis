@@ -311,23 +311,9 @@ fn extract_all_rdf_li(xml: &str) -> Vec<String> {
 // Author / list splitting
 // ---------------------------------------------------------------------------
 
-/// Split an author string on common delimiters (`;`, `,`, ` and `).
+/// Split an author string using the shared normalization logic.
 fn split_authors(raw: &str) -> Vec<String> {
-    // Split on semicolons first (strongest delimiter).
-    let parts: Vec<&str> = raw.split(';').collect();
-    let parts: Vec<String> = if parts.len() > 1 {
-        parts.iter().map(|s| s.trim().to_owned()).collect()
-    } else {
-        // Try ` and `.
-        let parts: Vec<&str> = raw.split(" and ").collect();
-        if parts.len() > 1 {
-            parts.iter().map(|s| s.trim().to_owned()).collect()
-        } else {
-            // Fall back to comma-splitting.
-            raw.split(',').map(|s| s.trim().to_owned()).collect()
-        }
-    };
-    parts.into_iter().filter(|s| !s.is_empty()).collect()
+    crate::authors::split_author_string(raw)
 }
 
 /// Split a keyword / subject string on `;` or `,`.
@@ -597,16 +583,22 @@ mod tests {
     }
 
     #[test]
-    fn author_split_on_and() {
-        assert_eq!(split_authors("Alice and Bob"), vec!["Alice", "Bob"],);
+    fn author_split_on_semicolon() {
+        assert_eq!(split_authors("Alice;Bob"), vec!["Alice", "Bob"]);
     }
 
     #[test]
-    fn author_split_on_comma() {
+    fn author_split_on_and_multi_word() {
         assert_eq!(
-            split_authors("Alice, Bob, Charlie"),
-            vec!["Alice", "Bob", "Charlie"],
+            split_authors("John Smith and Helen Hoover"),
+            vec!["John Smith", "Helen Hoover"],
         );
+    }
+
+    #[test]
+    fn author_and_single_word_not_split() {
+        // Single-word names on both sides — kept as-is
+        assert_eq!(split_authors("Alice and Bob"), vec!["Alice and Bob"]);
     }
 
     #[test]

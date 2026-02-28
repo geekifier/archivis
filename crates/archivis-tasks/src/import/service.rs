@@ -47,7 +47,8 @@ impl<S: StorageBackend> ImportService<S> {
                 "unsupported or unrecognised file format".into(),
             ));
         }
-        let embedded = extract_metadata(format, &data);
+        let mut embedded = extract_metadata(format, &data);
+        embedded.authors = archivis_formats::authors::normalize_authors(embedded.authors);
         let parsed = archivis_formats::filename::parse_path(source_path);
         let score = archivis_formats::scoring::score_metadata(
             &embedded,

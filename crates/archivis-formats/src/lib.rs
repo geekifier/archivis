@@ -1,3 +1,4 @@
+pub mod authors;
 pub mod content_text;
 pub mod detect;
 pub mod epub;

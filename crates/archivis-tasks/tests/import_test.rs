@@ -691,6 +691,36 @@ async fn import_article_title_links_to_same_book() {
     pool.close().await;
 }
 
+/// Verify that semicolon-separated authors in EPUB metadata are split into
+/// separate `Author` records during import.
+#[tokio::test]
+async fn import_epub_normalizes_semicolon_authors() {
+    let tmp = TempDir::new().unwrap();
+    let service = setup_test_env(&tmp).await;
+
+    let epub = create_test_epub("Test Book", "Author1;Author2;");
+    let path = tmp.path().join("multi_author.epub");
+    std::fs::write(&path, &epub).unwrap();
+
+    let result = service.import_file(&path).await.unwrap();
+
+    let pool = get_pool(&tmp).await;
+    let book = BookRepository::get_with_relations(&pool, result.book_id)
+        .await
+        .unwrap();
+
+    let names: Vec<&str> = book
+        .authors
+        .iter()
+        .map(|a| a.author.name.as_str())
+        .collect();
+    assert_eq!(names.len(), 2, "expected 2 authors, got: {names:?}");
+    assert!(names.contains(&"Author1"), "missing Author1: {names:?}");
+    assert!(names.contains(&"Author2"), "missing Author2: {names:?}");
+
+    pool.close().await;
+}
+
 /// Helper to close the pool from a temp dir.
 async fn pool_close(tmp: &TempDir) {
     let pool = get_pool(tmp).await;
