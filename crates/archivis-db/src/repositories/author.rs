@@ -252,6 +252,7 @@ impl AuthorWithCountRow {
                 name: self.name,
                 sort_name: self.sort_name,
             },
+            #[allow(clippy::cast_possible_truncation)]
             book_count: self.book_count as u32,
         })
     }

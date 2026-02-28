@@ -1,4 +1,4 @@
-export { api, getSessionToken, setSessionToken, ApiError } from './client.js';
+export { api, getSessionToken, setSessionToken, onCountsChanged, ApiError } from './client.js';
 export type {
 	AddIdentifierRequest,
 	AddWatchedDirectoryRequest,
@@ -23,6 +23,7 @@ export type {
 	CreateBookmarkRequest,
 	DetectFsRequest,
 	DuplicateCountResponse,
+	SidebarCountsResponse,
 	DuplicateLinkResponse,
 	FileEntry,
 	FlagDuplicateRequest,

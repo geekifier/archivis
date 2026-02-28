@@ -5,7 +5,7 @@
 	import { theme } from '$lib/theme.svelte.js';
 	import { auth } from '$lib/stores/auth.svelte.js';
 	import { filters } from '$lib/stores/filters.svelte.js';
-	import { api } from '$lib/api/index.js';
+	import { navCounts } from '$lib/stores/nav-counts.svelte.js';
 	import type { BookFormat, MetadataStatus } from '$lib/api/types.js';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { page } from '$app/state';
@@ -62,8 +62,6 @@
 			: [])
 	]);
 
-	let duplicateCount = $state<number | null>(null);
-
 	function isActive(href: string): boolean {
 		if (href === '/') return page.url.pathname === '/' || page.url.pathname.startsWith('/books');
 		if (href === '/authors') return page.url.pathname.startsWith('/authors');
@@ -94,39 +92,11 @@
 		{ value: 'unidentified', label: 'Unidentified', colorClass: 'bg-gray-400' }
 	];
 
-	// Fetch duplicate count when authenticated
+	// Refresh sidebar counts on every navigation while authenticated
 	$effect(() => {
+		void page.url.pathname;
 		if (auth.isAuthenticated) {
-			api.duplicates
-				.count()
-				.then((result) => {
-					duplicateCount = result.count;
-				})
-				.catch(() => {
-					// Silently ignore count fetch errors
-				});
-		}
-	});
-
-	// Fetch needs_review and unidentified counts when authenticated and on library page
-	$effect(() => {
-		if (auth.isAuthenticated && isLibraryPage) {
-			api.books
-				.list({ status: 'needs_review', per_page: 1 })
-				.then((result) => {
-					filters.setNeedsReviewCount(result.total);
-				})
-				.catch(() => {
-					// Silently ignore count fetch errors
-				});
-			api.books
-				.list({ status: 'unidentified', per_page: 1 })
-				.then((result) => {
-					filters.setUnidentifiedCount(result.total);
-				})
-				.catch(() => {
-					// Silently ignore count fetch errors
-				});
+			navCounts.refresh();
 		}
 	});
 </script>
@@ -333,11 +303,11 @@
 							</svg>
 						{/if}
 						<span class="flex-1">{item.label}</span>
-						{#if item.icon === 'duplicates' && duplicateCount != null && duplicateCount > 0}
+						{#if item.icon === 'duplicates' && navCounts.duplicateCount != null && navCounts.duplicateCount > 0}
 							<span
 								class="min-w-5 rounded-full bg-amber-500/15 px-1.5 py-0.5 text-center text-xs font-medium text-amber-600 dark:text-amber-400"
 							>
-								{duplicateCount}
+								{navCounts.duplicateCount}
 							</span>
 						{/if}
 					</a>
@@ -383,18 +353,18 @@
 						>
 							<span class="size-2 rounded-full {st.colorClass}"></span>
 							<span class="flex-1 text-left">{st.label}</span>
-							{#if st.value === 'needs_review' && filters.needsReviewCount !== null && filters.needsReviewCount > 0}
+							{#if st.value === 'needs_review' && navCounts.needsReviewCount !== null && navCounts.needsReviewCount > 0}
 								<span
 									class="min-w-5 rounded-full bg-amber-500/15 px-1.5 py-0.5 text-center text-xs font-medium text-amber-600 dark:text-amber-400"
 								>
-									{filters.needsReviewCount}
+									{navCounts.needsReviewCount}
 								</span>
 							{/if}
-							{#if st.value === 'unidentified' && filters.unidentifiedCount !== null && filters.unidentifiedCount > 0}
+							{#if st.value === 'unidentified' && navCounts.unidentifiedCount !== null && navCounts.unidentifiedCount > 0}
 								<span
 									class="min-w-5 rounded-full bg-gray-400/15 px-1.5 py-0.5 text-center text-xs font-medium text-gray-600 dark:text-gray-400"
 								>
-									{filters.unidentifiedCount}
+									{navCounts.unidentifiedCount}
 								</span>
 							{/if}
 						</button>

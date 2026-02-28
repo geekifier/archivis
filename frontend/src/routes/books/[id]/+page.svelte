@@ -2,6 +2,7 @@
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import { api, ApiError } from '$lib/api/index.js';
+	import { navCounts } from '$lib/stores/nav-counts.svelte.js';
 	import type {
 		BookDetail,
 		CandidateResponse,
@@ -201,6 +202,7 @@
 			// Reload book and candidates
 			fetchBook();
 			loadCandidates();
+			navCounts.invalidate();
 		});
 
 		es.addEventListener('task:error', (event: MessageEvent) => {
@@ -272,6 +274,7 @@
 			scanning = false;
 			// Reload book to pick up newly found identifiers
 			fetchBook();
+			navCounts.invalidate();
 		});
 
 		es.addEventListener('task:error', (event: MessageEvent) => {

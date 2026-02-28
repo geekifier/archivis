@@ -64,16 +64,4 @@ describe('filters store', () => {
 			expect(filters.hasActiveFilters).toBe(false);
 		});
 	});
-
-	describe('count setters', () => {
-		it('setNeedsReviewCount updates needsReviewCount', () => {
-			filters.setNeedsReviewCount(5);
-			expect(filters.needsReviewCount).toBe(5);
-		});
-
-		it('setUnidentifiedCount updates unidentifiedCount', () => {
-			filters.setUnidentifiedCount(10);
-			expect(filters.unidentifiedCount).toBe(10);
-		});
-	});
 });

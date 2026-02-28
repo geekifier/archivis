@@ -384,6 +384,14 @@ export interface UpdateIdentifierRequest {
 	value?: string;
 }
 
+// --- UI helper types ---
+
+export interface SidebarCountsResponse {
+	duplicates: number;
+	needs_review: number;
+	unidentified: number;
+}
+
 // --- Duplicate types ---
 
 export interface DuplicateLinkResponse {

@@ -2,6 +2,7 @@ import { goto } from '$app/navigation';
 import { api, setSessionToken, getSessionToken } from '$lib/api/index.js';
 import { ApiError } from '$lib/api/errors.js';
 import type { User } from '$lib/api/types.js';
+import { navCounts } from '$lib/stores/nav-counts.svelte.js';
 
 function createAuthStore() {
 	let user = $state<User | null>(null);
@@ -62,6 +63,7 @@ function createAuthStore() {
 			await api.auth.logout();
 		} finally {
 			user = null;
+			navCounts.reset();
 			goto('/login');
 		}
 	}

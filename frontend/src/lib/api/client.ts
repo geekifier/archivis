@@ -1,5 +1,6 @@
 import { goto } from '$app/navigation';
 import { parseApiError } from './errors.js';
+import type { SidebarCountsResponse } from './types.js';
 import type {
 	AddIdentifierRequest,
 	AddWatchedDirectoryRequest,
@@ -80,6 +81,27 @@ export function getSessionToken(): string | null {
 		sessionToken = localStorage.getItem('archivis-session');
 	}
 	return sessionToken;
+}
+
+// --- Counts-changed hook system ---
+type CountsChangedHook = () => void;
+const _countsChangedHooks = new Set<CountsChangedHook>();
+
+export function onCountsChanged(hook: CountsChangedHook): () => void {
+	_countsChangedHooks.add(hook);
+	return () => {
+		_countsChangedHooks.delete(hook);
+	};
+}
+
+function notifyCountsChanged() {
+	for (const hook of _countsChangedHooks) {
+		try {
+			hook();
+		} catch {
+			// Isolate listener failures so one bad subscriber doesn't break others.
+		}
+	}
 }
 
 /** Clear session state and redirect to login. */
@@ -190,8 +212,12 @@ export const api = {
 		},
 
 		/** Partial-update scalar book fields. */
-		update(id: string, data: UpdateBookRequest): Promise<BookDetail> {
-			return request<BookDetail>('PUT', `/books/${encodeURIComponent(id)}`, data);
+		async update(id: string, data: UpdateBookRequest): Promise<BookDetail> {
+			const result = await request<BookDetail>('PUT', `/books/${encodeURIComponent(id)}`, data);
+			if (data.metadata_status !== undefined) {
+				notifyCountsChanged();
+			}
+			return result;
 		},
 
 		/** Replace all author links for a book. */
@@ -210,13 +236,18 @@ export const api = {
 		},
 
 		/** Delete a book and all associated files. */
-		delete(id: string): Promise<void> {
-			return request<void>('DELETE', `/books/${encodeURIComponent(id)}`);
+		async delete(id: string): Promise<void> {
+			await request<void>('DELETE', `/books/${encodeURIComponent(id)}`);
+			notifyCountsChanged();
 		},
 
 		/** Batch update scalar fields across multiple books. */
-		batchUpdate(data: BatchUpdateBooksRequest): Promise<BatchUpdateResponse> {
-			return request<BatchUpdateResponse>('POST', '/books/batch-update', data);
+		async batchUpdate(data: BatchUpdateBooksRequest): Promise<BatchUpdateResponse> {
+			const result = await request<BatchUpdateResponse>('POST', '/books/batch-update', data);
+			if (data.updates.metadata_status !== undefined) {
+				notifyCountsChanged();
+			}
+			return result;
 		},
 
 		/** Batch update tags across multiple books. */
@@ -305,23 +336,32 @@ export const api = {
 		},
 
 		/** Merge a duplicate pair. */
-		merge(id: string, data: MergeRequest): Promise<BookDetail> {
-			return request<BookDetail>('POST', `/duplicates/${encodeURIComponent(id)}/merge`, data);
+		async merge(id: string, data: MergeRequest): Promise<BookDetail> {
+			const result = await request<BookDetail>(
+				'POST',
+				`/duplicates/${encodeURIComponent(id)}/merge`,
+				data
+			);
+			notifyCountsChanged();
+			return result;
 		},
 
 		/** Dismiss a duplicate pair. */
-		dismiss(id: string): Promise<void> {
-			return request<void>('POST', `/duplicates/${encodeURIComponent(id)}/dismiss`);
+		async dismiss(id: string): Promise<void> {
+			await request<void>('POST', `/duplicates/${encodeURIComponent(id)}/dismiss`);
+			notifyCountsChanged();
 		},
 
 		/** Manually flag a book as a duplicate of another. */
-		flag(bookId: string, otherBookId: string): Promise<DuplicateLinkResponse> {
+		async flag(bookId: string, otherBookId: string): Promise<DuplicateLinkResponse> {
 			const body: FlagDuplicateRequest = { other_book_id: otherBookId };
-			return request<DuplicateLinkResponse>(
+			const result = await request<DuplicateLinkResponse>(
 				'POST',
 				`/books/${encodeURIComponent(bookId)}/duplicates`,
 				body
 			);
+			notifyCountsChanged();
+			return result;
 		},
 
 		/** Get the count of pending duplicates. */
@@ -542,18 +582,20 @@ export const api = {
 		},
 
 		/** Apply a candidate to a book, updating its metadata. */
-		applyCandidate(
+		async applyCandidate(
 			bookId: string,
 			candidateId: string,
 			excludeFields?: string[]
 		): Promise<BookDetail> {
 			const body =
 				excludeFields && excludeFields.length > 0 ? { exclude_fields: excludeFields } : undefined;
-			return request<BookDetail>(
+			const result = await request<BookDetail>(
 				'POST',
 				`/books/${encodeURIComponent(bookId)}/candidates/${encodeURIComponent(candidateId)}/apply`,
 				body
 			);
+			notifyCountsChanged();
+			return result;
 		},
 
 		/** Reject a candidate. */
@@ -565,11 +607,13 @@ export const api = {
 		},
 
 		/** Undo an applied candidate, restoring all candidates to pending. */
-		undoCandidate(bookId: string, candidateId: string): Promise<BookDetail> {
-			return request<BookDetail>(
+		async undoCandidate(bookId: string, candidateId: string): Promise<BookDetail> {
+			const result = await request<BookDetail>(
 				'POST',
 				`/books/${encodeURIComponent(bookId)}/candidates/${encodeURIComponent(candidateId)}/undo`
 			);
+			notifyCountsChanged();
+			return result;
 		},
 
 		/** Trigger identification for multiple books. */
@@ -658,6 +702,13 @@ export const api = {
 		/** Fetch library and usage statistics. */
 		get(): Promise<StatsResponse> {
 			return request<StatsResponse>('GET', '/stats');
+		}
+	},
+
+	ui: {
+		/** Fetch sidebar badge counts (duplicates, needs_review, unidentified). */
+		sidebarCounts(): Promise<SidebarCountsResponse> {
+			return request<SidebarCountsResponse>('GET', '/ui/sidebar-counts');
 		}
 	},
 
@@ -764,6 +815,7 @@ export const api = {
 } as const;
 
 export { ApiError } from './errors.js';
+export type { SidebarCountsResponse } from './types.js';
 export type {
 	AddIdentifierRequest,
 	AddWatchedDirectoryRequest,

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { SvelteSet, SvelteURLSearchParams } from 'svelte/reactivity';
 	import { api, type PaginatedBooks } from '$lib/api/index.js';
+	import { navCounts } from '$lib/stores/nav-counts.svelte.js';
 	import type { SortField, SortOrder } from '$lib/api/index.js';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
@@ -346,6 +347,7 @@
 			identifyingAll = false;
 			// Refresh the book list
 			currentPage = currentPage;
+			navCounts.invalidate();
 		}
 	}
 

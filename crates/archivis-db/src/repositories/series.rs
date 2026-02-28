@@ -241,6 +241,7 @@ impl SeriesWithCountRow {
                 name: self.name,
                 description: self.description,
             },
+            #[allow(clippy::cast_possible_truncation)]
             book_count: self.book_count as u32,
         })
     }

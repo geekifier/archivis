@@ -33,7 +33,7 @@ pub use session::SessionRepository;
 pub use setting::SettingRepository;
 pub use stats::{
     BucketCount, DbObjectStat, DbObjectStats, DbPragmaStats, FormatFileStat, LibraryOverview,
-    StatsRepository, TaskOverview,
+    SidebarCounts, StatsRepository, TaskOverview,
 };
 pub use tag::TagRepository;
 pub use task::{ChildTaskSummary, TaskRepository};

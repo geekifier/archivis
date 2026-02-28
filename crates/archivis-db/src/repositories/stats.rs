@@ -50,6 +50,13 @@ pub struct DbObjectStats {
     pub objects: Vec<DbObjectStat>,
 }
 
+#[derive(Debug, Clone)]
+pub struct SidebarCounts {
+    pub duplicates: i64,
+    pub needs_review: i64,
+    pub unidentified: i64,
+}
+
 pub struct StatsRepository;
 
 impl StatsRepository {
@@ -188,6 +195,30 @@ impl StatsRepository {
             "SELECT COUNT(*) AS count FROM duplicate_links WHERE status = 'pending'",
         )
         .await
+    }
+
+    pub async fn sidebar_counts(pool: &SqlitePool) -> Result<SidebarCounts, DbError> {
+        let row = sqlx::query(
+            r"SELECT
+                (SELECT COUNT(*) FROM duplicate_links WHERE status = 'pending') AS duplicates,
+                (SELECT COUNT(*) FROM books WHERE metadata_status = 'needs_review') AS needs_review,
+                (SELECT COUNT(*) FROM books WHERE metadata_status = 'unidentified') AS unidentified",
+        )
+        .fetch_one(pool)
+        .await
+        .map_err(|e| DbError::Query(e.to_string()))?;
+
+        Ok(SidebarCounts {
+            duplicates: row
+                .try_get("duplicates")
+                .map_err(|e| DbError::Query(e.to_string()))?,
+            needs_review: row
+                .try_get("needs_review")
+                .map_err(|e| DbError::Query(e.to_string()))?,
+            unidentified: row
+                .try_get("unidentified")
+                .map_err(|e| DbError::Query(e.to_string()))?,
+        })
     }
 
     pub async fn pending_candidate_count(pool: &SqlitePool) -> Result<i64, DbError> {

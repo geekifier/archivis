@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { goto } from '$app/navigation';
-import { setSessionToken, getSessionToken, api } from './client.js';
+import { setSessionToken, getSessionToken, api, onCountsChanged } from './client.js';
 import { ApiError } from './errors.js';
 
 function mockResponse(body: unknown, status = 200): Response {
@@ -313,6 +313,166 @@ describe('API client', () => {
 			await expect(api.auth.logout()).rejects.toThrow(ApiError);
 
 			expect(getSessionToken()).toBeNull();
+		});
+	});
+
+	describe('counts-changed hook', () => {
+		it('onCountsChanged() supports multiple listeners', async () => {
+			const hookA = vi.fn();
+			const hookB = vi.fn();
+			const unlistenA = onCountsChanged(hookA);
+			const unlistenB = onCountsChanged(hookB);
+			fetchSpy.mockResolvedValueOnce(new Response(null, { status: 204 }));
+
+			await api.duplicates.dismiss('link-1');
+
+			expect(hookA).toHaveBeenCalledOnce();
+			expect(hookB).toHaveBeenCalledOnce();
+			unlistenA();
+			unlistenB();
+		});
+
+		it('onCountsChanged() unsubscribe removes only that listener', async () => {
+			const hookA = vi.fn();
+			const hookB = vi.fn();
+			const unlistenA = onCountsChanged(hookA);
+			const unlistenB = onCountsChanged(hookB);
+			unlistenA();
+			fetchSpy.mockResolvedValueOnce(new Response(null, { status: 204 }));
+
+			await api.duplicates.dismiss('link-1');
+
+			expect(hookA).not.toHaveBeenCalled();
+			expect(hookB).toHaveBeenCalledOnce();
+			unlistenB();
+		});
+
+		it('dismiss calls hook on success', async () => {
+			const hook = vi.fn();
+			const unlisten = onCountsChanged(hook);
+			fetchSpy.mockResolvedValueOnce(new Response(null, { status: 204 }));
+
+			await api.duplicates.dismiss('link-1');
+
+			expect(hook).toHaveBeenCalledOnce();
+			unlisten();
+		});
+
+		it('merge calls hook on success', async () => {
+			const hook = vi.fn();
+			const unlisten = onCountsChanged(hook);
+			fetchSpy.mockResolvedValueOnce(mockResponse({ id: 'merged-book' }));
+
+			await api.duplicates.merge('link-1', {
+				primary_id: 'a',
+				secondary_id: 'b'
+			});
+
+			expect(hook).toHaveBeenCalledOnce();
+			unlisten();
+		});
+
+		it('flag calls hook on success', async () => {
+			const hook = vi.fn();
+			const unlisten = onCountsChanged(hook);
+			fetchSpy.mockResolvedValueOnce(mockResponse({ id: 'new-link' }));
+
+			await api.duplicates.flag('book-a', 'book-b');
+
+			expect(hook).toHaveBeenCalledOnce();
+			unlisten();
+		});
+
+		it('books.update calls hook when metadata_status is present', async () => {
+			const hook = vi.fn();
+			const unlisten = onCountsChanged(hook);
+			fetchSpy.mockResolvedValueOnce(mockResponse({ id: 'book-1' }));
+
+			await api.books.update('book-1', { metadata_status: 'identified' });
+
+			expect(hook).toHaveBeenCalledOnce();
+			unlisten();
+		});
+
+		it('books.update does not call hook for non-status updates', async () => {
+			const hook = vi.fn();
+			const unlisten = onCountsChanged(hook);
+			fetchSpy.mockResolvedValueOnce(mockResponse({ id: 'book-1' }));
+
+			await api.books.update('book-1', { title: 'New Title' });
+
+			expect(hook).not.toHaveBeenCalled();
+			unlisten();
+		});
+
+		it('books.batchUpdate calls hook when metadata_status is present', async () => {
+			const hook = vi.fn();
+			const unlisten = onCountsChanged(hook);
+			fetchSpy.mockResolvedValueOnce(mockResponse({ updated_count: 1, errors: [] }));
+
+			await api.books.batchUpdate({
+				book_ids: ['book-1'],
+				updates: { metadata_status: 'needs_review' }
+			});
+
+			expect(hook).toHaveBeenCalledOnce();
+			unlisten();
+		});
+
+		it('books.batchUpdate does not call hook for non-status updates', async () => {
+			const hook = vi.fn();
+			const unlisten = onCountsChanged(hook);
+			fetchSpy.mockResolvedValueOnce(mockResponse({ updated_count: 1, errors: [] }));
+
+			await api.books.batchUpdate({
+				book_ids: ['book-1'],
+				updates: { language: 'en' }
+			});
+
+			expect(hook).not.toHaveBeenCalled();
+			unlisten();
+		});
+
+		it('books.delete calls hook on success', async () => {
+			const hook = vi.fn();
+			const unlisten = onCountsChanged(hook);
+			fetchSpy.mockResolvedValueOnce(new Response(null, { status: 204 }));
+
+			await api.books.delete('book-1');
+
+			expect(hook).toHaveBeenCalledOnce();
+			unlisten();
+		});
+
+		it('mutation does NOT call hook on failure', async () => {
+			const hook = vi.fn();
+			const unlisten = onCountsChanged(hook);
+			fetchSpy.mockResolvedValueOnce(
+				new Response(JSON.stringify({ error: { status: 500, message: 'Server error' } }), {
+					status: 500,
+					headers: { 'Content-Type': 'application/json' }
+				})
+			);
+
+			await expect(api.duplicates.dismiss('link-1')).rejects.toThrow(ApiError);
+
+			expect(hook).not.toHaveBeenCalled();
+			unlisten();
+		});
+	});
+
+	describe('api.ui.sidebarCounts()', () => {
+		it('calls GET /api/ui/sidebar-counts', async () => {
+			fetchSpy.mockResolvedValueOnce(
+				mockResponse({ duplicates: 3, needs_review: 5, unidentified: 2 })
+			);
+
+			const result = await api.ui.sidebarCounts();
+
+			const [url, init] = fetchSpy.mock.calls[0];
+			expect(url).toBe('/api/ui/sidebar-counts');
+			expect(init?.method).toBe('GET');
+			expect(result).toEqual({ duplicates: 3, needs_review: 5, unidentified: 2 });
 		});
 	});
 

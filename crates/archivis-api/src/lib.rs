@@ -16,6 +16,7 @@ pub mod state;
 pub mod stats;
 pub mod tags;
 pub mod tasks;
+pub mod ui;
 pub mod watcher;
 
 use axum::Router;
@@ -135,6 +136,8 @@ mod openapi {
             super::settings::handlers::update_settings,
             // Stats
             super::stats::handlers::get_stats,
+            // UI
+            super::ui::handlers::sidebar_counts,
             // Watched Directories
             super::watcher::handlers::list_watched,
             super::watcher::handlers::add_watched,
@@ -248,6 +251,8 @@ mod openapi {
             super::watcher::types::FsDetectionResponse,
             super::watcher::types::DetectFsRequest,
             super::watcher::types::ScanTriggeredResponse,
+            // UI
+            super::ui::types::SidebarCountsResponse,
             // Stats
             super::stats::types::StatsResponse,
             super::stats::types::LibraryStats,
@@ -275,6 +280,7 @@ mod openapi {
             (name = "duplicates", description = "Duplicate book management and merging"),
             (name = "filesystem", description = "Server filesystem browsing"),
             (name = "settings", description = "Instance settings management"),
+            (name = "ui", description = "UI helper endpoints"),
             (name = "stats", description = "Library and usage statistics"),
             (name = "watched-directories", description = "Watched directory management"),
         )
@@ -304,6 +310,7 @@ pub fn build_router(state: AppState) -> Router {
         .nest("/filesystem", filesystem::router())
         .nest("/settings", settings::router())
         .nest("/stats", stats::router())
+        .nest("/ui", ui::router())
         .nest("/watched-directories", watcher::router());
 
     let mut router = Router::new()

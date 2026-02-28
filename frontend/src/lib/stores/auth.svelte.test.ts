@@ -10,6 +10,7 @@ vi.mock('$lib/api/index.js', async () => {
 		api: mockApi,
 		setSessionToken: vi.fn(),
 		getSessionToken: vi.fn(),
+		onCountsChanged: vi.fn(),
 		ApiError: (await import('$lib/api/errors.js')).ApiError
 	};
 });
