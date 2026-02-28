@@ -1,0 +1,22 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+# Rust: 4 spaces (rustfmt default)
+[*.rs]
+indent_style = space
+indent_size = 4
+
+# Frontend (Svelte/TS/JS): tabs (matches .prettierrc useTabs: true)
+[*.{svelte,ts,js,json,css,html}]
+indent_style = tab
+indent_size = 4
+
+# Config files that conventionally use spaces
+[*.{toml,yml,yaml,md}]
+indent_style = space
+indent_size = 2
