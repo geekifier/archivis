@@ -6,6 +6,7 @@
 use std::sync::Arc;
 
 use archivis_core::models::{IdentifierType, MetadataSource};
+use archivis_core::settings::SettingsReader;
 use tracing::{debug, warn};
 
 use crate::provider::MetadataProvider;
@@ -98,22 +99,39 @@ impl Default for ExistingBookMetadata {
 /// deduplicates, and determines whether to auto-apply.
 pub struct MetadataResolver {
     registry: Arc<ProviderRegistry>,
-    auto_apply_threshold: f32,
+    settings: Arc<dyn SettingsReader>,
 }
 
 impl MetadataResolver {
-    /// Create a new resolver with the given provider registry and
-    /// auto-apply threshold.
-    pub fn new(registry: Arc<ProviderRegistry>, auto_apply_threshold: f32) -> Self {
-        Self {
-            registry,
-            auto_apply_threshold,
-        }
+    /// Create a new resolver backed by live settings.
+    pub fn new(registry: Arc<ProviderRegistry>, settings: Arc<dyn SettingsReader>) -> Self {
+        Self { registry, settings }
     }
 
-    /// Create a resolver with the default auto-apply threshold (0.85).
-    pub fn with_defaults(registry: Arc<ProviderRegistry>) -> Self {
-        Self::new(registry, DEFAULT_AUTO_APPLY_THRESHOLD)
+    /// Create a resolver with a fixed threshold for tests.
+    #[cfg(test)]
+    fn with_fixed_threshold(registry: Arc<ProviderRegistry>, threshold: f32) -> Self {
+        use crate::test_util::StubSettings;
+        let settings = Arc::new(StubSettings::new(vec![(
+            "metadata.auto_identify_threshold",
+            serde_json::json!(threshold),
+        )]));
+        Self { registry, settings }
+    }
+
+    /// Create a resolver with the default auto-apply threshold (0.85) for tests.
+    #[cfg(test)]
+    fn with_defaults(registry: Arc<ProviderRegistry>) -> Self {
+        Self::with_fixed_threshold(registry, DEFAULT_AUTO_APPLY_THRESHOLD)
+    }
+
+    /// Read the current auto-apply threshold from settings.
+    #[allow(clippy::cast_possible_truncation)] // threshold is always in 0.0..1.0
+    fn auto_apply_threshold(&self) -> f32 {
+        self.settings
+            .get_setting("metadata.auto_identify_threshold")
+            .and_then(|v| v.as_f64())
+            .map_or(DEFAULT_AUTO_APPLY_THRESHOLD, |f| f as f32)
     }
 
     /// Resolve metadata for a book using all available providers.
@@ -181,16 +199,15 @@ impl MetadataResolver {
             return false;
         };
 
+        let threshold = self.auto_apply_threshold();
+
         // Basic requirements: above threshold and multiple signals.
-        if best.score < self.auto_apply_threshold || !has_multi_signal(best) {
+        if best.score < threshold || !has_multi_signal(best) {
             return false;
         }
 
         // Count how many candidates are above the auto-apply threshold.
-        let above_threshold = candidates
-            .iter()
-            .filter(|c| c.score >= self.auto_apply_threshold)
-            .count();
+        let above_threshold = candidates.iter().filter(|c| c.score >= threshold).count();
 
         if above_threshold > 1 {
             debug!(

@@ -342,6 +342,14 @@ mod tests {
     use std::sync::Arc;
     use tower::ServiceExt;
 
+    /// Stub settings reader that returns `None` for all keys (uses defaults).
+    struct TestSettings;
+    impl archivis_core::settings::SettingsReader for TestSettings {
+        fn get_setting(&self, _key: &str) -> Option<serde_json::Value> {
+            None
+        }
+    }
+
     /// Build a test `AppState` rooted in `dir`. The caller is responsible for
     /// keeping the `tempfile::TempDir` alive for the duration of the test.
     async fn test_state(
@@ -365,7 +373,7 @@ mod tests {
 
         let resolver = Arc::new(archivis_metadata::MetadataResolver::new(
             Arc::clone(&provider_registry),
-            0.85,
+            Arc::new(TestSettings),
         ));
         let identify_service = Arc::new(archivis_tasks::identify::IdentificationService::new(
             db_pool.clone(),

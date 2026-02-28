@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use tracing::debug;
 
 use archivis_core::models::IdentifierType;
+use archivis_core::settings::SettingsReader;
 
 use crate::client::MetadataHttpClient;
 use crate::errors::ProviderError;
@@ -135,23 +136,27 @@ query GetBooks($ids: [Int!]!) {
 ///
 /// Uses the Hardcover GraphQL API for ISBN lookups, title+author search,
 /// and cover image retrieval. Requires a Bearer token for authentication.
+///
+/// Reads `metadata.enabled`, `metadata.hardcover.enabled`, and
+/// `metadata.hardcover.api_token` from settings at call time so that
+/// runtime changes via the admin UI take effect immediately.
 pub struct HardcoverProvider {
     client: Arc<MetadataHttpClient>,
-    api_token: Option<String>,
-    enabled: bool,
+    settings: Arc<dyn SettingsReader>,
 }
 
 impl HardcoverProvider {
-    /// Create a new Hardcover provider.
-    ///
-    /// The provider is only available when both `enabled` is true and
-    /// `api_token` is `Some`.
-    pub fn new(client: Arc<MetadataHttpClient>, api_token: Option<String>, enabled: bool) -> Self {
-        Self {
-            client,
-            api_token,
-            enabled,
-        }
+    /// Create a new Hardcover provider backed by live settings.
+    pub fn new(client: Arc<MetadataHttpClient>, settings: Arc<dyn SettingsReader>) -> Self {
+        Self { client, settings }
+    }
+
+    /// Read the current API token from settings.
+    fn api_token(&self) -> Option<String> {
+        self.settings
+            .get_setting("metadata.hardcover.api_token")
+            .and_then(|v| v.as_str().map(String::from))
+            .filter(|s| !s.is_empty())
     }
 
     /// Register this provider's rate limiter with the shared HTTP client.
@@ -171,7 +176,7 @@ impl HardcoverProvider {
         query: &str,
         variables: serde_json::Value,
     ) -> Result<T, ProviderError> {
-        let token = self.api_token.as_deref().ok_or_else(|| {
+        let token = self.api_token().ok_or_else(|| {
             ProviderError::NotConfigured("Hardcover API token not configured".to_string())
         })?;
 
@@ -417,7 +422,17 @@ impl MetadataProvider for HardcoverProvider {
     }
 
     fn is_available(&self) -> bool {
-        self.enabled && self.api_token.is_some()
+        let global = self
+            .settings
+            .get_setting("metadata.enabled")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+        let provider = self
+            .settings
+            .get_setting("metadata.hardcover.enabled")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        global && provider && self.api_token().is_some()
     }
 
     async fn lookup_isbn(&self, isbn: &str) -> Result<Vec<ProviderMetadata>, ProviderError> {
@@ -950,34 +965,67 @@ fn normalize_for_comparison(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_util::StubSettings;
+
+    fn stub_settings(enabled: bool, token: Option<&str>) -> Arc<StubSettings> {
+        let mut entries = vec![
+            ("metadata.enabled", serde_json::Value::Bool(true)),
+            (
+                "metadata.hardcover.enabled",
+                serde_json::Value::Bool(enabled),
+            ),
+        ];
+        if let Some(t) = token {
+            entries.push((
+                "metadata.hardcover.api_token",
+                serde_json::Value::String(t.to_string()),
+            ));
+        }
+        Arc::new(StubSettings::new(entries))
+    }
 
     // ── is_available ────────────────────────────────────────────────
 
     #[test]
     fn is_available_returns_false_when_no_token() {
         let client = Arc::new(MetadataHttpClient::new("0.1.0", None));
-        let provider = HardcoverProvider::new(client, None, true);
+        let provider = HardcoverProvider::new(client, stub_settings(true, None));
         assert!(!provider.is_available());
     }
 
     #[test]
     fn is_available_returns_false_when_disabled() {
         let client = Arc::new(MetadataHttpClient::new("0.1.0", None));
-        let provider = HardcoverProvider::new(client, Some("test-token".to_string()), false);
+        let provider = HardcoverProvider::new(client, stub_settings(false, Some("test-token")));
         assert!(!provider.is_available());
     }
 
     #[test]
     fn is_available_returns_true_with_token_and_enabled() {
         let client = Arc::new(MetadataHttpClient::new("0.1.0", None));
-        let provider = HardcoverProvider::new(client, Some("test-token".to_string()), true);
+        let provider = HardcoverProvider::new(client, stub_settings(true, Some("test-token")));
         assert!(provider.is_available());
+    }
+
+    #[test]
+    fn is_available_returns_false_when_global_metadata_disabled() {
+        let client = Arc::new(MetadataHttpClient::new("0.1.0", None));
+        let settings = Arc::new(StubSettings::new(vec![
+            ("metadata.enabled", serde_json::Value::Bool(false)),
+            ("metadata.hardcover.enabled", serde_json::Value::Bool(true)),
+            (
+                "metadata.hardcover.api_token",
+                serde_json::Value::String("test-token".to_string()),
+            ),
+        ]));
+        let provider = HardcoverProvider::new(client, settings);
+        assert!(!provider.is_available());
     }
 
     #[test]
     fn provider_name_is_hardcover() {
         let client = Arc::new(MetadataHttpClient::new("0.1.0", None));
-        let provider = HardcoverProvider::new(client, None, true);
+        let provider = HardcoverProvider::new(client, stub_settings(false, None));
         assert_eq!(provider.name(), "hardcover");
     }
 
@@ -1495,7 +1543,7 @@ mod tests {
 
         let mut client = MetadataHttpClient::new("0.1.0", None);
         HardcoverProvider::register_rate_limiter(&mut client);
-        let provider = HardcoverProvider::new(Arc::new(client), Some(token), true);
+        let provider = HardcoverProvider::new(Arc::new(client), stub_settings(true, Some(&token)));
 
         let results = provider.lookup_isbn("9780441172719").await.unwrap();
 
@@ -1526,7 +1574,7 @@ mod tests {
 
         let mut client = MetadataHttpClient::new("0.1.0", None);
         HardcoverProvider::register_rate_limiter(&mut client);
-        let provider = HardcoverProvider::new(Arc::new(client), Some(token), true);
+        let provider = HardcoverProvider::new(Arc::new(client), stub_settings(true, Some(&token)));
 
         let query = MetadataQuery {
             title: Some("Dune".to_string()),

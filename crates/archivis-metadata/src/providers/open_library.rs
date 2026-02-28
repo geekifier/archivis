@@ -7,6 +7,7 @@ use tokio::sync::RwLock;
 use tracing::{debug, warn};
 
 use archivis_core::models::IdentifierType;
+use archivis_core::settings::SettingsReader;
 
 use crate::client::MetadataHttpClient;
 use crate::errors::ProviderError;
@@ -24,24 +25,40 @@ const MAX_REQUESTS_PER_MINUTE: u32 = 100;
 ///
 /// Uses the Open Library REST API for ISBN lookups, title+author search,
 /// and cover image retrieval. No authentication is required.
+///
+/// Reads `metadata.enabled` and `metadata.open_library.enabled` from
+/// settings at call time so that runtime changes via the admin UI take
+/// effect immediately.
 pub struct OpenLibraryProvider {
     client: Arc<MetadataHttpClient>,
-    enabled: bool,
+    settings: Arc<dyn SettingsReader>,
     /// Cache of author OLID -> name mappings to avoid repeated lookups.
     author_cache: RwLock<HashMap<String, String>>,
 }
 
 impl OpenLibraryProvider {
-    /// Create a new Open Library provider.
-    ///
-    /// The provider registers itself with the shared HTTP client for rate
-    /// limiting at 100 requests/minute.
-    pub fn new(client: Arc<MetadataHttpClient>, enabled: bool) -> Self {
+    /// Create a new Open Library provider backed by live settings.
+    pub fn new(client: Arc<MetadataHttpClient>, settings: Arc<dyn SettingsReader>) -> Self {
         Self {
             client,
-            enabled,
+            settings,
             author_cache: RwLock::new(HashMap::new()),
         }
+    }
+
+    /// Check whether this provider is currently enabled via settings.
+    fn is_enabled(&self) -> bool {
+        let global = self
+            .settings
+            .get_setting("metadata.enabled")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+        let provider = self
+            .settings
+            .get_setting("metadata.open_library.enabled")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        global && provider
     }
 
     /// Register this provider's rate limiter with the shared HTTP client.
@@ -394,11 +411,11 @@ impl MetadataProvider for OpenLibraryProvider {
     }
 
     fn is_available(&self) -> bool {
-        self.enabled
+        self.is_enabled()
     }
 
     async fn lookup_isbn(&self, isbn: &str) -> Result<Vec<ProviderMetadata>, ProviderError> {
-        if !self.enabled {
+        if !self.is_enabled() {
             return Err(ProviderError::NotConfigured(
                 "Open Library provider is disabled".to_string(),
             ));
@@ -411,7 +428,7 @@ impl MetadataProvider for OpenLibraryProvider {
     }
 
     async fn search(&self, query: &MetadataQuery) -> Result<Vec<ProviderMetadata>, ProviderError> {
-        if !self.enabled {
+        if !self.is_enabled() {
             return Err(ProviderError::NotConfigured(
                 "Open Library provider is disabled".to_string(),
             ));
@@ -448,7 +465,7 @@ impl MetadataProvider for OpenLibraryProvider {
     }
 
     async fn fetch_cover(&self, cover_url: &str) -> Result<Vec<u8>, ProviderError> {
-        if !self.enabled {
+        if !self.is_enabled() {
             return Err(ProviderError::NotConfigured(
                 "Open Library provider is disabled".to_string(),
             ));
@@ -816,6 +833,7 @@ fn normalize_for_comparison(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_util::StubSettings;
 
     // ── Cover URL construction ───────────────────────────────────────
 
@@ -1425,12 +1443,22 @@ mod tests {
 
     // ── Integration test (live API — ignored by default) ─────────────
 
+    fn enabled_settings() -> Arc<StubSettings> {
+        Arc::new(StubSettings::new(vec![
+            ("metadata.enabled", serde_json::Value::Bool(true)),
+            (
+                "metadata.open_library.enabled",
+                serde_json::Value::Bool(true),
+            ),
+        ]))
+    }
+
     #[tokio::test]
     #[ignore = "requires live network access to Open Library API"]
     async fn live_isbn_lookup_dune() {
         let mut client = MetadataHttpClient::new("0.1.0", None);
         OpenLibraryProvider::register_rate_limiter(&mut client);
-        let provider = OpenLibraryProvider::new(Arc::new(client), true);
+        let provider = OpenLibraryProvider::new(Arc::new(client), enabled_settings());
 
         let results = provider.lookup_isbn("9780441172719").await.unwrap();
 
@@ -1461,7 +1489,7 @@ mod tests {
     async fn live_search_dune() {
         let mut client = MetadataHttpClient::new("0.1.0", None);
         OpenLibraryProvider::register_rate_limiter(&mut client);
-        let provider = OpenLibraryProvider::new(Arc::new(client), true);
+        let provider = OpenLibraryProvider::new(Arc::new(client), enabled_settings());
 
         let query = MetadataQuery {
             title: Some("Dune".to_string()),

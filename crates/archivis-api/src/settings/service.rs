@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::RwLock;
 
+use archivis_core::settings::SettingsReader;
 use archivis_db::{DbPool, SettingRepository};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -26,7 +27,8 @@ pub struct ConfigOverride {
 
 pub struct ConfigService {
     /// Effective config = final merged values the server is actually using.
-    effective_config: HashMap<String, serde_json::Value>,
+    /// Updated on every settings change (unless the key has an env/CLI override).
+    effective_config: RwLock<HashMap<String, serde_json::Value>>,
     /// Pre-DB values (defaults + config file) — used to restore on reset.
     baseline: HashMap<String, serde_json::Value>,
     /// Configured values: bootstrap keys from file/default, runtime keys from DB/default.
@@ -77,7 +79,7 @@ impl ConfigService {
         db_pool: DbPool,
     ) -> Self {
         Self {
-            effective_config,
+            effective_config: RwLock::new(effective_config),
             baseline,
             configured: RwLock::new(configured),
             configured_sources: RwLock::new(configured_sources),
@@ -89,6 +91,10 @@ impl ConfigService {
     /// Get all settings with their metadata for the API response.
     pub fn get_all_entries(&self) -> Vec<SettingEntry> {
         let configured = self.configured.read().expect("configured lock poisoned");
+        let effective = self
+            .effective_config
+            .read()
+            .expect("effective lock poisoned");
         let sources = self
             .configured_sources
             .read()
@@ -102,8 +108,7 @@ impl ConfigService {
                     .cloned()
                     .unwrap_or(serde_json::Value::Null);
 
-                let effective_value = self
-                    .effective_config
+                let effective_value = effective
                     .get(meta.key)
                     .cloned()
                     .unwrap_or(serde_json::Value::Null);
@@ -195,6 +200,15 @@ impl ConfigService {
                 configured.insert(key.clone(), value.clone());
                 drop(configured);
 
+                // Update effective config unless an env/CLI override is active.
+                if !self.overrides.contains_key(key) {
+                    let mut effective = self
+                        .effective_config
+                        .write()
+                        .expect("effective lock poisoned");
+                    effective.insert(key.clone(), value.clone());
+                }
+
                 let mut sources = self
                     .configured_sources
                     .write()
@@ -218,13 +232,28 @@ impl ConfigService {
             .map_err(|e| format!("failed to delete setting: {e}"))?;
 
         // Restore the configured value from baseline (defaults + config file).
+        let baseline_value = self.baseline.get(key).cloned();
+
         let mut configured = self.configured.write().expect("configured lock poisoned");
-        if let Some(baseline_value) = self.baseline.get(key) {
-            configured.insert(key.to_string(), baseline_value.clone());
+        if let Some(ref val) = baseline_value {
+            configured.insert(key.to_string(), val.clone());
         } else {
             configured.remove(key);
         }
         drop(configured);
+
+        // Update effective config unless an env/CLI override is active.
+        if !self.overrides.contains_key(key) {
+            let mut effective = self
+                .effective_config
+                .write()
+                .expect("effective lock poisoned");
+            if let Some(val) = baseline_value {
+                effective.insert(key.to_string(), val);
+            } else {
+                effective.remove(key);
+            }
+        }
 
         // Remove from configured_sources so source display reverts.
         self.configured_sources
@@ -233,6 +262,16 @@ impl ConfigService {
             .remove(key);
 
         Ok(())
+    }
+}
+
+impl SettingsReader for ConfigService {
+    fn get_setting(&self, key: &str) -> Option<serde_json::Value> {
+        self.effective_config
+            .read()
+            .expect("effective lock poisoned")
+            .get(key)
+            .cloned()
     }
 }
 
@@ -245,18 +284,26 @@ mod tests {
     async fn test_service(
         baseline: HashMap<String, serde_json::Value>,
     ) -> (ConfigService, tempfile::TempDir) {
+        test_service_with_overrides(baseline, HashMap::new()).await
+    }
+
+    async fn test_service_with_overrides(
+        baseline: HashMap<String, serde_json::Value>,
+        overrides: HashMap<String, ConfigOverride>,
+    ) -> (ConfigService, tempfile::TempDir) {
         let tmp = tempfile::tempdir().unwrap();
         let db_path = tmp.path().join("test.db");
         let db_pool = archivis_db::create_pool(&db_path).await.unwrap();
         archivis_db::run_migrations(&db_pool).await.unwrap();
 
         let configured = baseline.clone();
+        let effective = baseline.clone();
         let svc = ConfigService::new(
-            HashMap::new(),
+            effective,
             baseline,
             configured,
             HashMap::new(),
-            HashMap::new(),
+            overrides,
             db_pool,
         );
         (svc, tmp)
@@ -320,5 +367,111 @@ mod tests {
             .unwrap();
         assert_eq!(entry.value, serde_json::Value::Null);
         assert_eq!(entry.source, ConfigSource::Default);
+    }
+
+    #[tokio::test]
+    async fn update_propagates_to_effective_config() {
+        let mut baseline = HashMap::new();
+        baseline.insert(TEST_KEY.to_string(), serde_json::Value::Bool(false));
+
+        let (svc, _tmp) = test_service(baseline).await;
+
+        // effective_value should start at baseline
+        let entry = svc
+            .get_all_entries()
+            .into_iter()
+            .find(|e| e.key == TEST_KEY)
+            .unwrap();
+        assert_eq!(entry.effective_value, serde_json::Value::Bool(false));
+
+        // Update via DB
+        let mut updates = HashMap::new();
+        updates.insert(TEST_KEY.to_string(), serde_json::Value::Bool(true));
+        svc.update(&updates).await.unwrap();
+
+        // effective_value should now reflect the change
+        let entry = svc
+            .get_all_entries()
+            .into_iter()
+            .find(|e| e.key == TEST_KEY)
+            .unwrap();
+        assert_eq!(entry.effective_value, serde_json::Value::Bool(true));
+    }
+
+    #[tokio::test]
+    async fn update_does_not_override_env_effective() {
+        let mut baseline = HashMap::new();
+        baseline.insert(TEST_KEY.to_string(), serde_json::Value::Bool(false));
+
+        let mut overrides = HashMap::new();
+        overrides.insert(
+            TEST_KEY.to_string(),
+            ConfigOverride {
+                source: ConfigSource::Env,
+                env_var: Some("ARCHIVIS_METADATA_HARDCOVER_ENABLED".to_string()),
+            },
+        );
+
+        let (svc, _tmp) = test_service_with_overrides(baseline, overrides).await;
+
+        // Update via DB — configured changes but effective stays at baseline (env wins)
+        let mut updates = HashMap::new();
+        updates.insert(TEST_KEY.to_string(), serde_json::Value::Bool(true));
+        svc.update(&updates).await.unwrap();
+
+        let entry = svc
+            .get_all_entries()
+            .into_iter()
+            .find(|e| e.key == TEST_KEY)
+            .unwrap();
+        assert_eq!(entry.value, serde_json::Value::Bool(true));
+        assert_eq!(entry.effective_value, serde_json::Value::Bool(false));
+    }
+
+    #[tokio::test]
+    async fn reset_propagates_to_effective_config() {
+        let mut baseline = HashMap::new();
+        baseline.insert(TEST_KEY.to_string(), serde_json::Value::Bool(false));
+
+        let (svc, _tmp) = test_service(baseline).await;
+
+        // Update, then reset
+        let mut updates = HashMap::new();
+        updates.insert(TEST_KEY.to_string(), serde_json::Value::Bool(true));
+        svc.update(&updates).await.unwrap();
+
+        let mut reset = HashMap::new();
+        reset.insert(TEST_KEY.to_string(), serde_json::Value::Null);
+        svc.update(&reset).await.unwrap();
+
+        // effective_value should revert to baseline
+        let entry = svc
+            .get_all_entries()
+            .into_iter()
+            .find(|e| e.key == TEST_KEY)
+            .unwrap();
+        assert_eq!(entry.effective_value, serde_json::Value::Bool(false));
+    }
+
+    #[tokio::test]
+    async fn settings_reader_returns_effective_value() {
+        let mut baseline = HashMap::new();
+        baseline.insert(TEST_KEY.to_string(), serde_json::Value::Bool(false));
+
+        let (svc, _tmp) = test_service(baseline).await;
+
+        assert_eq!(
+            svc.get_setting(TEST_KEY),
+            Some(serde_json::Value::Bool(false))
+        );
+
+        let mut updates = HashMap::new();
+        updates.insert(TEST_KEY.to_string(), serde_json::Value::Bool(true));
+        svc.update(&updates).await.unwrap();
+
+        assert_eq!(
+            svc.get_setting(TEST_KEY),
+            Some(serde_json::Value::Bool(true))
+        );
     }
 }

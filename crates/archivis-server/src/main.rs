@@ -84,7 +84,9 @@ async fn main() {
     let auth_service = AuthService::new(db_pool.clone(), auth_adapter);
 
     // 4. Metadata providers
-    let provider_registry = init_metadata_providers(&config.metadata);
+    let settings_reader: Arc<dyn archivis_core::settings::SettingsReader> =
+        Arc::clone(&config_service) as _;
+    let provider_registry = init_metadata_providers(&config.metadata, &settings_reader);
 
     // 5. Task queue, workers, and services
     let (router, watcher_service) = init_services_and_router(
@@ -94,6 +96,7 @@ async fn main() {
         provider_registry,
         &config,
         config_service,
+        Arc::clone(&settings_reader),
     )
     .await;
 
@@ -185,6 +188,7 @@ async fn init_services_and_router(
     provider_registry: Arc<ProviderRegistry>,
     config: &AppConfig,
     config_service: Arc<archivis_api::settings::service::ConfigService>,
+    settings_reader: Arc<dyn archivis_core::settings::SettingsReader>,
 ) -> (axum::Router, Option<Arc<RwLock<WatcherService>>>) {
     let (task_queue, dispatch_rx) = TaskQueue::new(db_pool.clone());
     let task_queue = Arc::new(task_queue);
@@ -192,7 +196,7 @@ async fn init_services_and_router(
     // Build shared identification service (used by both worker and API handlers)
     let resolver = Arc::new(MetadataResolver::new(
         Arc::clone(&provider_registry),
-        config.metadata.auto_identify_threshold,
+        settings_reader,
     ));
     let identify_service = Arc::new(IdentificationService::new(
         db_pool.clone(),
@@ -443,7 +447,10 @@ async fn init_watcher(
 }
 
 /// Build and configure the metadata provider registry from the application config.
-fn init_metadata_providers(metadata_config: &config::MetadataConfig) -> Arc<ProviderRegistry> {
+fn init_metadata_providers(
+    metadata_config: &config::MetadataConfig,
+    settings: &Arc<dyn archivis_core::settings::SettingsReader>,
+) -> Arc<ProviderRegistry> {
     let version = env!("CARGO_PKG_VERSION");
     let mut http_client =
         MetadataHttpClient::new(version, metadata_config.contact_email.as_deref());
@@ -460,15 +467,8 @@ fn init_metadata_providers(metadata_config: &config::MetadataConfig) -> Arc<Prov
 
     let http_client = Arc::new(http_client);
 
-    let ol_provider = OpenLibraryProvider::new(
-        Arc::clone(&http_client),
-        metadata_config.enabled && metadata_config.open_library.enabled,
-    );
-    let hc_provider = HardcoverProvider::new(
-        Arc::clone(&http_client),
-        metadata_config.hardcover.api_token.clone(),
-        metadata_config.enabled && metadata_config.hardcover.enabled,
-    );
+    let ol_provider = OpenLibraryProvider::new(Arc::clone(&http_client), Arc::clone(settings));
+    let hc_provider = HardcoverProvider::new(Arc::clone(&http_client), Arc::clone(settings));
 
     if metadata_config.hardcover.enabled && metadata_config.hardcover.api_token.is_none() {
         tracing::warn!(
