@@ -27,8 +27,16 @@ describe('columnToSortField', () => {
 		expect(columnToSortField['metadata_status']).toBe('metadata_status');
 	});
 
-	it('has exactly 3 entries', () => {
-		expect(Object.keys(columnToSortField)).toHaveLength(3);
+	it('maps authors to author', () => {
+		expect(columnToSortField['authors']).toBe('author');
+	});
+
+	it('maps series to series', () => {
+		expect(columnToSortField['series']).toBe('series');
+	});
+
+	it('has exactly 5 entries', () => {
+		expect(Object.keys(columnToSortField)).toHaveLength(5);
 	});
 });
 

@@ -66,14 +66,14 @@ mod platform {
     // Filesystem magic numbers from `statfs(2)` / `<linux/magic.h>`.
     const NFS_MAGIC: i64 = 0x6969;
     const SMB_MAGIC: i64 = 0x517B;
-    const CIFS_MAGIC: i64 = 0xFF53_4D42_u32 as i64;
+    const CIFS_MAGIC: i64 = 0xFF53_4D42;
     const P9_MAGIC: i64 = 0x0102_1997;
     const FUSE_MAGIC: i64 = 0x6573_5546;
     const OVERLAY_MAGIC: i64 = 0x794C_7630;
 
     // Common local filesystem magic numbers.
     const EXT4_MAGIC: i64 = 0xEF53;
-    const BTRFS_MAGIC: i64 = 0x9123_683E_u32 as i64;
+    const BTRFS_MAGIC: i64 = 0x9123_683E;
     const XFS_MAGIC: i64 = 0x5846_5342;
     const TMPFS_MAGIC: i64 = 0x0102_1994;
     const ZFS_MAGIC: i64 = 0x2FC1_2FC1;
@@ -82,7 +82,7 @@ mod platform {
     ///
     /// This is extracted as a standalone function so it can be unit-tested
     /// with hardcoded magic values without requiring actual mounts.
-    pub(crate) fn classify_magic(magic: i64) -> FsDetectionResult {
+    pub fn classify_magic(magic: i64) -> FsDetectionResult {
         match magic {
             NFS_MAGIC => FsDetectionResult {
                 fs_type: "NFS".to_owned(),
@@ -153,21 +153,20 @@ mod platform {
     /// Returns a best-effort hint for the UI. The result is advisory only —
     /// container environments often obscure the real backing storage.
     pub fn detect_fs_type(path: &Path) -> FsDetectionResult {
-        match nix::sys::statfs::statfs(path) {
-            Ok(stat) => {
-                // nix::sys::statfs::FsType wraps the magic number.
-                // Convert to i64 for matching.
-                let magic = stat.filesystem_type().0 as i64;
-                classify_magic(magic)
-            }
-            Err(_) => FsDetectionResult {
+        nix::sys::statfs::statfs(path).map_or_else(
+            |_| FsDetectionResult {
                 fs_type: "unknown".to_owned(),
                 native_likely_works: NativeSupport::Unknown,
                 explanation: "Could not determine the filesystem type. If this is a \
                     network or container-mounted volume, use polling."
                     .to_owned(),
             },
-        }
+            |stat| {
+                // nix::sys::statfs::FsType wraps the magic number.
+                let magic = stat.filesystem_type().0;
+                classify_magic(magic)
+            },
+        )
     }
 }
 
@@ -346,7 +345,7 @@ mod tests {
 
         #[test]
         fn cifs_magic() {
-            let result = classify_magic(0xFF53_4D42_u32 as i64);
+            let result = classify_magic(0xFF53_4D42);
             assert_eq!(result.fs_type, "CIFS/SMB");
             assert_eq!(result.native_likely_works, NativeSupport::Unlikely);
         }
@@ -381,7 +380,7 @@ mod tests {
 
         #[test]
         fn btrfs_magic() {
-            let result = classify_magic(0x9123_683E_u32 as i64);
+            let result = classify_magic(0x9123_683E);
             assert_eq!(result.fs_type, "btrfs");
             assert_eq!(result.native_likely_works, NativeSupport::Likely);
         }
