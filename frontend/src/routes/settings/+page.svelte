@@ -98,6 +98,53 @@
 			: 'Paste API token';
 	}
 
+	/** Hardcover tokens are JWTs, optionally prefixed with "Bearer ". */
+	function isValidHardcoverToken(value: unknown): boolean {
+		if (typeof value !== 'string') return false;
+		const raw = value.trim().replace(/^Bearer\s+/i, '');
+		// JWT: three non-empty base64url segments separated by dots.
+		return /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(raw);
+	}
+
+	/** Strip the "Bearer " prefix so the backend doesn't double it. */
+	function normalizeHardcoverToken(value: string): string {
+		return value.trim().replace(/^Bearer\s+/i, '');
+	}
+
+	/**
+	 * Whether the Hardcover enabled toggle may be turned on.
+	 * True when a valid token is already persisted (and not being cleared)
+	 * or a valid token has been typed into the edit buffer.
+	 */
+	const hardcoverTokenReady = $derived.by(() => {
+		const tokenEntry = settings.find((s) => s.key === 'metadata.hardcover.api_token');
+		if (!tokenEntry) return false;
+
+		// A pending edit takes precedence over the persisted value.
+		if (hasPendingEdit(tokenEntry.key)) {
+			return isValidHardcoverToken(editedValues[tokenEntry.key]);
+		}
+		// No pending edit — rely on whether the server reports a token is set.
+		return !!tokenEntry.is_set;
+	});
+
+	// When the token becomes invalid, force the enabled toggle off.
+	$effect(() => {
+		if (hardcoverTokenReady) return;
+
+		const enabledKey = 'metadata.hardcover.enabled';
+		const enabledEntry = settings.find((s) => s.key === enabledKey);
+		if (!enabledEntry) return;
+
+		const currentlyOn = hasPendingEdit(enabledKey)
+			? editedValues[enabledKey] === true
+			: enabledEntry.value === true;
+
+		if (currentlyOn) {
+			handleChange(enabledKey, false, enabledEntry.value);
+		}
+	});
+
 	function handleChange(key: string, value: unknown, originalValue: unknown) {
 		// Compare with original to determine if dirty
 		if (value === originalValue || (value === '' && originalValue === null)) {
@@ -170,7 +217,14 @@
 		successMessage = null;
 
 		try {
-			const result = await api.settings.update(editedValues);
+			// Strip "Bearer " prefix from the Hardcover token before persisting.
+			const payload = { ...editedValues };
+			const tokenKey = 'metadata.hardcover.api_token';
+			if (typeof payload[tokenKey] === 'string') {
+				payload[tokenKey] = normalizeHardcoverToken(payload[tokenKey] as string);
+			}
+
+			const result = await api.settings.update(payload);
 			editedValues = {};
 
 			if (result.requires_restart) {
@@ -402,25 +456,35 @@
 
 									<div class="flex shrink-0 items-center gap-2">
 										{#if entry.value_type === 'bool'}
+											{@const isOff = getCurrentValue(entry) !== true}
+											{@const disableToggle =
+												entry.key === 'metadata.hardcover.enabled' &&
+												isOff &&
+												!hardcoverTokenReady}
 											<button
 												type="button"
 												role="switch"
-												aria-checked={getCurrentValue(entry) === true}
+												aria-checked={!isOff}
 												aria-label={entry.label}
-												class="relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors
-												{getCurrentValue(entry) === true
-													? 'bg-primary'
-													: 'bg-muted'}"
+												disabled={disableToggle}
+												title={disableToggle
+													? 'Paste a valid Hardcover API token first'
+													: undefined}
+												class="relative inline-flex h-6 w-11 shrink-0 rounded-full border-2 border-transparent transition-colors
+												{disableToggle
+													? 'cursor-not-allowed opacity-50'
+													: 'cursor-pointer'}
+												{!isOff ? 'bg-primary' : 'bg-muted'}"
 												onclick={() =>
 													handleChange(
 														entry.key,
-														getCurrentValue(entry) !== true,
+														isOff,
 														entry.value
 													)}
 											>
 												<span
 													class="pointer-events-none inline-block size-5 rounded-full bg-background shadow-lg ring-0 transition-transform
-													{getCurrentValue(entry) === true
+													{!isOff
 														? 'translate-x-5'
 														: 'translate-x-0'}"
 												></span>

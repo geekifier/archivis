@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/svelte';
+import { render, screen, within } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 
 import type { SettingEntry } from '$lib/api/types.js';
@@ -57,6 +57,9 @@ vi.mock('$lib/stores/auth.svelte.js', () => ({
 
 import SettingsPage from './+page.svelte';
 
+/** A fake JWT that passes the three-segment base64url validation. */
+const FAKE_JWT = 'eyJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJIYXJkY292ZXIifQ.dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk';
+
 function makeHardcoverTokenSetting(overrides: Partial<SettingEntry> = {}): SettingEntry {
 	return {
 		key: 'metadata.hardcover.api_token',
@@ -93,6 +96,12 @@ function makeBoolSetting(overrides: Partial<SettingEntry> = {}): SettingEntry {
 	};
 }
 
+/** Return the nearest setting row (`div.px-6.py-4`) for a given label. */
+function getSettingRow(labelText: string): HTMLElement {
+	const label = screen.getByText(labelText, { selector: 'label' });
+	return label.closest('div.px-6.py-4') as HTMLElement;
+}
+
 describe('Settings revert and reset behavior', () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
@@ -106,26 +115,28 @@ describe('Settings revert and reset behavior', () => {
 	it('toggling a default setting shows unsaved badge and undo button', async () => {
 		const user = userEvent.setup();
 		mockApi.settings.get.mockResolvedValue({
-			settings: [makeBoolSetting()]
+			settings: [makeBoolSetting(), makeHardcoverTokenSetting()]
 		});
 
 		render(SettingsPage);
 
-		// Toggle the switch on
+		// Toggle the switch on (allowed because token is set)
 		const toggle = await screen.findByRole('switch', { name: 'Hardcover Enabled' });
 		await user.click(toggle);
 
+		const row = getSettingRow('Hardcover Enabled');
+
 		// Should show "unsaved" badge
-		expect(screen.getByText('unsaved')).toBeInTheDocument();
-		// Should show "Undo change" button (not "Reset to default")
-		expect(screen.getByRole('button', { name: 'Undo change' })).toBeInTheDocument();
-		expect(screen.queryByRole('button', { name: 'Reset to default' })).not.toBeInTheDocument();
+		expect(within(row).getByText('unsaved')).toBeInTheDocument();
+		// Should show "Undo change" button, not "Reset to default" in this row
+		expect(within(row).getByRole('button', { name: 'Undo change' })).toBeInTheDocument();
+		expect(within(row).queryByRole('button', { name: 'Reset to default' })).not.toBeInTheDocument();
 	});
 
 	it('clicking undo reverts the toggle and removes badge', async () => {
 		const user = userEvent.setup();
 		mockApi.settings.get.mockResolvedValue({
-			settings: [makeBoolSetting()]
+			settings: [makeBoolSetting(), makeHardcoverTokenSetting()]
 		});
 
 		render(SettingsPage);
@@ -133,14 +144,15 @@ describe('Settings revert and reset behavior', () => {
 		const toggle = await screen.findByRole('switch', { name: 'Hardcover Enabled' });
 		await user.click(toggle);
 
-		expect(screen.getByText('unsaved')).toBeInTheDocument();
+		const row = getSettingRow('Hardcover Enabled');
+		expect(within(row).getByText('unsaved')).toBeInTheDocument();
 
 		// Click undo
-		await user.click(screen.getByRole('button', { name: 'Undo change' }));
+		await user.click(within(row).getByRole('button', { name: 'Undo change' }));
 
 		// Badge should be gone, no pending changes
-		expect(screen.queryByText('unsaved')).not.toBeInTheDocument();
-		expect(screen.queryByRole('button', { name: 'Undo change' })).not.toBeInTheDocument();
+		expect(within(row).queryByText('unsaved')).not.toBeInTheDocument();
+		expect(within(row).queryByRole('button', { name: 'Undo change' })).not.toBeInTheDocument();
 		// Save button should be disabled (no changes)
 		expect(screen.getByRole('button', { name: 'Save Changes' })).toBeDisabled();
 	});
@@ -148,50 +160,63 @@ describe('Settings revert and reset behavior', () => {
 	it('reset to default on database setting shows unsaved badge', async () => {
 		const user = userEvent.setup();
 		mockApi.settings.get.mockResolvedValue({
-			settings: [makeBoolSetting({ source: 'database', value: true, effective_value: true })]
+			settings: [
+				makeBoolSetting({ source: 'database', value: true, effective_value: true }),
+				makeHardcoverTokenSetting()
+			]
 		});
 
 		render(SettingsPage);
 
-		// Wait for settings to load, then check "modified" badge and "Reset to default" button
-		const resetBtn = await screen.findByRole('button', { name: 'Reset to default' });
-		expect(screen.getByText('modified')).toBeInTheDocument();
+		// Wait for settings to load, then find reset in the toggle row
+		await screen.findByRole('switch', { name: 'Hardcover Enabled' });
+		const row = getSettingRow('Hardcover Enabled');
+		const resetBtn = within(row).getByRole('button', { name: 'Reset to default' });
+		expect(within(row).getByText('modified')).toBeInTheDocument();
 
 		await user.click(resetBtn);
 
 		// Should now show "unsaved" badge and "Undo change" button
-		expect(screen.queryByText('modified')).not.toBeInTheDocument();
-		expect(screen.getByText('unsaved')).toBeInTheDocument();
-		expect(screen.getByRole('button', { name: 'Undo change' })).toBeInTheDocument();
+		expect(within(row).queryByText('modified')).not.toBeInTheDocument();
+		expect(within(row).getByText('unsaved')).toBeInTheDocument();
+		expect(within(row).getByRole('button', { name: 'Undo change' })).toBeInTheDocument();
 	});
 
 	it('undo after reset to default restores modified badge', async () => {
 		const user = userEvent.setup();
 		mockApi.settings.get.mockResolvedValue({
-			settings: [makeBoolSetting({ source: 'database', value: true, effective_value: true })]
+			settings: [
+				makeBoolSetting({ source: 'database', value: true, effective_value: true }),
+				makeHardcoverTokenSetting()
+			]
 		});
 
 		render(SettingsPage);
 
+		await screen.findByRole('switch', { name: 'Hardcover Enabled' });
+		const row = getSettingRow('Hardcover Enabled');
+
 		// Click reset
-		const resetBtn = await screen.findByRole('button', { name: 'Reset to default' });
-		await user.click(resetBtn);
-		expect(screen.getByText('unsaved')).toBeInTheDocument();
+		await user.click(within(row).getByRole('button', { name: 'Reset to default' }));
+		expect(within(row).getByText('unsaved')).toBeInTheDocument();
 
 		// Click undo
-		await user.click(screen.getByRole('button', { name: 'Undo change' }));
+		await user.click(within(row).getByRole('button', { name: 'Undo change' }));
 
 		// Should restore "modified" badge
-		expect(screen.queryByText('unsaved')).not.toBeInTheDocument();
-		expect(screen.getByText('modified')).toBeInTheDocument();
-		expect(screen.getByRole('button', { name: 'Reset to default' })).toBeInTheDocument();
+		expect(within(row).queryByText('unsaved')).not.toBeInTheDocument();
+		expect(within(row).getByText('modified')).toBeInTheDocument();
+		expect(within(row).getByRole('button', { name: 'Reset to default' })).toBeInTheDocument();
 		expect(screen.getByRole('button', { name: 'Save Changes' })).toBeDisabled();
 	});
 
 	it('pending edit on database setting shows undo button not reset button', async () => {
 		const user = userEvent.setup();
 		mockApi.settings.get.mockResolvedValue({
-			settings: [makeBoolSetting({ source: 'database', value: true, effective_value: true })]
+			settings: [
+				makeBoolSetting({ source: 'database', value: true, effective_value: true }),
+				makeHardcoverTokenSetting()
+			]
 		});
 
 		render(SettingsPage);
@@ -200,9 +225,171 @@ describe('Settings revert and reset behavior', () => {
 		const toggle = await screen.findByRole('switch', { name: 'Hardcover Enabled' });
 		await user.click(toggle);
 
+		const row = getSettingRow('Hardcover Enabled');
 		// Should show "Undo change", not "Reset to default"
-		expect(screen.getByRole('button', { name: 'Undo change' })).toBeInTheDocument();
-		expect(screen.queryByRole('button', { name: 'Reset to default' })).not.toBeInTheDocument();
+		expect(within(row).getByRole('button', { name: 'Undo change' })).toBeInTheDocument();
+		expect(within(row).queryByRole('button', { name: 'Reset to default' })).not.toBeInTheDocument();
+	});
+});
+
+describe('Hardcover toggle requires valid API token', () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+		mockApi.watchedDirectories.list.mockResolvedValue([]);
+		mockApi.settings.update.mockResolvedValue({
+			updated: ['metadata.hardcover.enabled'],
+			requires_restart: false
+		});
+	});
+
+	it('toggle is disabled when no token is configured', async () => {
+		mockApi.settings.get.mockResolvedValue({
+			settings: [
+				makeBoolSetting(),
+				makeHardcoverTokenSetting({ is_set: false, value: null, effective_value: null, source: 'default' })
+			]
+		});
+
+		render(SettingsPage);
+
+		const toggle = await screen.findByRole('switch', { name: 'Hardcover Enabled' });
+		expect(toggle).toBeDisabled();
+		expect(toggle).toHaveAttribute('title', 'Paste a valid Hardcover API token first');
+	});
+
+	it('toggle is enabled when a token is already saved', async () => {
+		mockApi.settings.get.mockResolvedValue({
+			settings: [makeBoolSetting(), makeHardcoverTokenSetting()]
+		});
+
+		render(SettingsPage);
+
+		const toggle = await screen.findByRole('switch', { name: 'Hardcover Enabled' });
+		expect(toggle).toBeEnabled();
+	});
+
+	it('toggle becomes enabled after pasting a valid JWT token', async () => {
+		const user = userEvent.setup();
+		mockApi.settings.get.mockResolvedValue({
+			settings: [
+				makeBoolSetting(),
+				makeHardcoverTokenSetting({ is_set: false, value: null, effective_value: null, source: 'default' })
+			]
+		});
+
+		render(SettingsPage);
+
+		const toggle = await screen.findByRole('switch', { name: 'Hardcover Enabled' });
+		expect(toggle).toBeDisabled();
+
+		// Paste a valid JWT token
+		const tokenField = screen.getByLabelText('API Token') as HTMLTextAreaElement;
+		await user.click(tokenField);
+		await user.paste(FAKE_JWT);
+
+		await vi.waitFor(() => {
+			expect(toggle).toBeEnabled();
+		});
+	});
+
+	it('toggle becomes enabled after pasting a Bearer-prefixed JWT', async () => {
+		const user = userEvent.setup();
+		mockApi.settings.get.mockResolvedValue({
+			settings: [
+				makeBoolSetting(),
+				makeHardcoverTokenSetting({ is_set: false, value: null, effective_value: null, source: 'default' })
+			]
+		});
+
+		render(SettingsPage);
+
+		const toggle = await screen.findByRole('switch', { name: 'Hardcover Enabled' });
+		expect(toggle).toBeDisabled();
+
+		// Paste token with "Bearer " prefix (as copied from Hardcover)
+		const tokenField = screen.getByLabelText('API Token') as HTMLTextAreaElement;
+		await user.click(tokenField);
+		await user.paste(`Bearer ${FAKE_JWT}`);
+
+		await vi.waitFor(() => {
+			expect(toggle).toBeEnabled();
+		});
+	});
+
+	it('toggle stays disabled when token has invalid format', async () => {
+		const user = userEvent.setup();
+		mockApi.settings.get.mockResolvedValue({
+			settings: [
+				makeBoolSetting(),
+				makeHardcoverTokenSetting({ is_set: false, value: null, effective_value: null, source: 'default' })
+			]
+		});
+
+		render(SettingsPage);
+
+		const toggle = await screen.findByRole('switch', { name: 'Hardcover Enabled' });
+		expect(toggle).toBeDisabled();
+
+		// Type an invalid token (not a JWT)
+		const tokenField = screen.getByLabelText('API Token') as HTMLTextAreaElement;
+		await user.click(tokenField);
+		await user.paste('not-a-valid-token');
+
+		expect(toggle).toBeDisabled();
+	});
+
+	it('clearing the token auto-disables the enabled toggle', async () => {
+		const user = userEvent.setup();
+		mockApi.settings.get.mockResolvedValue({
+			settings: [
+				makeBoolSetting({ source: 'database', value: true, effective_value: true }),
+				makeHardcoverTokenSetting()
+			]
+		});
+
+		render(SettingsPage);
+
+		const toggle = await screen.findByRole('switch', { name: 'Hardcover Enabled' });
+		expect(toggle).toHaveAttribute('aria-checked', 'true');
+
+		// Reset token to default (clears it)
+		const tokenRow = getSettingRow('API Token');
+		await user.click(within(tokenRow).getByRole('button', { name: 'Reset to default' }));
+
+		// The enabled toggle should have been auto-reverted to off
+		await vi.waitFor(() => {
+			expect(toggle).toHaveAttribute('aria-checked', 'false');
+		});
+	});
+
+	it('strips Bearer prefix when saving token', async () => {
+		const user = userEvent.setup();
+		mockApi.settings.get.mockResolvedValue({
+			settings: [makeHardcoverTokenSetting()]
+		});
+		mockApi.settings.update.mockResolvedValue({
+			updated: ['metadata.hardcover.api_token'],
+			requires_restart: false
+		});
+
+		render(SettingsPage);
+
+		const tokenField = (await screen.findByLabelText('API Token')) as HTMLTextAreaElement;
+		await user.click(tokenField);
+		await user.paste(`Bearer ${FAKE_JWT}`);
+
+		const saveButton = screen.getByRole('button', { name: 'Save Changes' });
+		await vi.waitFor(() => {
+			expect(saveButton).toBeEnabled();
+		});
+
+		await user.click(saveButton);
+		await vi.waitFor(() => {
+			// Should save the JWT without the "Bearer " prefix
+			expect(mockApi.settings.update).toHaveBeenCalledWith({
+				'metadata.hardcover.api_token': FAKE_JWT
+			});
+		});
 	});
 });
 
@@ -233,9 +420,9 @@ describe('Settings page sensitive controls', () => {
 		).toBeInTheDocument();
 		expect(screen.queryByRole('button', { name: 'Show value' })).not.toBeInTheDocument();
 
-		const replacementToken =
-			'hc_pat_9f7d7d1a3ec04a3d8fa1e8f2878b31a5f26059df8ed6405f95fc9de3d35fd58';
-		await user.type(tokenField, replacementToken);
+		// Paste a raw JWT (no Bearer prefix)
+		await user.click(tokenField);
+		await user.paste(FAKE_JWT);
 
 		const saveButton = screen.getByRole('button', { name: 'Save Changes' });
 		await vi.waitFor(() => {
@@ -245,7 +432,7 @@ describe('Settings page sensitive controls', () => {
 		await user.click(saveButton);
 		await vi.waitFor(() => {
 			expect(mockApi.settings.update).toHaveBeenCalledWith({
-				'metadata.hardcover.api_token': replacementToken
+				'metadata.hardcover.api_token': FAKE_JWT
 			});
 		});
 	});
