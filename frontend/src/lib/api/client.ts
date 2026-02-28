@@ -3,6 +3,7 @@ import { parseApiError } from './errors.js';
 import type {
 	AddIdentifierRequest,
 	AddWatchedDirectoryRequest,
+	AuthorListParams,
 	AuthorResponse,
 	AuthStatusResponse,
 	BatchIsbnScanResponse,
@@ -39,6 +40,7 @@ import type {
 	ReadingProgressResponse,
 	ScanManifestResponse,
 	ScanTriggeredResponse,
+	SeriesListParams,
 	SeriesResponse,
 	SetBookAuthorsRequest,
 	SetBookSeriesRequest,
@@ -337,6 +339,20 @@ export const api = {
 	},
 
 	authors: {
+		/** List authors with pagination, sorting, and search. */
+		list(params?: AuthorListParams): Promise<PaginatedAuthors> {
+			const searchParams = new URLSearchParams();
+			if (params) {
+				for (const [key, value] of Object.entries(params)) {
+					if (value !== undefined && value !== null && value !== '') {
+						searchParams.set(key, String(value));
+					}
+				}
+			}
+			const qs = searchParams.toString();
+			return request<PaginatedAuthors>('GET', `/authors${qs ? `?${qs}` : ''}`);
+		},
+
 		/** Fetch author detail by ID. */
 		get(id: string): Promise<AuthorResponse> {
 			return request<AuthorResponse>('GET', `/authors/${encodeURIComponent(id)}`);
@@ -393,6 +409,20 @@ export const api = {
 	},
 
 	series: {
+		/** List series with pagination, sorting, and search. */
+		list(params?: SeriesListParams): Promise<PaginatedSeries> {
+			const searchParams = new URLSearchParams();
+			if (params) {
+				for (const [key, value] of Object.entries(params)) {
+					if (value !== undefined && value !== null && value !== '') {
+						searchParams.set(key, String(value));
+					}
+				}
+			}
+			const qs = searchParams.toString();
+			return request<PaginatedSeries>('GET', `/series${qs ? `?${qs}` : ''}`);
+		},
+
 		/** Fetch series detail by ID. */
 		get(id: string): Promise<SeriesResponse> {
 			return request<SeriesResponse>('GET', `/series/${encodeURIComponent(id)}`);
@@ -739,6 +769,7 @@ export type {
 	AddWatchedDirectoryRequest,
 	ApiErrorResponse,
 	AuthorEntry,
+	AuthorListParams,
 	AuthorResponse,
 	AuthStatusResponse,
 	BatchIsbnScanResponse,
@@ -790,6 +821,7 @@ export type {
 	ScanManifestResponse,
 	ScanTriggeredResponse,
 	SeriesEntry,
+	SeriesListParams,
 	SeriesResponse,
 	SetBookAuthorsRequest,
 	SetBookSeriesRequest,

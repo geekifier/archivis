@@ -52,6 +52,8 @@
 
 	const navItems = $derived([
 		{ href: '/', label: 'Library', icon: 'library' },
+		{ href: '/authors', label: 'Authors', icon: 'authors' },
+		{ href: '/series', label: 'Series', icon: 'series' },
 		{ href: '/import', label: 'Import', icon: 'import' },
 		{ href: '/stats', label: 'Statistics', icon: 'stats' },
 		{ href: '/duplicates', label: 'Duplicates', icon: 'duplicates' },
@@ -64,6 +66,8 @@
 
 	function isActive(href: string): boolean {
 		if (href === '/') return page.url.pathname === '/' || page.url.pathname.startsWith('/books');
+		if (href === '/authors') return page.url.pathname.startsWith('/authors');
+		if (href === '/series') return page.url.pathname.startsWith('/series');
 		if (href === '/stats') return page.url.pathname.startsWith('/stats');
 		if (href === '/duplicates') return page.url.pathname.startsWith('/duplicates');
 		return page.url.pathname.startsWith(href);
@@ -235,7 +239,38 @@
 									d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H19a1 1 0 0 1 1 1v18a1 1 0 0 1-1 1H6.5a1 1 0 0 1 0-5H20"
 								/>
 							</svg>
-						{:else if item.icon === 'import'}
+						{:else if item.icon === 'authors'}
+						<svg
+							class="size-4"
+							xmlns="http://www.w3.org/2000/svg"
+							viewBox="0 0 24 24"
+							fill="none"
+							stroke="currentColor"
+							stroke-width="2"
+							stroke-linecap="round"
+							stroke-linejoin="round"
+						>
+							<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+							<circle cx="9" cy="7" r="4" />
+							<path d="M22 21v-2a4 4 0 0 0-3-3.87" />
+							<path d="M16 3.13a4 4 0 0 1 0 7.75" />
+						</svg>
+					{:else if item.icon === 'series'}
+						<svg
+							class="size-4"
+							xmlns="http://www.w3.org/2000/svg"
+							viewBox="0 0 24 24"
+							fill="none"
+							stroke="currentColor"
+							stroke-width="2"
+							stroke-linecap="round"
+							stroke-linejoin="round"
+						>
+							<path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z" />
+							<path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65" />
+							<path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65" />
+						</svg>
+					{:else if item.icon === 'import'}
 							<svg
 								class="size-4"
 								xmlns="http://www.w3.org/2000/svg"

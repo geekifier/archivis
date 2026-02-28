@@ -169,6 +169,22 @@ export interface BookListParams {
 	include?: string;
 }
 
+export interface AuthorListParams {
+	page?: number;
+	per_page?: number;
+	sort_by?: 'sort_name' | 'name';
+	sort_order?: SortOrder;
+	q?: string;
+}
+
+export interface SeriesListParams {
+	page?: number;
+	per_page?: number;
+	sort_by?: 'name';
+	sort_order?: SortOrder;
+	q?: string;
+}
+
 // --- Update/edit request types ---
 
 export interface UpdateBookRequest {

@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { page } from '$app/state';
+	import { afterNavigate } from '$app/navigation';
 	import { api, ApiError } from '$lib/api/index.js';
 	import type { AuthorResponse, PaginatedBooks } from '$lib/api/index.js';
 	import { Button } from '$lib/components/ui/button/index.js';
@@ -7,6 +8,21 @@
 	import Pagination from '$lib/components/library/Pagination.svelte';
 
 	const PER_PAGE = 24;
+
+	let backHref = $state('/authors');
+	let backLabel = $state('Back to Authors');
+
+	afterNavigate(({ from }) => {
+		if (!from?.url) return;
+		const p = from.url.pathname;
+		if (p === '/' || p.startsWith('/books')) {
+			backHref = from.url.pathname + from.url.search;
+			backLabel = 'Back to Library';
+		} else if (p === '/authors') {
+			backHref = from.url.pathname + from.url.search;
+			backLabel = 'Back to Authors';
+		}
+	});
 
 	let author = $state<AuthorResponse | null>(null);
 	let books = $state<PaginatedBooks | null>(null);
@@ -83,7 +99,7 @@
 <div class="mx-auto max-w-5xl space-y-6">
 	<!-- Back navigation -->
 	<a
-		href="/"
+		href={backHref}
 		class="inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
 	>
 		<svg
@@ -98,7 +114,7 @@
 		>
 			<path d="m15 18-6-6 6-6" />
 		</svg>
-		Back to Library
+		{backLabel}
 	</a>
 
 	{#if loading}
@@ -127,7 +143,7 @@
 				<p class="mt-1 text-sm text-muted-foreground">
 					The author you're looking for doesn't exist or has been removed.
 				</p>
-				<Button variant="outline" class="mt-4" href="/">Back to Library</Button>
+				<Button variant="outline" class="mt-4" href={backHref}>{backLabel}</Button>
 			</div>
 		</div>
 	{:else if error}
