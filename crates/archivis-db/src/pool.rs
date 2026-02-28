@@ -66,6 +66,15 @@ pub async fn run_migrations(pool: &DbPool) -> Result<(), DbError> {
     Ok(())
 }
 
+/// Lightweight connectivity check: acquires a connection and runs `SELECT 1`.
+pub async fn ping(pool: &DbPool) -> Result<(), DbError> {
+    sqlx::query_scalar::<_, i32>("SELECT 1")
+        .fetch_one(pool)
+        .await
+        .map_err(|e| DbError::Query(format!("ping failed: {e}")))?;
+    Ok(())
+}
+
 /// Verify that PRAGMAs are correctly applied.
 async fn verify_pragmas(pool: &DbPool) -> Result<(), DbError> {
     let journal_mode: String = sqlx::query_scalar("PRAGMA journal_mode")

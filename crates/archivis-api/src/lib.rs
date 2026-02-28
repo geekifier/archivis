@@ -4,6 +4,7 @@ pub mod books;
 pub mod duplicates;
 pub mod errors;
 pub mod filesystem;
+pub mod health;
 pub mod identify;
 pub mod import;
 pub mod isbn_scan;
@@ -307,7 +308,8 @@ pub fn build_router(state: AppState) -> Router {
 
     let mut router = Router::new()
         .merge(SwaggerUi::new("/api/docs").url("/api/openapi.json", openapi::ApiDoc::openapi()))
-        .nest("/api", api_routes);
+        .nest("/api", api_routes)
+        .nest("/health", health::router());
 
     // Serve the built frontend from a configured directory.
     // Any request that does not match `/api/*` or Swagger UI is served from
@@ -538,6 +540,123 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn health_live_returns_200() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = test_state(tmp.path(), None).await;
+        let router = build_router(state);
+
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .uri("/health/live")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["status"], "ok");
+        assert!(json.get("checks").is_none());
+    }
+
+    #[tokio::test]
+    async fn health_ready_returns_200_with_db_check() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = test_state(tmp.path(), None).await;
+        let router = build_router(state);
+
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .uri("/health/ready")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["status"], "ok");
+        assert_eq!(json["checks"]["database"], "ok");
+    }
+
+    #[tokio::test]
+    async fn health_endpoints_need_no_auth() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = test_state(tmp.path(), None).await;
+
+        // Register a user so auth is active
+        state
+            .auth_service()
+            .register("admin", "password123", None)
+            .await
+            .unwrap();
+
+        let router = build_router(state);
+
+        // No Authorization header — should still succeed
+        let live = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/health/live")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(live.status(), StatusCode::OK);
+
+        let ready = router
+            .oneshot(
+                Request::builder()
+                    .uri("/health/ready")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(ready.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn health_not_caught_by_spa_fallback() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dist = tmp.path().join("dist");
+        std::fs::create_dir_all(&dist).unwrap();
+        std::fs::write(dist.join("index.html"), "<html>spa</html>").unwrap();
+
+        let state = test_state(tmp.path(), Some(dist)).await;
+        let router = build_router(state);
+
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .uri("/health/ready")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["status"], "ok");
     }
 
     #[tokio::test]

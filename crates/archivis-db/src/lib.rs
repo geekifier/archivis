@@ -1,7 +1,7 @@
 mod pool;
 pub mod repositories;
 
-pub use pool::{create_pool, run_migrations, DbPool};
+pub use pool::{create_pool, ping, run_migrations, DbPool};
 pub use repositories::{
     AuthorRepository, BookAuthorEntry, BookFileRepository, BookFilter, BookRepository,
     BookSeriesEntry, BookWithAuthors, BookWithRelations, BookmarkRepository, BucketCount,
