@@ -23,7 +23,11 @@ use crate::epub::{find_attr, find_opf_path, local_name, opf_directory, read_zip_
 /// Controls how much content to read from each format.
 #[derive(Debug, Clone)]
 pub struct ContentScanConfig {
-    /// Number of EPUB spine items to read from front and back (default: 3).
+    /// Number of EPUB spine items to read from front and back (default: 5).
+    ///
+    /// Must be high enough to reach the copyright page, which in most
+    /// commercial EPUBs sits at spine index 3–4 (after cover, praise/also-by,
+    /// and title page).
     pub epub_spine_items: usize,
     /// Number of PDF pages to read from front and back (default: 5).
     pub pdf_pages: usize,
@@ -39,7 +43,7 @@ pub struct ContentScanConfig {
 impl Default for ContentScanConfig {
     fn default() -> Self {
         Self {
-            epub_spine_items: 3,
+            epub_spine_items: 5,
             pdf_pages: 5,
             fb2_sections: 3,
             txt_bytes: 4000,

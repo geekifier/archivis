@@ -223,7 +223,7 @@ impl Default for IsbnScanConfig {
             scan_on_import: false,
             confidence: 0.85,
             skip_threshold: 0.95,
-            epub_spine_items: 3,
+            epub_spine_items: 5,
             pdf_pages: 5,
             fb2_sections: 3,
             txt_bytes: 4000,

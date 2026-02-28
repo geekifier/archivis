@@ -33,14 +33,16 @@ pub struct ScannedIsbn {
 // ---------------------------------------------------------------------------
 
 // ISBN-13: starts with 978 or 979, 13 digits total.
-// Hyphens allowed but NOT spaces (to avoid greedy matches across adjacent ISBNs).
+// Hyphens and spaces allowed as group separators.  Trailing \b prevents
+// greedy consumption across adjacent ISBNs separated by spaces.
 static ISBN13_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(97[89][\d\-]{10,16}\d)").expect("valid regex"));
+    LazyLock::new(|| Regex::new(r"(97[89][\d\- ]{9,16}\d)\b").expect("valid regex"));
 
 // ISBN-10: 9 digits + check (digit or X).
-// Only hyphens as separators (no spaces), to avoid greedy cross-matching.
+// Hyphens and spaces allowed as group separators.  Trailing \b prevents
+// greedy consumption across adjacent ISBNs.
 static ISBN10_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(\d[\d\-]{8,12}[\dXx])").expect("valid regex"));
+    LazyLock::new(|| Regex::new(r"(\d[\d\- ]{8,12}[\dXx])\b").expect("valid regex"));
 
 // ---------------------------------------------------------------------------
 // Core scanning function
@@ -216,6 +218,30 @@ mod tests {
     fn no_isbns_in_plain_text() {
         let results = scan_text_for_isbns("This is a normal sentence with no ISBNs.", false);
         assert!(results.is_empty());
+    }
+
+    #[test]
+    fn scan_isbn13_compact() {
+        let results = scan_text_for_isbns("ISBN 9783161484100", false);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].identifier_type, IdentifierType::Isbn13);
+        assert_eq!(results[0].value, "9783161484100");
+    }
+
+    #[test]
+    fn scan_isbn13_with_spaces() {
+        let results = scan_text_for_isbns("ISBN 978 3 16 148410 0", false);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].identifier_type, IdentifierType::Isbn13);
+        assert_eq!(results[0].value, "9783161484100");
+    }
+
+    #[test]
+    fn scan_isbn10_with_spaces() {
+        let results = scan_text_for_isbns("ISBN 0 306 40615 2", false);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].identifier_type, IdentifierType::Isbn10);
+        assert_eq!(results[0].value, "0306406152");
     }
 
     /// MOBI `filepos` byte offsets must not survive HTML tag stripping.

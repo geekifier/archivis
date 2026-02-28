@@ -188,6 +188,7 @@ fn handle_opf_start(e: &quick_xml::events::BytesStart<'_>, state: &mut OpfParseS
         b"date" => state.current_element = Some(DcElement::Date),
         b"description" => state.current_element = Some(DcElement::Description),
         b"subject" => state.current_element = Some(DcElement::Subject),
+        b"source" => state.current_element = Some(DcElement::Source),
         b"meta" => {
             state.meta_name = find_attr(e, b"name");
             state.meta_property = find_attr(e, b"property");
@@ -242,6 +243,9 @@ fn handle_opf_text(
         DcElement::Date => meta.publication_date = Some(text),
         DcElement::Description => meta.description = Some(text),
         DcElement::Subject => meta.subjects.push(text),
+        DcElement::Source => {
+            parse_identifier(&text, None, meta);
+        }
         DcElement::Meta => {
             state.meta_content = Some(text);
         }
@@ -288,6 +292,7 @@ enum DcElement {
     Date,
     Description,
     Subject,
+    Source,
     Meta,
 }
 
@@ -1070,6 +1075,44 @@ mod tests {
         assert_eq!(cover.media_type, "image/svg+xml");
         // Verify we got the SVG bytes back
         assert!(std::str::from_utf8(&cover.bytes).unwrap().contains("<svg"));
+    }
+
+    #[test]
+    fn extracts_isbn_from_dc_source() {
+        let opf = r#"<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Original Sin</dc:title>
+    <dc:source id="SourceISBN">9798217060672</dc:source>
+  </metadata>
+  <manifest/>
+  <spine/>
+</package>"#;
+
+        let data = build_epub_with_opf(opf, &[]);
+        let meta = extract_epub_metadata(&data).unwrap();
+
+        assert_eq!(meta.identifiers.len(), 1);
+        assert_eq!(meta.identifiers[0].identifier_type, IdentifierType::Isbn13);
+        assert_eq!(meta.identifiers[0].value, "9798217060672");
+    }
+
+    #[test]
+    fn dc_source_non_isbn_skipped() {
+        let opf = r#"<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Derived Work</dc:title>
+    <dc:source>https://example.com/original</dc:source>
+  </metadata>
+  <manifest/>
+  <spine/>
+</package>"#;
+
+        let data = build_epub_with_opf(opf, &[]);
+        let meta = extract_epub_metadata(&data).unwrap();
+
+        assert!(meta.identifiers.is_empty());
     }
 
     #[test]
