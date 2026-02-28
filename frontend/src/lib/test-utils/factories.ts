@@ -65,6 +65,7 @@ export function createBookSummary(overrides?: Partial<BookSummary>): BookSummary
 	return {
 		id: 'book-1',
 		title: 'Test Book',
+		subtitle: null,
 		sort_title: 'test book',
 		description: null,
 		language: null,
@@ -88,6 +89,7 @@ export function createBookDetail(overrides?: Partial<BookDetail>): BookDetail {
 	return {
 		id: 'book-1',
 		title: 'Test Book',
+		subtitle: null,
 		sort_title: 'test book',
 		description: null,
 		language: null,

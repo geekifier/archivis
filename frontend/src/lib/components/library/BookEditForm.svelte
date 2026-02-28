@@ -43,6 +43,7 @@
 	function snapshotBook(b: BookDetail) {
 		return {
 			title: b.title,
+			subtitle: b.subtitle ?? '',
 			description: b.description ?? '',
 			language: b.language ?? '',
 			publicationDate: b.publication_date ?? '',
@@ -62,6 +63,7 @@
 
 	// --- Editable state ---
 	let title = $state(snapshot.title);
+	let subtitle = $state(snapshot.subtitle);
 	let description = $state(snapshot.description);
 	let language = $state(snapshot.language);
 	let publicationDate = $state(snapshot.publicationDate);
@@ -286,6 +288,8 @@
 		// Build the scalar update request — only include changed fields
 		const updateData: UpdateBookRequest = {};
 		if (title !== book.title) updateData.title = title;
+		const subVal = subtitle || null;
+		if (subVal !== book.subtitle) updateData.subtitle = subtitle || undefined;
 		const descVal = description || null;
 		if (descVal !== book.description) updateData.description = description || undefined;
 		const langVal = language || null;
@@ -488,6 +492,12 @@
 		</div>
 		<Input id="edit-title" type="text" bind:value={title} />
 		{#if swapError}<p class="text-xs text-destructive">{swapError}</p>{/if}
+	</div>
+
+	<!-- Subtitle -->
+	<div class="space-y-1.5">
+		<Label for="edit-subtitle">Subtitle</Label>
+		<Input id="edit-subtitle" type="text" bind:value={subtitle} />
 	</div>
 
 	<!-- Authors -->

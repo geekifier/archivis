@@ -827,6 +827,9 @@
 								</Button>
 							</div>
 						</div>
+						{#if book.subtitle}
+							<p class="text-lg text-muted-foreground">{book.subtitle}</p>
+						{/if}
 						{#if primaryAuthors.length > 0}
 							<p class="mt-1 text-lg text-muted-foreground">
 								{#each primaryAuthors as a, i (a.id)}<a

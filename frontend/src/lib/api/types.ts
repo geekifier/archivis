@@ -93,6 +93,7 @@ export interface FileEntry {
 export interface BookSummary {
 	id: string;
 	title: string;
+	subtitle: string | null;
 	sort_title: string;
 	description: string | null;
 	language: string | null;
@@ -130,6 +131,7 @@ export interface IdentifierEntry {
 export interface BookDetail {
 	id: string;
 	title: string;
+	subtitle: string | null;
 	sort_title: string;
 	description: string | null;
 	language: string | null;
@@ -189,6 +191,7 @@ export interface SeriesListParams {
 
 export interface UpdateBookRequest {
 	title?: string;
+	subtitle?: string;
 	description?: string;
 	language?: string;
 	publication_date?: string; // "YYYY-MM-DD"
