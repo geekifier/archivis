@@ -172,7 +172,7 @@ export interface BookListParams {
 export interface AuthorListParams {
 	page?: number;
 	per_page?: number;
-	sort_by?: 'sort_name' | 'name';
+	sort_by?: 'sort_name' | 'name' | 'book_count';
 	sort_order?: SortOrder;
 	q?: string;
 }
@@ -180,7 +180,7 @@ export interface AuthorListParams {
 export interface SeriesListParams {
 	page?: number;
 	per_page?: number;
-	sort_by?: 'name';
+	sort_by?: 'name' | 'book_count';
 	sort_order?: SortOrder;
 	q?: string;
 }
@@ -234,6 +234,7 @@ export interface AuthorResponse {
 	id: string;
 	name: string;
 	sort_name: string;
+	book_count: number;
 }
 
 export interface TagResponse {
@@ -246,6 +247,7 @@ export interface SeriesResponse {
 	id: string;
 	name: string;
 	description: string | null;
+	book_count: number;
 }
 
 export interface PaginatedAuthors {

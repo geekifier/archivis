@@ -7,10 +7,16 @@ use super::types::{PaginatedResult, PaginationParams, SortOrder};
 
 pub struct AuthorRepository;
 
-/// Helper to fetch a page of author rows with a given ORDER BY clause.
-macro_rules! fetch_author_rows {
+/// An author together with a pre-computed book count (from list/search queries).
+pub struct AuthorWithBookCount {
+    pub author: Author,
+    pub book_count: u32,
+}
+
+/// Helper to fetch a page of author-with-count rows with a given ORDER BY clause.
+macro_rules! fetch_author_count_rows {
     ($sql:literal, $pool:expr $(, $bind:expr)*) => {
-        sqlx::query_as!(AuthorRow, $sql $(, $bind)*)
+        sqlx::query_as!(AuthorWithCountRow, $sql $(, $bind)*)
             .fetch_all($pool)
             .await
             .map_err(|e| DbError::Query(e.to_string()))?
@@ -54,7 +60,7 @@ impl AuthorRepository {
     pub async fn list(
         pool: &SqlitePool,
         params: &PaginationParams,
-    ) -> Result<PaginatedResult<Author>, DbError> {
+    ) -> Result<PaginatedResult<AuthorWithBookCount>, DbError> {
         let limit = params.per_page;
         let offset = params.offset();
 
@@ -63,34 +69,37 @@ impl AuthorRepository {
             .await
             .map_err(|e| DbError::Query(e.to_string()))?;
 
-        let rows =
-            match (params.sort_by.as_str(), params.sort_order) {
-                ("name", SortOrder::Asc) => {
-                    fetch_author_rows!(
-                "SELECT id, name, sort_name FROM authors ORDER BY name ASC LIMIT ? OFFSET ?",
-                pool, limit, offset
-            )
-                }
-                ("name", SortOrder::Desc) => {
-                    fetch_author_rows!(
-                "SELECT id, name, sort_name FROM authors ORDER BY name DESC LIMIT ? OFFSET ?",
-                pool, limit, offset
-            )
-                }
-                (_, SortOrder::Desc) => fetch_author_rows!(
-                "SELECT id, name, sort_name FROM authors ORDER BY sort_name DESC LIMIT ? OFFSET ?",
+        let rows = match (params.sort_by.as_str(), params.sort_order) {
+            ("name", SortOrder::Asc) => fetch_author_count_rows!(
+                "SELECT a.id, a.name, a.sort_name, (SELECT COUNT(*) FROM book_authors ba WHERE ba.author_id = a.id) AS book_count FROM authors a ORDER BY a.name ASC LIMIT ? OFFSET ?",
                 pool, limit, offset
             ),
-                // Default: sort_name ASC
-                _ => fetch_author_rows!(
-                "SELECT id, name, sort_name FROM authors ORDER BY sort_name ASC LIMIT ? OFFSET ?",
+            ("name", SortOrder::Desc) => fetch_author_count_rows!(
+                "SELECT a.id, a.name, a.sort_name, (SELECT COUNT(*) FROM book_authors ba WHERE ba.author_id = a.id) AS book_count FROM authors a ORDER BY a.name DESC LIMIT ? OFFSET ?",
                 pool, limit, offset
             ),
-            };
+            ("book_count", SortOrder::Asc) => fetch_author_count_rows!(
+                "SELECT a.id, a.name, a.sort_name, (SELECT COUNT(*) FROM book_authors ba WHERE ba.author_id = a.id) AS book_count FROM authors a ORDER BY book_count ASC, a.sort_name ASC LIMIT ? OFFSET ?",
+                pool, limit, offset
+            ),
+            ("book_count", SortOrder::Desc) => fetch_author_count_rows!(
+                "SELECT a.id, a.name, a.sort_name, (SELECT COUNT(*) FROM book_authors ba WHERE ba.author_id = a.id) AS book_count FROM authors a ORDER BY book_count DESC, a.sort_name ASC LIMIT ? OFFSET ?",
+                pool, limit, offset
+            ),
+            (_, SortOrder::Desc) => fetch_author_count_rows!(
+                "SELECT a.id, a.name, a.sort_name, (SELECT COUNT(*) FROM book_authors ba WHERE ba.author_id = a.id) AS book_count FROM authors a ORDER BY a.sort_name DESC LIMIT ? OFFSET ?",
+                pool, limit, offset
+            ),
+            // Default: sort_name ASC
+            _ => fetch_author_count_rows!(
+                "SELECT a.id, a.name, a.sort_name, (SELECT COUNT(*) FROM book_authors ba WHERE ba.author_id = a.id) AS book_count FROM authors a ORDER BY a.sort_name ASC LIMIT ? OFFSET ?",
+                pool, limit, offset
+            ),
+        };
 
         let authors = rows
             .into_iter()
-            .map(AuthorRow::into_author)
+            .map(AuthorWithCountRow::into_author_with_count)
             .collect::<Result<Vec<_>, _>>()?;
 
         #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
@@ -141,7 +150,7 @@ impl AuthorRepository {
         pool: &SqlitePool,
         query: &str,
         params: &PaginationParams,
-    ) -> Result<PaginatedResult<Author>, DbError> {
+    ) -> Result<PaginatedResult<AuthorWithBookCount>, DbError> {
         let limit = params.per_page;
         let offset = params.offset();
         let pattern = format!("%{query}%");
@@ -156,27 +165,35 @@ impl AuthorRepository {
         .map_err(|e| DbError::Query(e.to_string()))?;
 
         let rows = match (params.sort_by.as_str(), params.sort_order) {
-            ("name", SortOrder::Asc) => fetch_author_rows!(
-                "SELECT id, name, sort_name FROM authors WHERE name LIKE ? COLLATE NOCASE OR sort_name LIKE ? COLLATE NOCASE ORDER BY name ASC LIMIT ? OFFSET ?",
+            ("name", SortOrder::Asc) => fetch_author_count_rows!(
+                "SELECT a.id, a.name, a.sort_name, (SELECT COUNT(*) FROM book_authors ba WHERE ba.author_id = a.id) AS book_count FROM authors a WHERE a.name LIKE ? COLLATE NOCASE OR a.sort_name LIKE ? COLLATE NOCASE ORDER BY a.name ASC LIMIT ? OFFSET ?",
                 pool, pattern, pattern, limit, offset
             ),
-            ("name", SortOrder::Desc) => fetch_author_rows!(
-                "SELECT id, name, sort_name FROM authors WHERE name LIKE ? COLLATE NOCASE OR sort_name LIKE ? COLLATE NOCASE ORDER BY name DESC LIMIT ? OFFSET ?",
+            ("name", SortOrder::Desc) => fetch_author_count_rows!(
+                "SELECT a.id, a.name, a.sort_name, (SELECT COUNT(*) FROM book_authors ba WHERE ba.author_id = a.id) AS book_count FROM authors a WHERE a.name LIKE ? COLLATE NOCASE OR a.sort_name LIKE ? COLLATE NOCASE ORDER BY a.name DESC LIMIT ? OFFSET ?",
                 pool, pattern, pattern, limit, offset
             ),
-            (_, SortOrder::Desc) => fetch_author_rows!(
-                "SELECT id, name, sort_name FROM authors WHERE name LIKE ? COLLATE NOCASE OR sort_name LIKE ? COLLATE NOCASE ORDER BY sort_name DESC LIMIT ? OFFSET ?",
+            ("book_count", SortOrder::Asc) => fetch_author_count_rows!(
+                "SELECT a.id, a.name, a.sort_name, (SELECT COUNT(*) FROM book_authors ba WHERE ba.author_id = a.id) AS book_count FROM authors a WHERE a.name LIKE ? COLLATE NOCASE OR a.sort_name LIKE ? COLLATE NOCASE ORDER BY book_count ASC, a.sort_name ASC LIMIT ? OFFSET ?",
                 pool, pattern, pattern, limit, offset
             ),
-            _ => fetch_author_rows!(
-                "SELECT id, name, sort_name FROM authors WHERE name LIKE ? COLLATE NOCASE OR sort_name LIKE ? COLLATE NOCASE ORDER BY sort_name ASC LIMIT ? OFFSET ?",
+            ("book_count", SortOrder::Desc) => fetch_author_count_rows!(
+                "SELECT a.id, a.name, a.sort_name, (SELECT COUNT(*) FROM book_authors ba WHERE ba.author_id = a.id) AS book_count FROM authors a WHERE a.name LIKE ? COLLATE NOCASE OR a.sort_name LIKE ? COLLATE NOCASE ORDER BY book_count DESC, a.sort_name ASC LIMIT ? OFFSET ?",
+                pool, pattern, pattern, limit, offset
+            ),
+            (_, SortOrder::Desc) => fetch_author_count_rows!(
+                "SELECT a.id, a.name, a.sort_name, (SELECT COUNT(*) FROM book_authors ba WHERE ba.author_id = a.id) AS book_count FROM authors a WHERE a.name LIKE ? COLLATE NOCASE OR a.sort_name LIKE ? COLLATE NOCASE ORDER BY a.sort_name DESC LIMIT ? OFFSET ?",
+                pool, pattern, pattern, limit, offset
+            ),
+            _ => fetch_author_count_rows!(
+                "SELECT a.id, a.name, a.sort_name, (SELECT COUNT(*) FROM book_authors ba WHERE ba.author_id = a.id) AS book_count FROM authors a WHERE a.name LIKE ? COLLATE NOCASE OR a.sort_name LIKE ? COLLATE NOCASE ORDER BY a.sort_name ASC LIMIT ? OFFSET ?",
                 pool, pattern, pattern, limit, offset
             ),
         };
 
         let authors = rows
             .into_iter()
-            .map(AuthorRow::into_author)
+            .map(AuthorWithCountRow::into_author_with_count)
             .collect::<Result<Vec<_>, _>>()?;
 
         #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
@@ -212,6 +229,30 @@ impl AuthorRow {
             id,
             name: self.name,
             sort_name: self.sort_name,
+        })
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct AuthorWithCountRow {
+    id: String,
+    name: String,
+    sort_name: String,
+    book_count: i64,
+}
+
+impl AuthorWithCountRow {
+    fn into_author_with_count(self) -> Result<AuthorWithBookCount, DbError> {
+        let id = Uuid::parse_str(&self.id)
+            .map_err(|e| DbError::Query(format!("invalid author UUID: {e}")))?;
+        #[allow(clippy::cast_sign_loss)]
+        Ok(AuthorWithBookCount {
+            author: Author {
+                id,
+                name: self.name,
+                sort_name: self.sort_name,
+            },
+            book_count: self.book_count as u32,
         })
     }
 }

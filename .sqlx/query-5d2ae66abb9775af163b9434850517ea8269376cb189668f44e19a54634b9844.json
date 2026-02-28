@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id, name, description FROM series ORDER BY name ASC LIMIT ? OFFSET ?",
+  "query": "SELECT s.id, s.name, s.description, (SELECT COUNT(*) FROM book_series bs WHERE bs.series_id = s.id) AS book_count FROM series s ORDER BY s.name ASC LIMIT ? OFFSET ?",
   "describe": {
     "columns": [
       {
@@ -17,6 +17,11 @@
         "name": "description",
         "ordinal": 2,
         "type_info": "Text"
+      },
+      {
+        "name": "book_count",
+        "ordinal": 3,
+        "type_info": "Integer"
       }
     ],
     "parameters": {
@@ -25,8 +30,9 @@
     "nullable": [
       false,
       false,
-      true
+      true,
+      false
     ]
   },
-  "hash": "14955e47e1a66dc8fbde8e30cf0f7ed612e2a84d65f7777522db90da622a7d07"
+  "hash": "5d2ae66abb9775af163b9434850517ea8269376cb189668f44e19a54634b9844"
 }

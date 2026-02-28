@@ -7,10 +7,16 @@ use super::types::{PaginatedResult, PaginationParams, SortOrder};
 
 pub struct SeriesRepository;
 
-/// Helper to fetch a page of series rows with a given ORDER BY clause.
-macro_rules! fetch_series_rows {
+/// A series together with a pre-computed book count (from list/search queries).
+pub struct SeriesWithBookCount {
+    pub series: Series,
+    pub book_count: u32,
+}
+
+/// Helper to fetch a page of series-with-count rows with a given ORDER BY clause.
+macro_rules! fetch_series_count_rows {
     ($sql:literal, $pool:expr $(, $bind:expr)*) => {
-        sqlx::query_as!(SeriesRow, $sql $(, $bind)*)
+        sqlx::query_as!(SeriesWithCountRow, $sql $(, $bind)*)
             .fetch_all($pool)
             .await
             .map_err(|e| DbError::Query(e.to_string()))?
@@ -54,7 +60,7 @@ impl SeriesRepository {
     pub async fn list(
         pool: &SqlitePool,
         params: &PaginationParams,
-    ) -> Result<PaginatedResult<Series>, DbError> {
+    ) -> Result<PaginatedResult<SeriesWithBookCount>, DbError> {
         let limit = params.per_page;
         let offset = params.offset();
 
@@ -63,24 +69,28 @@ impl SeriesRepository {
             .await
             .map_err(|e| DbError::Query(e.to_string()))?;
 
-        let rows = match params.sort_order {
-            SortOrder::Desc => fetch_series_rows!(
-                "SELECT id, name, description FROM series ORDER BY name DESC LIMIT ? OFFSET ?",
-                pool,
-                limit,
-                offset
+        let rows = match (params.sort_by.as_str(), params.sort_order) {
+            ("book_count", SortOrder::Asc) => fetch_series_count_rows!(
+                "SELECT s.id, s.name, s.description, (SELECT COUNT(*) FROM book_series bs WHERE bs.series_id = s.id) AS book_count FROM series s ORDER BY book_count ASC, s.name ASC LIMIT ? OFFSET ?",
+                pool, limit, offset
             ),
-            SortOrder::Asc => fetch_series_rows!(
-                "SELECT id, name, description FROM series ORDER BY name ASC LIMIT ? OFFSET ?",
-                pool,
-                limit,
-                offset
+            ("book_count", SortOrder::Desc) => fetch_series_count_rows!(
+                "SELECT s.id, s.name, s.description, (SELECT COUNT(*) FROM book_series bs WHERE bs.series_id = s.id) AS book_count FROM series s ORDER BY book_count DESC, s.name ASC LIMIT ? OFFSET ?",
+                pool, limit, offset
+            ),
+            (_, SortOrder::Desc) => fetch_series_count_rows!(
+                "SELECT s.id, s.name, s.description, (SELECT COUNT(*) FROM book_series bs WHERE bs.series_id = s.id) AS book_count FROM series s ORDER BY s.name DESC LIMIT ? OFFSET ?",
+                pool, limit, offset
+            ),
+            _ => fetch_series_count_rows!(
+                "SELECT s.id, s.name, s.description, (SELECT COUNT(*) FROM book_series bs WHERE bs.series_id = s.id) AS book_count FROM series s ORDER BY s.name ASC LIMIT ? OFFSET ?",
+                pool, limit, offset
             ),
         };
 
         let items = rows
             .into_iter()
-            .map(SeriesRow::into_series)
+            .map(SeriesWithCountRow::into_series_with_count)
             .collect::<Result<Vec<_>, _>>()?;
 
         #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
@@ -92,7 +102,7 @@ impl SeriesRepository {
         pool: &SqlitePool,
         query: &str,
         params: &PaginationParams,
-    ) -> Result<PaginatedResult<Series>, DbError> {
+    ) -> Result<PaginatedResult<SeriesWithBookCount>, DbError> {
         let limit = params.per_page;
         let offset = params.offset();
         let pattern = format!("%{query}%");
@@ -105,20 +115,28 @@ impl SeriesRepository {
         .await
         .map_err(|e| DbError::Query(e.to_string()))?;
 
-        let rows = match params.sort_order {
-            SortOrder::Desc => fetch_series_rows!(
-                "SELECT id, name, description FROM series WHERE name LIKE ? COLLATE NOCASE ORDER BY name DESC LIMIT ? OFFSET ?",
+        let rows = match (params.sort_by.as_str(), params.sort_order) {
+            ("book_count", SortOrder::Asc) => fetch_series_count_rows!(
+                "SELECT s.id, s.name, s.description, (SELECT COUNT(*) FROM book_series bs WHERE bs.series_id = s.id) AS book_count FROM series s WHERE s.name LIKE ? COLLATE NOCASE ORDER BY book_count ASC, s.name ASC LIMIT ? OFFSET ?",
                 pool, pattern, limit, offset
             ),
-            SortOrder::Asc => fetch_series_rows!(
-                "SELECT id, name, description FROM series WHERE name LIKE ? COLLATE NOCASE ORDER BY name ASC LIMIT ? OFFSET ?",
+            ("book_count", SortOrder::Desc) => fetch_series_count_rows!(
+                "SELECT s.id, s.name, s.description, (SELECT COUNT(*) FROM book_series bs WHERE bs.series_id = s.id) AS book_count FROM series s WHERE s.name LIKE ? COLLATE NOCASE ORDER BY book_count DESC, s.name ASC LIMIT ? OFFSET ?",
+                pool, pattern, limit, offset
+            ),
+            (_, SortOrder::Desc) => fetch_series_count_rows!(
+                "SELECT s.id, s.name, s.description, (SELECT COUNT(*) FROM book_series bs WHERE bs.series_id = s.id) AS book_count FROM series s WHERE s.name LIKE ? COLLATE NOCASE ORDER BY s.name DESC LIMIT ? OFFSET ?",
+                pool, pattern, limit, offset
+            ),
+            _ => fetch_series_count_rows!(
+                "SELECT s.id, s.name, s.description, (SELECT COUNT(*) FROM book_series bs WHERE bs.series_id = s.id) AS book_count FROM series s WHERE s.name LIKE ? COLLATE NOCASE ORDER BY s.name ASC LIMIT ? OFFSET ?",
                 pool, pattern, limit, offset
             ),
         };
 
         let items = rows
             .into_iter()
-            .map(SeriesRow::into_series)
+            .map(SeriesWithCountRow::into_series_with_count)
             .collect::<Result<Vec<_>, _>>()?;
 
         #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
@@ -200,6 +218,30 @@ impl SeriesRow {
             id,
             name: self.name,
             description: self.description,
+        })
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct SeriesWithCountRow {
+    id: String,
+    name: String,
+    description: Option<String>,
+    book_count: i64,
+}
+
+impl SeriesWithCountRow {
+    fn into_series_with_count(self) -> Result<SeriesWithBookCount, DbError> {
+        let id = Uuid::parse_str(&self.id)
+            .map_err(|e| DbError::Query(format!("invalid series UUID: {e}")))?;
+        #[allow(clippy::cast_sign_loss)]
+        Ok(SeriesWithBookCount {
+            series: Series {
+                id,
+                name: self.name,
+                description: self.description,
+            },
+            book_count: self.book_count as u32,
         })
     }
 }

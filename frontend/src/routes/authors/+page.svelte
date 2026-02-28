@@ -11,18 +11,20 @@
 	const PER_PAGE = 30;
 	const DEBOUNCE_MS = 300;
 
-	type SortOption = { label: string; field: 'sort_name' | 'name'; order: SortOrder };
+	type SortOption = { label: string; field: 'sort_name' | 'name' | 'book_count'; order: SortOrder };
 
 	const sortOptions: SortOption[] = [
 		{ label: 'Name A\u2013Z', field: 'sort_name', order: 'asc' },
-		{ label: 'Name Z\u2013A', field: 'sort_name', order: 'desc' }
+		{ label: 'Name Z\u2013A', field: 'sort_name', order: 'desc' },
+		{ label: 'Most Books', field: 'book_count', order: 'desc' },
+		{ label: 'Fewest Books', field: 'book_count', order: 'asc' }
 	];
 
 	// Restore state from URL search params
 	const _params = page.url.searchParams;
 	const _initPage = Math.max(1, parseInt(_params.get('page') || '1', 10) || 1);
 	const _initQuery = _params.get('q') || '';
-	const _initSort = _params.get('sort') as 'sort_name' | 'name' | null;
+	const _initSort = _params.get('sort') as 'sort_name' | 'name' | 'book_count' | null;
 	const _initOrder = _params.get('order') as SortOrder | null;
 	const _initSortIdx =
 		_initSort && _initOrder
@@ -38,7 +40,7 @@
 	let error = $state<string | null>(null);
 	let debounceTimer: ReturnType<typeof setTimeout> | undefined;
 
-	let activeSortBy = $state<'sort_name' | 'name'>(_initSort || sortOptions[0].field);
+	let activeSortBy = $state<'sort_name' | 'name' | 'book_count'>(_initSort || sortOptions[0].field);
 	let activeSortOrder = $state<SortOrder>(_initOrder || sortOptions[0].order);
 
 	function handleSearchInput(e: Event) {
@@ -187,6 +189,7 @@
 				>
 					<div class="h-4 w-48 animate-pulse rounded bg-muted"></div>
 					<div class="h-4 w-32 animate-pulse rounded bg-muted"></div>
+					<div class="ml-auto h-4 w-8 animate-pulse rounded bg-muted"></div>
 				</div>
 			{/each}
 		</div>
@@ -214,6 +217,7 @@
 						<th class="hidden px-4 py-2.5 text-left font-medium text-muted-foreground sm:table-cell"
 							>Sort Name</th
 						>
+						<th class="px-4 py-2.5 text-right font-medium text-muted-foreground">Books</th>
 					</tr>
 				</thead>
 				<tbody>
@@ -236,6 +240,7 @@
 									<span class="text-muted-foreground/40">&mdash;</span>
 								{/if}
 							</td>
+							<td class="px-4 py-2.5 text-right text-muted-foreground">{author.book_count}</td>
 						</tr>
 					{/each}
 				</tbody>

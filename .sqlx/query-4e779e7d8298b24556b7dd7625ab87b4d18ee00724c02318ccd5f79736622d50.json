@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id, name, sort_name FROM authors ORDER BY sort_name DESC LIMIT ? OFFSET ?",
+  "query": "SELECT a.id, a.name, a.sort_name, (SELECT COUNT(*) FROM book_authors ba WHERE ba.author_id = a.id) AS book_count FROM authors a ORDER BY a.name DESC LIMIT ? OFFSET ?",
   "describe": {
     "columns": [
       {
@@ -17,6 +17,11 @@
         "name": "sort_name",
         "ordinal": 2,
         "type_info": "Text"
+      },
+      {
+        "name": "book_count",
+        "ordinal": 3,
+        "type_info": "Integer"
       }
     ],
     "parameters": {
@@ -25,8 +30,9 @@
     "nullable": [
       false,
       false,
+      false,
       false
     ]
   },
-  "hash": "3cc3843d16c350cf102cdcb5eac83f91482f885812f95782c457f1b96ea7bac6"
+  "hash": "4e779e7d8298b24556b7dd7625ab87b4d18ee00724c02318ccd5f79736622d50"
 }

@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id, name, sort_name FROM authors WHERE name LIKE ? COLLATE NOCASE OR sort_name LIKE ? COLLATE NOCASE ORDER BY name DESC LIMIT ? OFFSET ?",
+  "query": "SELECT a.id, a.name, a.sort_name, (SELECT COUNT(*) FROM book_authors ba WHERE ba.author_id = a.id) AS book_count FROM authors a WHERE a.name LIKE ? COLLATE NOCASE OR a.sort_name LIKE ? COLLATE NOCASE ORDER BY a.name DESC LIMIT ? OFFSET ?",
   "describe": {
     "columns": [
       {
@@ -17,6 +17,11 @@
         "name": "sort_name",
         "ordinal": 2,
         "type_info": "Text"
+      },
+      {
+        "name": "book_count",
+        "ordinal": 3,
+        "type_info": "Integer"
       }
     ],
     "parameters": {
@@ -25,8 +30,9 @@
     "nullable": [
       false,
       false,
+      false,
       false
     ]
   },
-  "hash": "b70738e78f73d32c5998abe4e02c09f089b390400075f783d0e06895dab80202"
+  "hash": "f4a01291a81cb4e550f1caebe33f74d6d7456ffcd923fa7fd40dc2212453d25a"
 }

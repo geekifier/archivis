@@ -381,9 +381,9 @@ async fn author_list_sorted() {
     let result = AuthorRepository::list(&pool, &params).await.unwrap();
 
     assert_eq!(result.total, 3);
-    assert_eq!(result.items[0].name, "Asimov");
-    assert_eq!(result.items[1].name, "Herbert");
-    assert_eq!(result.items[2].name, "Tolkien");
+    assert_eq!(result.items[0].author.name, "Asimov");
+    assert_eq!(result.items[1].author.name, "Herbert");
+    assert_eq!(result.items[2].author.name, "Tolkien");
 }
 
 // ── SeriesRepository ────────────────────────────────────────────

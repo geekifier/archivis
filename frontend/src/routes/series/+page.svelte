@@ -11,22 +11,27 @@
 	const PER_PAGE = 30;
 	const DEBOUNCE_MS = 300;
 
-	type SortOption = { label: string; field: 'name'; order: SortOrder };
+	type SortOption = { label: string; field: 'name' | 'book_count'; order: SortOrder };
 
 	const sortOptions: SortOption[] = [
 		{ label: 'Name A\u2013Z', field: 'name', order: 'asc' },
-		{ label: 'Name Z\u2013A', field: 'name', order: 'desc' }
+		{ label: 'Name Z\u2013A', field: 'name', order: 'desc' },
+		{ label: 'Most Books', field: 'book_count', order: 'desc' },
+		{ label: 'Fewest Books', field: 'book_count', order: 'asc' }
 	];
 
 	// Restore state from URL search params
 	const _params = page.url.searchParams;
 	const _initPage = Math.max(1, parseInt(_params.get('page') || '1', 10) || 1);
 	const _initQuery = _params.get('q') || '';
+	const _initSort = _params.get('sort') as 'name' | 'book_count' | null;
 	const _initOrder = _params.get('order') as SortOrder | null;
 	const _initSortIdx =
-		_initOrder
-			? sortOptions.findIndex((o) => o.order === _initOrder)
-			: -1;
+		_initSort && _initOrder
+			? sortOptions.findIndex((o) => o.field === _initSort && o.order === _initOrder)
+			: _initOrder
+				? sortOptions.findIndex((o) => o.order === _initOrder)
+				: -1;
 
 	let searchInput = $state(_initQuery);
 	let activeQuery = $state(_initQuery);
@@ -37,6 +42,7 @@
 	let error = $state<string | null>(null);
 	let debounceTimer: ReturnType<typeof setTimeout> | undefined;
 
+	let activeSortBy = $state<'name' | 'book_count'>(_initSort || sortOptions[0].field);
 	let activeSortOrder = $state<SortOrder>(_initOrder || sortOptions[0].order);
 
 	function handleSearchInput(e: Event) {
@@ -57,6 +63,7 @@
 
 	function handleSortChange(e: Event) {
 		sortIndex = Number((e.target as HTMLSelectElement).value);
+		activeSortBy = sortOptions[sortIndex].field;
 		activeSortOrder = sortOptions[sortIndex].order;
 	}
 
@@ -66,15 +73,18 @@
 
 	// Reset to page 1 when search or sort changes
 	let _prevQuery = _initQuery;
+	let _prevSortBy = _initSort || sortOptions[0].field;
 	let _prevSortOrder = _initOrder || sortOptions[0].order;
 
 	$effect(() => {
 		const q = activeQuery;
+		const sb = activeSortBy;
 		const so = activeSortOrder;
 
-		const changed = q !== _prevQuery || so !== _prevSortOrder;
+		const changed = q !== _prevQuery || sb !== _prevSortBy || so !== _prevSortOrder;
 
 		_prevQuery = q;
+		_prevSortBy = sb;
 		_prevSortOrder = so;
 
 		if (changed) {
@@ -85,6 +95,7 @@
 	// Fetch series when params change
 	$effect(() => {
 		const p = currentPage;
+		const field = activeSortBy;
 		const order = activeSortOrder;
 		const q = activeQuery;
 
@@ -95,7 +106,7 @@
 			.list({
 				page: p,
 				per_page: PER_PAGE,
-				sort_by: 'name',
+				sort_by: field,
 				sort_order: order,
 				q: q || undefined
 			})
@@ -115,7 +126,8 @@
 		const params = new SvelteURLSearchParams();
 		if (currentPage > 1) params.set('page', String(currentPage));
 		if (activeQuery) params.set('q', activeQuery);
-		if (activeSortOrder !== sortOptions[0].order) {
+		if (activeSortBy !== sortOptions[0].field || activeSortOrder !== sortOptions[0].order) {
+			params.set('sort', activeSortBy);
 			params.set('order', activeSortOrder);
 		}
 
@@ -184,6 +196,7 @@
 				>
 					<div class="h-4 w-48 animate-pulse rounded bg-muted"></div>
 					<div class="h-4 w-64 animate-pulse rounded bg-muted"></div>
+					<div class="ml-auto h-4 w-8 animate-pulse rounded bg-muted"></div>
 				</div>
 			{/each}
 		</div>
@@ -211,6 +224,7 @@
 						<th class="hidden px-4 py-2.5 text-left font-medium text-muted-foreground md:table-cell"
 							>Description</th
 						>
+						<th class="px-4 py-2.5 text-right font-medium text-muted-foreground">Books</th>
 					</tr>
 				</thead>
 				<tbody>
@@ -233,6 +247,7 @@
 									<span class="text-muted-foreground/40">&mdash;</span>
 								{/if}
 							</td>
+							<td class="px-4 py-2.5 text-right text-muted-foreground">{s.book_count}</td>
 						</tr>
 					{/each}
 				</tbody>

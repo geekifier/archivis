@@ -4,7 +4,7 @@ use uuid::Uuid;
 use validator::Validate;
 
 use archivis_core::models::Author;
-use archivis_db::PaginatedResult;
+use archivis_db::{AuthorWithBookCount, PaginatedResult};
 
 // ── Query Parameters ────────────────────────────────────────────
 
@@ -68,6 +68,7 @@ pub struct AuthorResponse {
     pub id: Uuid,
     pub name: String,
     pub sort_name: String,
+    pub book_count: u32,
 }
 
 /// Paginated list of authors.
@@ -88,12 +89,24 @@ impl From<Author> for AuthorResponse {
             id: author.id,
             name: author.name,
             sort_name: author.sort_name,
+            book_count: 0,
         }
     }
 }
 
-impl From<PaginatedResult<Author>> for PaginatedAuthors {
-    fn from(result: PaginatedResult<Author>) -> Self {
+impl From<AuthorWithBookCount> for AuthorResponse {
+    fn from(awc: AuthorWithBookCount) -> Self {
+        Self {
+            id: awc.author.id,
+            name: awc.author.name,
+            sort_name: awc.author.sort_name,
+            book_count: awc.book_count,
+        }
+    }
+}
+
+impl From<PaginatedResult<AuthorWithBookCount>> for PaginatedAuthors {
+    fn from(result: PaginatedResult<AuthorWithBookCount>) -> Self {
         Self {
             items: result.items.into_iter().map(Into::into).collect(),
             total: result.total,

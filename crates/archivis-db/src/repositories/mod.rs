@@ -17,7 +17,7 @@ mod types;
 mod user;
 mod watched_directory;
 
-pub use author::AuthorRepository;
+pub use author::{AuthorRepository, AuthorWithBookCount};
 pub use book::{
     BookAuthorEntry, BookRepository, BookSeriesEntry, BookWithAuthors, BookWithRelations,
 };
@@ -28,7 +28,7 @@ pub use duplicate::DuplicateRepository;
 pub use identifier::IdentifierRepository;
 pub use publisher::PublisherRepository;
 pub use reading_progress::ReadingProgressRepository;
-pub use series::SeriesRepository;
+pub use series::{SeriesRepository, SeriesWithBookCount};
 pub use session::SessionRepository;
 pub use setting::SettingRepository;
 pub use stats::{
