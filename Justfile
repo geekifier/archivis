@@ -103,6 +103,9 @@ dev-clean-resume:
     cd frontend && npm run dev &
     wait
 
+# Alias for resuming the clean dev instance (no wipe/setup).
+dev-resume: dev-clean-resume
+
 # Wipe → backend only + create admin (no frontend)
 dev-clean-backend:
     #!/usr/bin/env bash
@@ -127,6 +130,109 @@ dev-clean-seed:
     ./scripts/dev-boot.sh setup
     ./scripts/dev-boot.sh seed
     wait
+
+# ── Dev API ───────────────────────────────────────────────────────────────────
+
+# Ensure API calls use an existing clean instance or safely resume it (no wipe).
+[private]
+_dev-api-ensure-running:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    base_url="${ARCHIVIS_BASE_URL:-http://127.0.0.1:${ARCHIVIS_PORT:-9514}}"
+    if curl -sf "${base_url}/api/auth/status" > /dev/null 2>&1; then
+      exit 0
+    fi
+
+    mkdir -p .local/clean
+    echo "Dev API not reachable at ${base_url}; starting 'just dev-resume' in background..." >&2
+    nohup just dev-resume > .local/clean/dev-resume.log 2>&1 &
+    ARCHIVIS_PORT="${ARCHIVIS_PORT:-9514}" ./scripts/dev-boot.sh wait
+
+# Call local API with dev auth (reads token from .local/clean/.dev-creds)
+[positional-arguments]
+dev-api *args: _dev-api-ensure-running
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    creds_file=".local/clean/.dev-creds"
+    base_url="${ARCHIVIS_BASE_URL:-http://127.0.0.1:${ARCHIVIS_PORT:-9514}}"
+
+    if [[ ! -f "$creds_file" ]]; then
+      echo "ERROR: Missing ${creds_file}" >&2
+      echo "Run 'just dev-clean' or 'just dev-clean-backend' first." >&2
+      exit 1
+    fi
+
+    read_cred() {
+      local key="$1"
+      awk -F= -v key="$key" '$1 == key { print substr($0, index($0, "=") + 1) }' "$creds_file" | tail -n1
+    }
+
+    dev_user="$(read_cred DEV_USERNAME)"
+    if [[ -z "$dev_user" ]]; then
+      dev_user="dev"
+    fi
+
+    token="$(read_cred ARCHIVIS_DEV_TOKEN)"
+    if [[ -z "$token" ]]; then
+      token="$(read_cred DEV_TOKEN)"
+    fi
+    if [[ -z "$token" ]]; then
+      token="$(read_cred TOKEN)"
+    fi
+
+    # Backward compatibility: current .dev-creds stores DEV_PASSWORD only.
+    if [[ -z "$token" ]]; then
+      dev_password="$(read_cred DEV_PASSWORD)"
+      if [[ -z "$dev_password" ]]; then
+        echo "ERROR: ${creds_file} must include ARCHIVIS_DEV_TOKEN/DEV_TOKEN/TOKEN or DEV_PASSWORD" >&2
+        exit 1
+      fi
+
+      login_body="$(jq -nc --arg user "$dev_user" --arg pass "$dev_password" \
+        '{username: $user, password: $pass}')"
+
+      login_response="$(
+        curl -sf -X POST "${base_url}/api/auth/login" \
+          -H "Content-Type: application/json" \
+          -d "$login_body"
+      )"
+
+      token="$(echo "$login_response" | jq -r '.token')"
+      if [[ -z "$token" || "$token" == "null" ]]; then
+        echo "ERROR: Failed to obtain dev token from /api/auth/login" >&2
+        exit 1
+      fi
+    fi
+
+    export ARCHIVIS_DEV_TOKEN="$token"
+
+    if [[ "$#" -eq 0 ]]; then
+      echo "Usage: just dev-api [curl-args ...] /api/path" >&2
+      echo "Example: just dev-api -X GET /api/auth/me" >&2
+      exit 1
+    fi
+
+    curl_args=("$@")
+    has_url=0
+    for arg in "${curl_args[@]}"; do
+      if [[ "$arg" =~ ^https?:// ]]; then
+        has_url=1
+        break
+      fi
+    done
+
+    if (( has_url == 0 )); then
+      last_index=$((${#curl_args[@]} - 1))
+      if [[ "${curl_args[$last_index]}" == /* ]]; then
+        curl_args[$last_index]="${base_url}${curl_args[$last_index]}"
+      fi
+    fi
+
+    curl -sS --fail-with-body \
+      -H "Authorization: Bearer ${ARCHIVIS_DEV_TOKEN}" \
+      "${curl_args[@]}"
 
 # ── Dev Data ──────────────────────────────────────────────────────────────────
 
