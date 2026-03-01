@@ -1,20 +1,15 @@
 # Archivis Project
 
-A modern, self-hosted e-book collection manager built with Rust (Axum) and Svelte 5. Planned features include async metadata retrieval from pluggable sources, automated file ingestion, OCR-based ISBN detection, format-aware organization, bulk editing, e-reader sync, and a REST/OPDS/MCP API — all in a single low-footprint binary backed by embedded SQLite.
+Self-hosted ebook collection manager. Rust (Axum) backend + Svelte 5 frontend, single binary, embedded SQLite.
 
-This software is a work of art, a magnum opus of what AI Agents can achieve.
-Treat is as such.
+## Architectural Constraints
 
-## Core Architectural Principles
-
-Based on the goals and lessons from prior art:
-
-1. **Separate concerns aggressively.** The API server, background workers, and frontend are independent deployable units that communicate through well-defined interfaces.
-2. **Database lives separately from book files.** No storing `.db` files alongside ebooks. The database is managed by the application, period.
-3. **Single binary for the common case.** The core application (API + embedded DB + built-in worker) ships as one binary. Optional external workers for heavy processing.
-4. **Async by default.** Book imports, metadata fetching, OCR, conversions — all background tasks that never block the API or UI.
-5. **Plugin architecture from day one.** Metadata sources, storage backends, auth adapters, and ingestion workflows are all pluggable.
-6. **API-first design.** The web UI is just another API consumer. Every capability is exposed through the API.
+1. API server, background workers, and frontend are separate concerns with well-defined interfaces
+2. Database lives separately from book files
+3. Single binary ships API + embedded DB + built-in worker
+4. All heavy work (imports, metadata, OCR, conversions) runs as async background tasks
+5. Metadata sources, storage backends, auth adapters, ingestion workflows are pluggable
+6. API-first: the web UI is just another API consumer
 
 ## When using library/project dependencies
 
@@ -23,47 +18,40 @@ Verify compatibility with AGPLv3 license of this project
 ## Key References
 
 - Design doc: `../_docs/2_.Design01.md`
-- Task plan: `../_docs/3_.MVP_Tasks.md`
-- Progress: `.docs/PROGRESS.md` — update after completing tasks, be succinct and token efficient while preserving important info for next agent.
+
+For debugging, you can query the API: use `just dev-api` followed by curl args. Examples:
+
+- `just dev-api -X GET /api/auth/me`
+- `just dev-api -X POST -H 'Content-Type: application/json' -d '{"path":"/tmp/books"}' /api/import/scan/start`
 
 ## Project Structure
 
 Cargo workspace with 9 crates under `crates/`:
 `archivis-core` (domain models), `archivis-db` (SQLite/sqlx), `archivis-formats` (ebook parsing), `archivis-metadata` (stub), `archivis-tasks` (background jobs), `archivis-storage` (file storage), `archivis-auth`, `archivis-api` (Axum handlers), `archivis-server` (binary entrypoint)
-Local testing and temp directories are in `.local/` (gitignored).
-.local/test-existing - exiting (non-archivis) ebook collection that user may have
-.local/test-ingestion - for testing "watched" folder ingestion and processing
-.local/test-library - target for final library storage (after ingestion and processing)
+`.local/` (gitignored): `data/` (persistent dev data), `clean/` (disposable, wiped by `dev-clean*` targets), `test-existing` (existing ebook collection), `test-ingestion` (watched folder input), `test-library` (final library storage).
 
 ## Configuration
 
-Default port is **9514**. Config layering: compiled defaults → TOML file + env vars + CLI flags (bootstrap) → DB via admin UI (runtime). Env vars can override any setting.
+Default port: **9514**. Env vars can override any config setting.
 
 ## Development Commands
 
 - `just check` — fmt + clippy + test + deny (run before pushing)
+- `just check-frontend` — build + lint + check + test (frontend quality gate)
 - `just compile` — fast cargo check (compile only, no lints/tests)
+- `just test-e2e` — Playwright E2E tests (auto-starts backend + frontend)
+- `just dev-clean-backend` — wipe + backend + admin setup; quickest way to get a testable API
+- `just sqlx-prepare` — prepare offline query data (run after query changes, commit `.sqlx/`)
 - `just ci-local` / `just ci-job <name>` — run CI via act (Docker required)
-- `just deny` — cargo-deny locally (act can't run the deny job under QEMU)
-
-## CI
-
-`.github/workflows/ci.yml` — 4 parallel jobs: fmt, clippy, test, deny. Triggers on push to `master` and PRs.
-
-`SQLX_OFFLINE=true` is set in CI. When adding `sqlx::query!` macros, run `cargo sqlx prepare --workspace` and commit the `.sqlx/` directory.
 
 ## Development Flow
 
-- use `gh` to interact with github.com
-- Use conventional commits
-- Sign commits with `-s`
-- After implementing each task block and validation, commit
-- Create feature branches for new implementation work
-- Squash/amend commits within the feature branch when it makes sense based on scope and goals
-- When merging into `master`, DO NOT USE MERGE COMMITS, instead do a "rebase merge"
-- NEVER commit git ignored files without explicit user instruction.
+- Use `gh` for GitHub interaction
+- Conventional commits, sign with `-s`
+- Feature branches for new work; squash/amend within branch when appropriate
+- Merge to `master` via rebase merge only (no merge commits)
+- NEVER commit gitignored files without explicit user instruction
 
 ## Important Rules
 
 - Do not adjust linter rules, security audit configuration or other "guardrails" without explicit instructions or providing the user with an explanation and having the user acknowledge the changes.
-- Run `cargo sqlx prepare` after any query changes and commit `.sqlx/`.
