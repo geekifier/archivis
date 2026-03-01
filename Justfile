@@ -52,6 +52,9 @@ check: fmt-check clippy test deny
 check-frontend:
     cd frontend && npm run build && npm run lint && npm run check && npm test
 
+# Full CI-equivalent gate: backend + frontend
+check-all: check check-frontend
+
 # ── Database ──────────────────────────────────────────────────────────────────
 
 # Run database migrations (requires DATABASE_URL)
