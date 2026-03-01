@@ -19,6 +19,39 @@ use super::types::{
     IdentifyAllResponse, IdentifyResponse, SeriesInfo,
 };
 
+const VALID_EXCLUDE_FIELDS: &[&str] = &[
+    "title",
+    "subtitle",
+    "description",
+    "publication_date",
+    "authors",
+    "identifiers",
+    "series",
+    "cover",
+];
+
+fn parse_exclude_fields(body: Option<ApplyCandidateBody>) -> Result<HashSet<String>, ApiError> {
+    let fields = body.map_or_else(Vec::new, |b| b.exclude_fields);
+    let mut invalid = Vec::new();
+
+    for field in &fields {
+        if !VALID_EXCLUDE_FIELDS.contains(&field.as_str()) {
+            invalid.push(field.clone());
+        }
+    }
+
+    if !invalid.is_empty() {
+        invalid.sort();
+        invalid.dedup();
+        return Err(ApiError::Validation(format!(
+            "invalid exclude_fields values: {}",
+            invalid.join(", ")
+        )));
+    }
+
+    Ok(fields.into_iter().collect())
+}
+
 /// POST /api/books/{id}/identify -- trigger identification for a single book.
 #[utoipa::path(
     post,
@@ -134,9 +167,7 @@ pub async fn apply_candidate(
     }
 
     // Build exclusion set from optional body
-    let exclude_fields: HashSet<String> = body
-        .map(|b| b.0.exclude_fields.into_iter().collect())
-        .unwrap_or_default();
+    let exclude_fields = parse_exclude_fields(body.map(|b| b.0))?;
 
     // Apply the candidate via the identification service
     state
@@ -407,5 +438,38 @@ fn candidate_to_response(candidate: IdentificationCandidate) -> CandidateRespons
         cover_url,
         match_reasons: candidate.match_reasons,
         status: candidate.status.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_exclude_fields_accepts_valid_values() {
+        let parsed = parse_exclude_fields(Some(ApplyCandidateBody {
+            exclude_fields: vec!["cover".into(), "title".into(), "series".into()],
+        }))
+        .unwrap();
+
+        assert!(parsed.contains("cover"));
+        assert!(parsed.contains("title"));
+        assert!(parsed.contains("series"));
+    }
+
+    #[test]
+    fn parse_exclude_fields_rejects_invalid_values() {
+        let err = parse_exclude_fields(Some(ApplyCandidateBody {
+            exclude_fields: vec!["cover".into(), "covre".into(), "unknown".into()],
+        }))
+        .unwrap_err();
+
+        match err {
+            ApiError::Validation(msg) => {
+                assert!(msg.contains("covre"));
+                assert!(msg.contains("unknown"));
+            }
+            other => panic!("expected validation error, got {other:?}"),
+        }
     }
 }

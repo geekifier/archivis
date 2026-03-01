@@ -63,8 +63,11 @@
 
 	const bookId = $derived(page.params.id ?? '');
 	const hue = $derived(placeholderHue(bookId));
+	const coverVersion = $derived(
+		coverCacheBust || (book?.updated_at ? Date.parse(book.updated_at) : 0)
+	);
 	const coverUrl = $derived(
-		`/api/books/${bookId}/cover?size=lg${coverCacheBust ? `&t=${coverCacheBust}` : ''}`
+		`/api/books/${bookId}/cover?size=lg${coverVersion ? `&t=${coverVersion}` : ''}`
 	);
 
 	const authors = $derived(book?.authors ?? []);

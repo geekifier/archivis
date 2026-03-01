@@ -533,7 +533,7 @@ async fn serve_file_with_etag(
         modified
             .duration_since(std::time::SystemTime::UNIX_EPOCH)
             .unwrap_or_default()
-            .as_secs(),
+            .as_nanos(),
         metadata.len()
     );
 

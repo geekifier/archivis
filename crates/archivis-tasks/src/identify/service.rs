@@ -8,8 +8,8 @@ use archivis_core::models::{
     MetadataStatus,
 };
 use archivis_db::{
-    AuthorRepository, BookRepository, CandidateRepository, DbPool, IdentifierRepository,
-    SeriesRepository,
+    AuthorRepository, BookFileRepository, BookRepository, CandidateRepository, DbPool,
+    IdentifierRepository, SeriesRepository,
 };
 use archivis_formats::sanitize::{sanitize_text, SanitizeOptions};
 use archivis_metadata::{
@@ -22,6 +22,12 @@ use uuid::Uuid;
 
 use crate::import::cover;
 use crate::import::types::ThumbnailSizes;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CoverApplyPolicy {
+    UserChoice,
+    PreserveExisting,
+}
 
 /// Orchestrates the identification of books using external metadata providers.
 pub struct IdentificationService<S: StorageBackend> {
@@ -151,7 +157,12 @@ impl<S: StorageBackend> IdentificationService<S> {
 
                 if let Some(best_candidate) = candidates.first() {
                     if let Err(e) = self
-                        .apply_candidate(book_id, best_candidate.id, &HashSet::new())
+                        .apply_candidate_with_policy(
+                            book_id,
+                            best_candidate.id,
+                            &HashSet::new(),
+                            CoverApplyPolicy::PreserveExisting,
+                        )
                         .await
                     {
                         warn!(
@@ -187,13 +198,30 @@ impl<S: StorageBackend> IdentificationService<S> {
     /// overwrites user-edited metadata.
     ///
     /// When `exclude_fields` is non-empty, the named fields are skipped.
-    /// Valid field names: `title`, `description`, `publication_date`,
-    /// `authors`, `identifiers`, `series`, `cover`.
+    /// Valid field names: `title`, `subtitle`, `description`,
+    /// `publication_date`, `authors`, `identifiers`, `series`, `cover`.
     pub async fn apply_candidate(
         &self,
         book_id: Uuid,
         candidate_id: Uuid,
         exclude_fields: &HashSet<String>,
+    ) -> Result<Book, TaskError> {
+        self.apply_candidate_with_policy(
+            book_id,
+            candidate_id,
+            exclude_fields,
+            CoverApplyPolicy::UserChoice,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_lines)]
+    async fn apply_candidate_with_policy(
+        &self,
+        book_id: Uuid,
+        candidate_id: Uuid,
+        exclude_fields: &HashSet<String>,
+        cover_policy: CoverApplyPolicy,
     ) -> Result<Book, TaskError> {
         // Guard: check if another candidate is already applied for this book
         let existing_candidates = CandidateRepository::list_by_book(&self.db_pool, book_id)
@@ -251,12 +279,32 @@ impl<S: StorageBackend> IdentificationService<S> {
         book.metadata_status = MetadataStatus::Identified;
         book.metadata_confidence = candidate.score;
 
-        // 4. If candidate has cover_url and book has no cover: fetch and store
-        if book.cover_path.is_none() && !exclude_fields.contains("cover") {
+        // 4. Fetch and store cover when appropriate
+        let preserve_existing_cover =
+            cover_policy == CoverApplyPolicy::PreserveExisting && book.cover_path.is_some();
+        let should_apply_cover = !(exclude_fields.contains("cover") || preserve_existing_cover);
+
+        if should_apply_cover {
             if let Some(ref cover_url) = provider_meta.cover_url {
+                let old_cover_path = book.cover_path.clone();
                 match self.fetch_and_store_cover(book_id, cover_url, &book).await {
-                    Ok(path) => {
-                        book.cover_path = Some(path);
+                    Ok(new_path) => {
+                        book.cover_path = Some(new_path.clone());
+                        // Clean up old cover ONLY after new one is safely stored,
+                        // and only when the paths differ (same path means the
+                        // new file overwrote the old one in place).
+                        if let Some(ref old_path) = old_cover_path {
+                            if *old_path != new_path {
+                                if let Err(e) = self.storage.delete(old_path).await {
+                                    warn!(
+                                        book_id = %book_id,
+                                        old_path = %old_path,
+                                        error = %e,
+                                        "failed to delete old cover from storage"
+                                    );
+                                }
+                            }
+                        }
                     }
                     Err(e) => {
                         warn!(
@@ -264,6 +312,7 @@ impl<S: StorageBackend> IdentificationService<S> {
                             error = %e,
                             "cover fetch/store failed, continuing without cover"
                         );
+                        // Old cover preserved — no broken state
                     }
                 }
             }
@@ -584,13 +633,23 @@ impl<S: StorageBackend> IdentificationService<S> {
             media_type: content_type,
         };
 
-        // Build a storage path for the cover
-        let author = "Unknown Author"; // Use a simple default for the path
-        let book_dir = archivis_storage::path::generate_book_path(author, &book.title, "cover.jpg");
-        let book_dir = book_dir.rsplit_once('/').map_or(&*book_dir, |(dir, _)| dir);
+        // Build a storage path for the cover.
+        let book_dir = self.resolve_cover_directory(book_id, book).await?;
 
         // Store the cover
-        let cover_path = cover::store_cover(&self.storage, book_dir, &cover_data).await?;
+        let cover_path = cover::store_cover(&self.storage, &book_dir, &cover_data).await?;
+
+        // Clear old thumbnail cache before generating fresh thumbnails.
+        let cache_dir = self.data_dir.join("covers").join(book_id.to_string());
+        if cache_dir.exists() {
+            if let Err(e) = tokio::fs::remove_dir_all(&cache_dir).await {
+                warn!(
+                    book_id = %book_id,
+                    error = %e,
+                    "failed to remove old thumbnail cache"
+                );
+            }
+        }
 
         // Generate thumbnails
         if let Err(e) =
@@ -614,6 +673,47 @@ impl<S: StorageBackend> IdentificationService<S> {
             .iter()
             .map(|a| a.author.name.clone())
             .collect())
+    }
+
+    /// Determine the storage directory for a cover image.
+    ///
+    /// Priority:
+    /// 1. First book file directory (canonical layout).
+    /// 2. Existing cover directory (preserves previous placement).
+    /// 3. Generated path from actual author names and title.
+    async fn resolve_cover_directory(&self, book_id: Uuid, book: &Book) -> Result<String, String> {
+        let files = BookFileRepository::get_by_book_id(&self.db_pool, book_id)
+            .await
+            .map_err(|e| format!("failed to load book files for cover path: {e}"))?;
+
+        if let Some(dir) = files.first().and_then(|f| {
+            f.storage_path
+                .rfind('/')
+                .map(|idx| f.storage_path[..idx].to_string())
+        }) {
+            return Ok(dir);
+        }
+
+        if let Some(dir) = book
+            .cover_path
+            .as_ref()
+            .and_then(|p| p.rfind('/').map(|idx| p[..idx].to_string()))
+        {
+            return Ok(dir);
+        }
+
+        let authors = self
+            .load_author_names(book_id)
+            .await
+            .map_err(|e| format!("failed to load authors for cover path: {e}"))?;
+        let author_for_path = authors.first().map_or("Unknown Author", String::as_str);
+
+        let generated =
+            archivis_storage::path::generate_book_path(author_for_path, &book.title, "cover.jpg");
+        Ok(match generated.rsplit_once('/') {
+            Some((dir, _)) => dir.to_string(),
+            None => generated,
+        })
     }
 }
 
