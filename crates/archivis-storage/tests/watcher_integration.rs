@@ -31,14 +31,18 @@ const TEST_DEBOUNCE_MS: u64 = 200;
 /// Short poll interval for polling-mode tests (2s).
 const TEST_POLL_INTERVAL_SECS: u64 = 2;
 
-/// Generous timeout to wait for an event before declaring failure.
-const EVENT_TIMEOUT: Duration = Duration::from_secs(5);
+/// Timeout to wait for an event before declaring failure.
+const EVENT_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// Longer timeout for polling mode (poll interval + debounce + buffer).
-const POLL_EVENT_TIMEOUT: Duration = Duration::from_secs(8);
+const POLL_EVENT_TIMEOUT: Duration = Duration::from_secs(4);
 
-/// Time to wait when asserting that *no* event arrives.
-const NO_EVENT_TIMEOUT: Duration = Duration::from_millis(1500);
+/// Time to wait when asserting that *no* event arrives (native mode).
+const NO_EVENT_TIMEOUT: Duration = Duration::from_millis(800);
+
+/// Time to wait when asserting no event in poll mode (must cover ≥1 poll
+/// cycle + debounce so absence is meaningful).
+const POLL_NO_EVENT_TIMEOUT: Duration = Duration::from_millis(3000);
 
 /// Small pause after filesystem operations to let the OS flush events.
 const FS_SETTLE: Duration = Duration::from_millis(100);
@@ -125,10 +129,33 @@ async fn setup_native_watcher(
     (service, rx, canon_dir)
 }
 
+/// Like [`setup_native_watcher`] but uses polling mode. Avoids `FSEvents`
+/// initialisation overhead on macOS, making it suitable for tests that
+/// exercise filtering logic rather than OS event delivery.
+async fn setup_poll_watcher(dir: &Path) -> (WatcherService, mpsc::Receiver<WatcherEvent>, PathBuf) {
+    let canon_dir = canonical(dir);
+    let config = WatcherRuntimeConfig {
+        debounce_ms: TEST_DEBOUNCE_MS,
+        default_poll_interval_secs: TEST_POLL_INTERVAL_SECS,
+    };
+    let service = WatcherService::new(config).expect("failed to create WatcherService");
+    let mut rx = service
+        .event_receiver()
+        .await
+        .expect("failed to take event receiver");
+
+    let wd = watched_dir_poll(&canon_dir);
+    service.watch(&wd).await.expect("failed to watch directory");
+
+    drain_initial_events(&mut rx).await;
+
+    (service, rx, canon_dir)
+}
+
 /// Drain any events that arrive shortly after watch setup (some OS backends
 /// emit events when the watcher is first attached).
 async fn drain_initial_events(rx: &mut mpsc::Receiver<WatcherEvent>) {
-    let drain_window = Duration::from_millis(500);
+    let drain_window = Duration::from_millis(200);
     while tokio::time::timeout(drain_window, rx.recv())
         .await
         .ok()
@@ -193,13 +220,13 @@ async fn new_epub_file_triggers_event() {
 #[tokio::test]
 async fn non_ebook_file_ignored() {
     let tmp = tempfile::tempdir().expect("create temp dir");
-    let (_service, mut rx, canon_dir) = setup_native_watcher(tmp.path()).await;
+    let (_service, mut rx, canon_dir) = setup_poll_watcher(tmp.path()).await;
 
     // Create a .jpg file -- should be filtered out.
     let jpg_path = canon_dir.join("cover.jpg");
     fs::write(&jpg_path, b"fake jpg content").expect("write jpg");
 
-    assert_no_event(&mut rx, NO_EVENT_TIMEOUT).await;
+    assert_no_event(&mut rx, POLL_NO_EVENT_TIMEOUT).await;
 }
 
 // ── Test 3: Hidden file ignored ───────────────────────────────────────
@@ -207,13 +234,13 @@ async fn non_ebook_file_ignored() {
 #[tokio::test]
 async fn hidden_file_ignored() {
     let tmp = tempfile::tempdir().expect("create temp dir");
-    let (_service, mut rx, canon_dir) = setup_native_watcher(tmp.path()).await;
+    let (_service, mut rx, canon_dir) = setup_poll_watcher(tmp.path()).await;
 
     // Create a hidden .epub file -- should be filtered out.
     let hidden_path = canon_dir.join(".hidden-book.epub");
     fs::write(&hidden_path, b"fake epub content").expect("write hidden epub");
 
-    assert_no_event(&mut rx, NO_EVENT_TIMEOUT).await;
+    assert_no_event(&mut rx, POLL_NO_EVENT_TIMEOUT).await;
 }
 
 // ── Test 4: Temporary file ignored, rename triggers event ─────────────
@@ -227,8 +254,8 @@ async fn temp_file_ignored_rename_triggers_event() {
     let part_path = canon_dir.join("book.epub.part");
     fs::write(&part_path, b"partial download content").expect("write .part file");
 
-    // Give debounce time to confirm no event for .part.
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    // Wait long enough to confirm no event for .part.
+    assert_no_event(&mut rx, NO_EVENT_TIMEOUT).await;
 
     // Rename to .epub -- this should trigger an event.
     let epub_path = canon_dir.join("book.epub");
@@ -391,20 +418,7 @@ async fn subdirectory_file_triggers_event() {
 #[tokio::test]
 async fn polling_mode_detects_new_file() {
     let tmp = tempfile::tempdir().expect("create temp dir");
-    let canon_dir = canonical(tmp.path());
-
-    let config = WatcherRuntimeConfig {
-        debounce_ms: TEST_DEBOUNCE_MS,
-        default_poll_interval_secs: TEST_POLL_INTERVAL_SECS,
-    };
-    let service = WatcherService::new(config).expect("create WatcherService");
-    let mut rx = service.event_receiver().await.expect("take event receiver");
-
-    let wd = watched_dir_poll(&canon_dir);
-    service.watch(&wd).await.expect("watch with poll mode");
-
-    // Drain any initial events from the polling scan.
-    drain_initial_events(&mut rx).await;
+    let (_service, mut rx, canon_dir) = setup_poll_watcher(tmp.path()).await;
 
     // Create a file -- poll mode will detect it on the next scan cycle.
     let epub_path = canon_dir.join("polled-book.epub");

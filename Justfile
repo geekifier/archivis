@@ -31,7 +31,7 @@ clippy:
 
 # Run all backend tests
 test:
-    cargo test --workspace
+    cargo test --workspace --tests
 
 # Run frontend unit tests
 test-frontend:
