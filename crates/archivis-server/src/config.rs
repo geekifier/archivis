@@ -114,7 +114,7 @@ impl Default for MetadataConfig {
             contact_email: None,
             open_library: OpenLibraryConfig::default(),
             hardcover: HardcoverConfig::default(),
-            auto_identify_threshold: 0.6,
+            auto_identify_threshold: 0.85,
             max_concurrent_identifies: 2,
             scoring_profile: ScoringProfile::default(),
         }
@@ -220,8 +220,8 @@ pub struct IsbnScanConfig {
 impl Default for IsbnScanConfig {
     fn default() -> Self {
         Self {
-            scan_on_import: false,
-            confidence: 0.85,
+            scan_on_import: true,
+            confidence: 0.5,
             skip_threshold: 0.95,
             epub_spine_items: 5,
             pdf_pages: 5,
@@ -815,7 +815,7 @@ frontend_dir = "/opt/archivis/frontend"
         assert!(!config.hardcover.enabled);
         assert!(config.hardcover.api_token.is_none());
         assert_eq!(config.hardcover.max_requests_per_minute, 50);
-        assert!((config.auto_identify_threshold - 0.6).abs() < f32::EPSILON);
+        assert!((config.auto_identify_threshold - 0.85).abs() < f32::EPSILON);
         assert_eq!(config.max_concurrent_identifies, 2);
     }
 

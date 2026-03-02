@@ -71,11 +71,13 @@ impl<S: StorageBackend + 'static> Worker for IdentifyWorker<S> {
                         .await;
 
                     match self.service.identify_book(book_id).await {
-                        Ok(result) => {
+                        Ok(outcome) => {
                             results.push(serde_json::json!({
                                 "book_id": book_id.to_string(),
-                                "candidates": result.candidates.len(),
-                                "auto_applied": result.auto_apply,
+                                "candidates": outcome.resolver_result.candidates.len(),
+                                "auto_applied": outcome.auto_applied,
+                                "best_tier": outcome.best_tier.map(|t| t.to_string()),
+                                "decision_reason": outcome.decision_reason,
                             }));
                         }
                         Err(e) => {
@@ -116,7 +118,7 @@ impl<S: StorageBackend + 'static> Worker for IdentifyWorker<S> {
                     .send_progress(0, Some(format!("Identifying book {book_id}")))
                     .await;
 
-                let result = self.service.identify_book(book_id).await?;
+                let outcome = self.service.identify_book(book_id).await?;
 
                 progress
                     .send_progress(100, Some("Identification complete".into()))
@@ -125,9 +127,11 @@ impl<S: StorageBackend + 'static> Worker for IdentifyWorker<S> {
                 Ok(serde_json::json!({
                     "mode": "single",
                     "book_id": book_id.to_string(),
-                    "candidates": result.candidates.len(),
-                    "auto_applied": result.auto_apply,
-                    "best_score": result.best_match.as_ref().map(|m| m.score),
+                    "candidates": outcome.resolver_result.candidates.len(),
+                    "auto_applied": outcome.auto_applied,
+                    "best_score": outcome.resolver_result.best_match.as_ref().map(|m| m.score),
+                    "best_tier": outcome.best_tier.map(|t| t.to_string()),
+                    "decision_reason": outcome.decision_reason,
                 }))
             }
         })

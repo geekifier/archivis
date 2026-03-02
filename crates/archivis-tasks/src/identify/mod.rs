@@ -1,3 +1,3 @@
 pub mod service;
 
-pub use service::IdentificationService;
+pub use service::{IdentificationOutcome, IdentificationService};

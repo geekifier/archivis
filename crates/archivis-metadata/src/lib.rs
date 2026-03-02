@@ -13,7 +13,10 @@ pub use provider::MetadataProvider;
 pub use providers::HardcoverProvider;
 pub use providers::OpenLibraryProvider;
 pub use registry::ProviderRegistry;
-pub use resolver::{ExistingBookMetadata, MetadataResolver, ResolverResult, ScoredCandidate};
+pub use resolver::{
+    CandidateMatchTier, ExistingBookMetadata, MetadataResolver, ResolverDecision, ResolverResult,
+    ScoredCandidate,
+};
 pub use types::{
     MetadataQuery, ProviderAuthor, ProviderIdentifier, ProviderMetadata, ProviderSeries,
 };

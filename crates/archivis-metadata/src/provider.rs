@@ -19,6 +19,13 @@ pub trait MetadataProvider: Send + Sync {
     /// (highest first).
     async fn lookup_isbn(&self, isbn: &str) -> Result<Vec<ProviderMetadata>, ProviderError>;
 
+    /// Look up a book by ASIN. Returns candidates sorted by confidence
+    /// (highest first). Default returns empty — providers that don't support
+    /// ASIN lookup need not override.
+    async fn lookup_asin(&self, _asin: &str) -> Result<Vec<ProviderMetadata>, ProviderError> {
+        Ok(Vec::new())
+    }
+
     /// Search by title and/or author. Returns candidates sorted by relevance.
     async fn search(&self, query: &MetadataQuery) -> Result<Vec<ProviderMetadata>, ProviderError>;
 

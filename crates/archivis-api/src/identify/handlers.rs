@@ -6,6 +6,7 @@ use axum::Json;
 use uuid::Uuid;
 
 use archivis_core::models::{CandidateStatus, IdentificationCandidate, TaskType};
+use archivis_core::settings::SettingsReader;
 use archivis_db::{BookRepository, CandidateRepository};
 use archivis_metadata::ProviderMetadata;
 
@@ -355,7 +356,14 @@ pub async fn identify_all(
     let pool = state.db_pool();
     let max_books = body.max_books.unwrap_or(100);
 
-    let books = BookRepository::list_needing_identification(pool, 0.6, max_books).await?;
+    #[allow(clippy::cast_possible_truncation)]
+    let threshold = state
+        .config_service()
+        .get_setting("metadata.auto_identify_threshold")
+        .and_then(|v| v.as_f64())
+        .map_or(0.85_f32, |f| f as f32);
+
+    let books = BookRepository::list_needing_identification(pool, threshold, max_books).await?;
 
     let mut task_ids = Vec::with_capacity(books.len());
 

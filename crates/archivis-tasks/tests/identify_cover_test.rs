@@ -413,9 +413,9 @@ async fn auto_apply_preserves_existing_cover() {
         .unwrap();
 
     // Run full identification (which auto-applies if dominant)
-    let result = service.identify_book(book.id).await.unwrap();
+    let outcome = service.identify_book(book.id).await.unwrap();
     assert!(
-        !result.candidates.is_empty(),
+        !outcome.resolver_result.candidates.is_empty(),
         "should have at least one candidate"
     );
 
