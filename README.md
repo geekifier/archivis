@@ -1,4 +1,5 @@
-# Archivis
+<!-- markdownlint-disable MD033 MD041 -->
+<img src="./frontend/static/archivis-logo-16x9-dynamic.svg" alt="Archivis logo" width="300" />
 
 A fast, modern, self-hosted e-book collection manager.
 

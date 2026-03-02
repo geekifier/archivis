@@ -55,3 +55,4 @@ Default port: **9514**. Env vars can override any config setting.
 ## Important Rules
 
 - Do not adjust linter rules, security audit configuration or other "guardrails" without explicit instructions or providing the user with an explanation and having the user acknowledge the changes.
+- Use backticks around identifiers in code comments
