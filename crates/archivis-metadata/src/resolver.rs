@@ -35,12 +35,13 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use archivis_core::isbn::isbn10_to_isbn13;
+use archivis_core::isbn::{normalize_asin, normalize_isbn, to_isbn13};
 use archivis_core::models::{IdentifierType, MetadataSource};
 use archivis_core::settings::SettingsReader;
 use tracing::{debug, warn};
 
 use crate::provider::MetadataProvider;
+use crate::provider_names;
 use crate::registry::ProviderRegistry;
 use crate::similarity;
 use crate::types::{MetadataQuery, ProviderIdentifier, ProviderMetadata};
@@ -69,7 +70,7 @@ const CONTRADICTION_PENALTY: f32 = 0.15;
 const CONTRADICTION_THRESHOLD: f32 = 0.3;
 
 /// Default auto-apply threshold.
-const DEFAULT_AUTO_APPLY_THRESHOLD: f32 = 0.85;
+pub const DEFAULT_AUTO_APPLY_THRESHOLD: f32 = 0.85;
 
 /// Minimum gap between best and second-best candidate scores for auto-apply.
 /// If the gap is smaller, results are considered ambiguous and need manual review.
@@ -100,6 +101,7 @@ enum MatchSignal {
     TitleMatch,
     AuthorMatch,
     CrossProvider,
+    Contradiction,
 }
 
 // ── Public types ────────────────────────────────────────────────────
@@ -379,10 +381,7 @@ impl MetadataResolver {
             // Distinguish *why* the tier is too low.
             let has_id_signal = best.signals.contains(&MatchSignal::IsbnMatch)
                 || best.signals.contains(&MatchSignal::AsinMatch);
-            let has_contradiction = best
-                .match_reasons
-                .iter()
-                .any(|r| r.contains("contradiction"));
+            let has_contradiction = best.signals.contains(&MatchSignal::Contradiction);
 
             let decision = if has_id_signal {
                 ResolverDecision::BlockedNoTrustedId
@@ -458,20 +457,23 @@ impl MetadataResolver {
                 debug!(isbn = %isbn, "resolving metadata via ISBN lookup");
                 debug!(asin = %normalized_asin, "resolving metadata via ASIN lookup");
                 let (isbn_results, asin_results) = tokio::join!(
-                    query_providers_isbn(providers, isbn),
-                    query_providers_asin(providers, &normalized_asin),
+                    query_providers_by_id(providers, isbn, IdentifierLookup::Isbn),
+                    query_providers_by_id(providers, &normalized_asin, IdentifierLookup::Asin),
                 );
                 candidates.extend(isbn_results);
                 candidates.extend(asin_results);
             }
             (Some(isbn), None) => {
                 debug!(isbn = %isbn, "resolving metadata via ISBN lookup");
-                candidates.extend(query_providers_isbn(providers, isbn).await);
+                candidates
+                    .extend(query_providers_by_id(providers, isbn, IdentifierLookup::Isbn).await);
             }
             (None, Some(asin)) => {
                 let normalized = normalize_asin(asin);
                 debug!(asin = %normalized, "resolving metadata via ASIN lookup");
-                candidates.extend(query_providers_asin(providers, &normalized).await);
+                candidates.extend(
+                    query_providers_by_id(providers, &normalized, IdentifierLookup::Asin).await,
+                );
             }
             (None, None) => {}
         }
@@ -493,72 +495,44 @@ impl MetadataResolver {
     }
 }
 
-/// Query all providers by ISBN concurrently, returning scored candidates.
-async fn query_providers_isbn(
-    providers: &[Arc<dyn MetadataProvider>],
-    isbn: &str,
-) -> Vec<ScoredCandidate> {
-    let futs: Vec<_> = providers
-        .iter()
-        .map(|p| {
-            let provider = Arc::clone(p);
-            let isbn = isbn.to_string();
-            async move {
-                let name = provider.name().to_string();
-                match provider.lookup_isbn(&isbn).await {
-                    Ok(results) => {
-                        debug!(provider = %name, count = results.len(), "ISBN lookup results");
-                        results
-                            .into_iter()
-                            .map(|m| (name.clone(), m))
-                            .collect::<Vec<_>>()
-                    }
-                    Err(e) => {
-                        warn!(provider = %name, error = %e, "ISBN lookup failed");
-                        Vec::new()
-                    }
-                }
-            }
-        })
-        .collect();
-
-    let results = futures::future::join_all(futs).await;
-    results
-        .into_iter()
-        .flatten()
-        .map(|(provider_name, metadata)| ScoredCandidate {
-            provider_name,
-            score: metadata.confidence,
-            match_reasons: Vec::new(),
-            signals: HashSet::new(),
-            tier: CandidateMatchTier::WeakMatch,
-            metadata,
-        })
-        .collect()
+/// Kind of identifier lookup to dispatch.
+#[derive(Debug, Clone, Copy)]
+enum IdentifierLookup {
+    Isbn,
+    Asin,
 }
 
-/// Query all providers by ASIN concurrently, returning scored candidates.
-async fn query_providers_asin(
+/// Query all providers by identifier concurrently, returning scored candidates.
+async fn query_providers_by_id(
     providers: &[Arc<dyn MetadataProvider>],
-    asin: &str,
+    id: &str,
+    lookup: IdentifierLookup,
 ) -> Vec<ScoredCandidate> {
     let futs: Vec<_> = providers
         .iter()
         .map(|p| {
             let provider = Arc::clone(p);
-            let asin = asin.to_string();
+            let id = id.to_string();
             async move {
                 let name = provider.name().to_string();
-                match provider.lookup_asin(&asin).await {
+                let result = match lookup {
+                    IdentifierLookup::Isbn => provider.lookup_isbn(&id).await,
+                    IdentifierLookup::Asin => provider.lookup_asin(&id).await,
+                };
+                let label = match lookup {
+                    IdentifierLookup::Isbn => "ISBN",
+                    IdentifierLookup::Asin => "ASIN",
+                };
+                match result {
                     Ok(results) => {
-                        debug!(provider = %name, count = results.len(), "ASIN lookup results");
+                        debug!(provider = %name, count = results.len(), "{label} lookup results");
                         results
                             .into_iter()
                             .map(|m| (name.clone(), m))
                             .collect::<Vec<_>>()
                     }
                     Err(e) => {
-                        warn!(provider = %name, error = %e, "ASIN lookup failed");
+                        warn!(provider = %name, error = %e, "{label} lookup failed");
                         Vec::new()
                     }
                 }
@@ -684,6 +658,7 @@ fn score_candidate(
                     "Title contradiction ({:.0}% similarity)",
                     title_sim * 100.0
                 ));
+                signals.insert(MatchSignal::Contradiction);
             }
         }
 
@@ -715,15 +690,6 @@ fn score_candidate(
     candidate.score = score;
     candidate.match_reasons = reasons;
     candidate.signals = signals;
-}
-
-/// Normalize an ISBN value: strip dashes and spaces, uppercase for ISBN-10 check digit `X`.
-fn normalize_isbn(value: &str) -> String {
-    value
-        .chars()
-        .filter(|c| !c.is_ascii_whitespace() && *c != '-')
-        .map(|c| c.to_ascii_uppercase())
-        .collect()
 }
 
 /// Check whether a candidate's identifiers contain the given ISBN.
@@ -1037,10 +1003,12 @@ fn book_match_strength(a: &ScoredCandidate, b: &ScoredCandidate) -> BookMatch {
     BookMatch::No
 }
 
-/// Merge unique data from `source` into `target`.
+/// Fill empty/missing fields in `target` from `source`.
 ///
-/// Only fills in fields that are `None` or empty in the target.
-fn merge_metadata(target: &mut ProviderMetadata, source: &ProviderMetadata) {
+/// Covers the 9 text/scalar fields shared by both same-provider and
+/// cross-provider merge paths. Does NOT touch cover, identifiers, or
+/// subjects — those have merge-strategy-specific handling.
+fn fill_metadata_gaps(target: &mut ProviderMetadata, source: &ProviderMetadata) {
     if target.subtitle.is_none() {
         target.subtitle.clone_from(&source.subtitle);
     }
@@ -1062,14 +1030,22 @@ fn merge_metadata(target: &mut ProviderMetadata, source: &ProviderMetadata) {
     if target.page_count.is_none() {
         target.page_count = source.page_count;
     }
-    if target.cover_url.is_none() {
-        target.cover_url.clone_from(&source.cover_url);
-    }
     if target.rating.is_none() {
         target.rating = source.rating;
     }
     if target.subjects.is_empty() {
         target.subjects.clone_from(&source.subjects);
+    }
+}
+
+/// Merge unique data from `source` into `target`.
+///
+/// Only fills in fields that are `None` or empty in the target.
+fn merge_metadata(target: &mut ProviderMetadata, source: &ProviderMetadata) {
+    fill_metadata_gaps(target, source);
+
+    if target.cover_url.is_none() {
+        target.cover_url.clone_from(&source.cover_url);
     }
 
     // Merge identifiers that the target doesn't already have.
@@ -1098,15 +1074,6 @@ fn has_multi_signal(candidate: &ScoredCandidate) -> bool {
     let has_content = candidate.signals.contains(&MatchSignal::TitleMatch)
         || candidate.signals.contains(&MatchSignal::AuthorMatch);
     has_content && candidate.signals.len() >= 2
-}
-
-/// Normalize an ASIN value: trim whitespace, uppercase.
-fn normalize_asin(value: &str) -> String {
-    value
-        .chars()
-        .filter(|c| !c.is_ascii_whitespace())
-        .map(|c| c.to_ascii_uppercase())
-        .collect()
 }
 
 /// Check whether the candidate has an exact trusted identifier match against
@@ -1163,15 +1130,6 @@ fn has_trusted_id_proof(
     false
 }
 
-/// Convert an ISBN value to normalized ISBN-13 for cross-type comparison.
-fn to_isbn13(value: &str, id_type: IdentifierType) -> Option<String> {
-    match id_type {
-        IdentifierType::Isbn13 => Some(normalize_isbn(value)),
-        IdentifierType::Isbn10 => isbn10_to_isbn13(value),
-        _ => None,
-    }
-}
-
 // ── Tier assignment ─────────────────────────────────────────────────
 
 /// Assign a [`CandidateMatchTier`] based on the candidate's signals and
@@ -1205,7 +1163,7 @@ fn assign_tier(
 // ── Cross-provider merge helpers ────────────────────────────────────
 
 /// Provider priority for cover selection during cross-provider merge.
-const COVER_PROVIDER_PRIORITY: &[&str] = &["open_library", "hardcover"];
+const COVER_PROVIDER_PRIORITY: &[&str] = &[provider_names::OPEN_LIBRARY, provider_names::HARDCOVER];
 
 /// Return a rank for cover provider priority (higher = better).
 /// Unknown providers get 0.
@@ -1229,34 +1187,7 @@ fn merge_metadata_cross_provider(
     source: &ProviderMetadata,
     match_reasons: &mut Vec<String>,
 ) {
-    // ── Text fields: fill gaps (same as merge_metadata) ──
-    if target.subtitle.is_none() {
-        target.subtitle.clone_from(&source.subtitle);
-    }
-    if target.description.is_none() {
-        target.description.clone_from(&source.description);
-    }
-    if target.language.is_none() {
-        target.language.clone_from(&source.language);
-    }
-    if target.publisher.is_none() {
-        target.publisher.clone_from(&source.publisher);
-    }
-    if target.publication_date.is_none() {
-        target.publication_date.clone_from(&source.publication_date);
-    }
-    if target.series.is_none() {
-        target.series.clone_from(&source.series);
-    }
-    if target.page_count.is_none() {
-        target.page_count = source.page_count;
-    }
-    if target.rating.is_none() {
-        target.rating = source.rating;
-    }
-    if target.subjects.is_empty() {
-        target.subjects.clone_from(&source.subjects);
-    }
+    fill_metadata_gaps(target, source);
 
     // ── Cover: provider-priority selection ──
     let target_has_cover = target.cover_url.is_some();
@@ -1308,9 +1239,9 @@ fn merge_metadata_cross_provider(
 /// Check whether a non-portable identifier type is native to a given provider.
 fn identifier_type_belongs_to_provider(id_type: IdentifierType, provider: &str) -> bool {
     match id_type {
-        IdentifierType::OpenLibrary => provider == "open_library",
-        IdentifierType::Hardcover => provider == "hardcover",
-        IdentifierType::GoogleBooks => provider == "google_books",
+        IdentifierType::OpenLibrary => provider == provider_names::OPEN_LIBRARY,
+        IdentifierType::Hardcover => provider == provider_names::HARDCOVER,
+        IdentifierType::GoogleBooks => provider == provider_names::GOOGLE_BOOKS,
         // Portable types don't belong to any single provider.
         IdentifierType::Isbn13 | IdentifierType::Isbn10 | IdentifierType::Asin => false,
     }
@@ -2646,7 +2577,7 @@ mod tests {
 
     #[test]
     fn should_auto_apply_unit_blocked_contradiction() {
-        // Candidate has a title contradiction reason and no ID signal,
+        // Candidate has a title contradiction signal and no ID signal,
         // so it cannot be StrongIdMatch.
         let registry = make_registry(vec![]);
         let resolver = MetadataResolver::with_defaults(registry);
@@ -2659,7 +2590,7 @@ mod tests {
             0.7,
             0.63,
             vec!["Title contradiction (15% similarity)".to_string()],
-            HashSet::new(),
+            HashSet::from([MatchSignal::Contradiction]),
             CandidateMatchTier::WeakMatch,
         );
         let candidates = vec![best.clone()];

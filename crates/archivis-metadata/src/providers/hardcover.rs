@@ -11,11 +11,12 @@ use archivis_core::settings::SettingsReader;
 use crate::client::MetadataHttpClient;
 use crate::errors::ProviderError;
 use crate::provider::MetadataProvider;
+use crate::provider_names;
 use crate::types::{
     MetadataQuery, ProviderAuthor, ProviderIdentifier, ProviderMetadata, ProviderSeries,
 };
 
-const PROVIDER_NAME: &str = "hardcover";
+const PROVIDER_NAME: &str = provider_names::HARDCOVER;
 const GRAPHQL_URL: &str = "https://api.hardcover.app/v1/graphql";
 const MAX_REQUESTS_PER_MINUTE: u32 = 50;
 
@@ -326,15 +327,11 @@ impl HardcoverProvider {
             .map(|edition| Self::build_metadata_from_asin_edition(&edition, asin)))
     }
 
-    /// Build `ProviderMetadata` from a Hardcover edition looked up by ASIN.
-    ///
-    /// Similar to `build_metadata_from_edition` but the queried identifier
-    /// is an ASIN rather than an ISBN, so the "ensure queried identifier
-    /// present" logic differs.
-    fn build_metadata_from_asin_edition(
-        edition: &HcEdition,
-        queried_asin: &str,
-    ) -> ProviderMetadata {
+    /// Extract common fields from a Hardcover edition, returning a
+    /// `ProviderMetadata` with an empty `identifiers` vec. Callers fill in
+    /// identifiers via `build_edition_identifiers` or
+    /// `build_asin_edition_identifiers`.
+    fn extract_edition_fields(edition: &HcEdition) -> ProviderMetadata {
         let book = edition.book.as_ref();
 
         let title = edition
@@ -365,79 +362,6 @@ impl HardcoverProvider {
             .language
             .as_ref()
             .and_then(|l| normalize_language(&l.language));
-
-        let identifiers =
-            build_asin_edition_identifiers(edition, book.and_then(|b| b.id), queried_asin);
-
-        ProviderMetadata {
-            provider_name: PROVIDER_NAME.to_string(),
-            title,
-            subtitle: None,
-            authors,
-            description,
-            language,
-            publisher,
-            publication_date,
-            identifiers,
-            subjects,
-            series,
-            page_count,
-            cover_url,
-            rating,
-            confidence: 0.95,
-        }
-    }
-
-    /// Build `ProviderMetadata` from a Hardcover edition response.
-    fn build_metadata_from_edition(edition: &HcEdition, queried_isbn: &str) -> ProviderMetadata {
-        let book = edition.book.as_ref();
-
-        // Title: prefer edition title, fall back to book (work) title.
-        let title = edition
-            .title
-            .clone()
-            .or_else(|| book.and_then(|b| b.title.clone()));
-
-        // Authors from book.contributions.
-        let authors =
-            extract_authors_from_contributions(book.and_then(|b| b.contributions.as_ref()));
-
-        // Description from book.
-        let description = book.and_then(|b| b.description.clone());
-
-        // Series from book.book_series — prefer featured entry, else first.
-        let series = extract_series(book.and_then(|b| b.book_series.as_ref()));
-
-        // Publisher from edition.publisher.
-        let publisher = edition.publisher.as_ref().map(|p| p.name.clone());
-
-        // Page count from edition.
-        let page_count = edition.pages;
-
-        // Publication date from edition.
-        let publication_date = edition.release_date.clone();
-
-        // Rating from book.
-        #[allow(clippy::cast_possible_truncation)]
-        let rating = book.and_then(|b| b.rating).map(|r| r as f32);
-
-        // Subjects from book.cached_tags (JSON string that needs secondary parsing).
-        let subjects = book
-            .and_then(|b| parse_cached_tags(b.cached_tags.as_ref()))
-            .unwrap_or_default();
-
-        // Cover URL from edition.cached_image (JSON string that needs secondary parsing).
-        let cover_url = parse_cached_image(edition.cached_image.as_ref())
-            .or_else(|| book.and_then(|b| parse_cached_image(b.cached_image.as_ref())));
-
-        // Language from edition.language.language, normalized to ISO 639-1.
-        let language = edition
-            .language
-            .as_ref()
-            .and_then(|l| normalize_language(&l.language));
-
-        // Build identifiers.
-        let identifiers = build_edition_identifiers(edition, book.and_then(|b| b.id), queried_isbn);
 
         ProviderMetadata {
             provider_name: PROVIDER_NAME.to_string(),
@@ -448,7 +372,7 @@ impl HardcoverProvider {
             language,
             publisher,
             publication_date,
-            identifiers,
+            identifiers: Vec::new(),
             subjects,
             series,
             page_count,
@@ -456,6 +380,25 @@ impl HardcoverProvider {
             rating,
             confidence: 0.95,
         }
+    }
+
+    /// Build `ProviderMetadata` from a Hardcover edition looked up by ASIN.
+    fn build_metadata_from_asin_edition(
+        edition: &HcEdition,
+        queried_asin: &str,
+    ) -> ProviderMetadata {
+        let book_id = edition.book.as_ref().and_then(|b| b.id);
+        let mut meta = Self::extract_edition_fields(edition);
+        meta.identifiers = build_asin_edition_identifiers(edition, book_id, queried_asin);
+        meta
+    }
+
+    /// Build `ProviderMetadata` from a Hardcover edition looked up by ISBN.
+    fn build_metadata_from_edition(edition: &HcEdition, queried_isbn: &str) -> ProviderMetadata {
+        let book_id = edition.book.as_ref().and_then(|b| b.id);
+        let mut meta = Self::extract_edition_fields(edition);
+        meta.identifiers = build_edition_identifiers(edition, book_id, queried_isbn);
+        meta
     }
 
     /// Build `ProviderMetadata` from a Hardcover book (work) response
@@ -922,11 +865,12 @@ fn extract_series(book_series: Option<&Vec<HcBookSeries>>) -> Option<ProviderSer
     })
 }
 
-/// Build identifiers from an edition response.
-fn build_edition_identifiers(
+/// Collect the common identifiers from an edition (`isbn_13`, `isbn_10`,
+/// `asin`, hardcover book ID). Callers append their queried-identifier
+/// guarantee.
+fn collect_edition_identifiers(
     edition: &HcEdition,
     book_id: Option<i64>,
-    queried_isbn: &str,
 ) -> Vec<ProviderIdentifier> {
     let mut identifiers = Vec::new();
 
@@ -957,7 +901,6 @@ fn build_edition_identifiers(
         }
     }
 
-    // Hardcover book ID.
     if let Some(id) = book_id {
         identifiers.push(ProviderIdentifier {
             identifier_type: IdentifierType::Hardcover,
@@ -965,7 +908,18 @@ fn build_edition_identifiers(
         });
     }
 
-    // Ensure the queried ISBN is in the identifiers list.
+    identifiers
+}
+
+/// Build identifiers from an edition looked up by ISBN.
+/// Ensures the queried ISBN is present in the identifiers list.
+fn build_edition_identifiers(
+    edition: &HcEdition,
+    book_id: Option<i64>,
+    queried_isbn: &str,
+) -> Vec<ProviderIdentifier> {
+    let mut identifiers = collect_edition_identifiers(edition, book_id);
+
     let queried_present = identifiers.iter().any(|id| id.value == queried_isbn);
     if !queried_present {
         let id_type = if queried_isbn.len() == 13 {
@@ -983,52 +937,14 @@ fn build_edition_identifiers(
 }
 
 /// Build identifiers from an edition looked up by ASIN.
-///
-/// Same as `build_edition_identifiers` but ensures the queried ASIN
-/// (rather than a queried ISBN) is present in the identifiers.
+/// Ensures the queried ASIN is present in the identifiers list.
 fn build_asin_edition_identifiers(
     edition: &HcEdition,
     book_id: Option<i64>,
     queried_asin: &str,
 ) -> Vec<ProviderIdentifier> {
-    let mut identifiers = Vec::new();
+    let mut identifiers = collect_edition_identifiers(edition, book_id);
 
-    if let Some(ref isbn13) = edition.isbn_13 {
-        if !isbn13.is_empty() {
-            identifiers.push(ProviderIdentifier {
-                identifier_type: IdentifierType::Isbn13,
-                value: isbn13.clone(),
-            });
-        }
-    }
-
-    if let Some(ref isbn10) = edition.isbn_10 {
-        if !isbn10.is_empty() {
-            identifiers.push(ProviderIdentifier {
-                identifier_type: IdentifierType::Isbn10,
-                value: isbn10.clone(),
-            });
-        }
-    }
-
-    if let Some(ref asin) = edition.asin {
-        if !asin.is_empty() {
-            identifiers.push(ProviderIdentifier {
-                identifier_type: IdentifierType::Asin,
-                value: asin.clone(),
-            });
-        }
-    }
-
-    // Hardcover book ID.
-    if let Some(id) = book_id {
-        identifiers.push(ProviderIdentifier {
-            identifier_type: IdentifierType::Hardcover,
-            value: id.to_string(),
-        });
-    }
-
-    // Ensure the queried ASIN is in the identifiers list.
     let queried_present = identifiers.iter().any(|id| {
         id.identifier_type == IdentifierType::Asin && id.value.eq_ignore_ascii_case(queried_asin)
     });

@@ -1,6 +1,7 @@
 pub mod client;
 pub mod errors;
 pub mod provider;
+pub(crate) mod provider_names;
 pub mod providers;
 pub mod registry;
 pub mod resolver;
@@ -15,7 +16,7 @@ pub use providers::OpenLibraryProvider;
 pub use registry::ProviderRegistry;
 pub use resolver::{
     CandidateMatchTier, ExistingBookMetadata, MetadataResolver, ResolverDecision, ResolverResult,
-    ScoredCandidate,
+    ScoredCandidate, DEFAULT_AUTO_APPLY_THRESHOLD,
 };
 pub use types::{
     MetadataQuery, ProviderAuthor, ProviderIdentifier, ProviderMetadata, ProviderSeries,

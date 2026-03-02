@@ -12,11 +12,12 @@ use archivis_core::settings::SettingsReader;
 use crate::client::MetadataHttpClient;
 use crate::errors::ProviderError;
 use crate::provider::MetadataProvider;
+use crate::provider_names;
 use crate::types::{
     MetadataQuery, ProviderAuthor, ProviderIdentifier, ProviderMetadata, ProviderSeries,
 };
 
-const PROVIDER_NAME: &str = "open_library";
+const PROVIDER_NAME: &str = provider_names::OPEN_LIBRARY;
 const BASE_URL: &str = "https://openlibrary.org";
 const COVERS_URL: &str = "https://covers.openlibrary.org";
 const MAX_REQUESTS_PER_MINUTE: u32 = 100;

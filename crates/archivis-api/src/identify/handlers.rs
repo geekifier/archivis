@@ -8,7 +8,7 @@ use uuid::Uuid;
 use archivis_core::models::{CandidateStatus, IdentificationCandidate, TaskType};
 use archivis_core::settings::SettingsReader;
 use archivis_db::{BookRepository, CandidateRepository};
-use archivis_metadata::ProviderMetadata;
+use archivis_metadata::{ProviderMetadata, DEFAULT_AUTO_APPLY_THRESHOLD};
 
 use crate::auth::AuthUser;
 use crate::books::types::BookDetail;
@@ -361,7 +361,7 @@ pub async fn identify_all(
         .config_service()
         .get_setting("metadata.auto_identify_threshold")
         .and_then(|v| v.as_f64())
-        .map_or(0.85_f32, |f| f as f32);
+        .map_or(DEFAULT_AUTO_APPLY_THRESHOLD, |f| f as f32);
 
     let books = BookRepository::list_needing_identification(pool, threshold, max_books).await?;
 

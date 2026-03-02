@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use archivis_core::errors::TaskError;
-use archivis_core::isbn::isbn10_to_isbn13;
+use archivis_core::isbn::{normalize_asin, normalize_isbn, to_isbn13};
 use archivis_core::models::{
     Book, CandidateStatus, IdentificationCandidate, Identifier, IdentifierType, MetadataSource,
     MetadataStatus,
@@ -286,11 +286,7 @@ impl<S: StorageBackend> IdentificationService<S> {
             book_id = %book_id,
             candidates = result.candidates.len(),
             auto_applied,
-            best_tier = best_tier.as_ref().map_or("none", |t| match t {
-                CandidateMatchTier::StrongIdMatch => "strong_id_match",
-                CandidateMatchTier::ProbableMatch => "probable_match",
-                CandidateMatchTier::WeakMatch => "weak_match",
-            }),
+            best_tier = best_tier.as_ref().map_or_else(|| "none".to_string(), ToString::to_string),
             decision_reason = %decision_reason,
             "identification complete"
         );
@@ -944,33 +940,6 @@ fn candidate_has_strong_id_proof(
         }
     }
     false
-}
-
-/// Normalize an ISBN value: strip whitespace and hyphens, uppercase.
-fn normalize_isbn(value: &str) -> String {
-    value
-        .chars()
-        .filter(|c| !c.is_ascii_whitespace() && *c != '-')
-        .map(|c| c.to_ascii_uppercase())
-        .collect()
-}
-
-/// Normalize an ASIN value: strip whitespace, uppercase.
-fn normalize_asin(value: &str) -> String {
-    value
-        .chars()
-        .filter(|c| !c.is_ascii_whitespace())
-        .map(|c| c.to_ascii_uppercase())
-        .collect()
-}
-
-/// Convert an ISBN value to normalized ISBN-13 for cross-type comparison.
-fn to_isbn13(value: &str, id_type: IdentifierType) -> Option<String> {
-    match id_type {
-        IdentifierType::Isbn13 => Some(normalize_isbn(value)),
-        IdentifierType::Isbn10 => isbn10_to_isbn13(value),
-        _ => None,
-    }
 }
 
 /// Heuristic: does `title` look like it was derived from a filename?

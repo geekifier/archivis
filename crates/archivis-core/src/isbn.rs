@@ -4,6 +4,8 @@
 /// (stripping hyphens/spaces), and bidirectional ISBN-10/ISBN-13 conversion.
 use std::fmt;
 
+use crate::models::IdentifierType;
+
 /// The detected type of an ISBN.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IsbnType {
@@ -260,6 +262,33 @@ pub fn isbn13_to_isbn10(isbn13: &str) -> Option<String> {
     let base = &normalized[3..12];
     let check = compute_isbn10_check_digit(base);
     Some(format!("{base}{check}"))
+}
+
+/// Normalize an ISBN value: strip whitespace and hyphens, uppercase.
+pub fn normalize_isbn(value: &str) -> String {
+    value
+        .chars()
+        .filter(|c| !c.is_ascii_whitespace() && *c != '-')
+        .map(|c| c.to_ascii_uppercase())
+        .collect()
+}
+
+/// Normalize an ASIN value: strip whitespace, uppercase.
+pub fn normalize_asin(value: &str) -> String {
+    value
+        .chars()
+        .filter(|c| !c.is_ascii_whitespace())
+        .map(|c| c.to_ascii_uppercase())
+        .collect()
+}
+
+/// Convert an ISBN value to normalized ISBN-13 for cross-type comparison.
+pub fn to_isbn13(value: &str, id_type: IdentifierType) -> Option<String> {
+    match id_type {
+        IdentifierType::Isbn13 => Some(normalize_isbn(value)),
+        IdentifierType::Isbn10 => isbn10_to_isbn13(value),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
