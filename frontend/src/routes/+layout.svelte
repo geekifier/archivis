@@ -191,7 +191,7 @@
 					<svg
 						version="1.1"
 						xmlns="http://www.w3.org/2000/svg"
-						class="h-8 w-auto"
+						class="h-9 w-auto"
 						viewBox="220 260 740 200"
 					>
 						<path
