@@ -85,52 +85,14 @@ jobs:
       matrix:
         include:
           - name: linux-amd64
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
             target: x86_64-unknown-linux-musl
-            os: linux
             arch: amd64
-            cross: false
-            ext: ""
 
           - name: linux-arm64
-            runner: ubuntu-latest
+            runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
-            os: linux
             arch: arm64
-            cross: true
-            ext: ""
-
-          - name: darwin-arm64
-            runner: macos-latest
-            target: aarch64-apple-darwin
-            os: darwin
-            arch: arm64
-            cross: false
-            ext: ""
-
-          - name: darwin-amd64
-            runner: macos-15-intel
-            target: x86_64-apple-darwin
-            os: darwin
-            arch: amd64
-            cross: false
-            ext: ""
-
-          - name: windows-amd64
-            runner: windows-latest
-            target: x86_64-pc-windows-msvc
-            os: windows
-            arch: amd64
-            cross: false
-            ext: ".exe"
-
-          - name: windows-arm64
-            runner: windows-latest
-            target: aarch64-pc-windows-msvc
-            os: windows
-            arch: arm64
-            cross: false
-            ext: ".exe"
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
@@ -138,8 +100,7 @@ jobs:
           name: frontend-build
           path: dist/frontend
 
-      - name: Install musl tools (Linux amd64)
-        if: matrix.os == 'linux' && !matrix.cross
+      - name: Install musl tools
         run: sudo apt-get update && sudo apt-get install -y musl-tools
 
       - name: Install Rust toolchain
@@ -151,56 +112,29 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
-      - name: Install cross
-        if: matrix.cross
-        uses: taiki-e/install-action@d6e286fa45544157a02d45a43742857ebbc25d12 # v2
-        with:
-          tool: cross@0.2.5
-
       - name: Build binary
-        shell: bash
         env:
           ARCHIVIS_VERSION: ${{ needs.validate.outputs.version }}
-          USE_CROSS: ${{ matrix.cross }}
           BUILD_TARGET: ${{ matrix.target }}
-        run: |
-          if [ "$USE_CROSS" = "true" ]; then
-            cross build --release --target "$BUILD_TARGET" --package archivis-server
-          else
-            cargo build --release --target "$BUILD_TARGET" --package archivis-server
-          fi
+        run: cargo build --release --target "$BUILD_TARGET" --package archivis-server
 
       - name: Package archive
-        shell: bash
         env:
           RELEASE_VERSION: ${{ needs.validate.outputs.version }}
           BUILD_TARGET: ${{ matrix.target }}
-          BUILD_OS: ${{ matrix.os }}
           BUILD_ARCH: ${{ matrix.arch }}
-          BIN_EXT: ${{ matrix.ext }}
         run: |
           version="${RELEASE_VERSION}"
-          archive_name="archivis-v${version}-${BUILD_OS}-${BUILD_ARCH}"
+          archive_name="archivis-v${version}-linux-${BUILD_ARCH}"
           mkdir -p "staging/${archive_name}"
 
-          cp "target/${BUILD_TARGET}/release/archivis${BIN_EXT}" "staging/${archive_name}/archivis${BIN_EXT}"
+          cp "target/${BUILD_TARGET}/release/archivis" "staging/${archive_name}/archivis"
           cp LICENSE "staging/${archive_name}/" 2>/dev/null || true
           cp -r dist/frontend "staging/${archive_name}/frontend"
 
-          # Pick a SHA-256 tool that works on all runners
-          hash_cmd="sha256sum"
-          if ! command -v sha256sum &>/dev/null; then
-            hash_cmd="shasum -a 256"
-          fi
-
           cd staging
-          if [ "$BUILD_OS" = "windows" ]; then
-            7z a -tzip "${archive_name}.zip" "${archive_name}"
-            $hash_cmd "${archive_name}.zip" > "${archive_name}.zip.sha256"
-          else
-            tar czf "${archive_name}.tar.gz" "${archive_name}"
-            $hash_cmd "${archive_name}.tar.gz" > "${archive_name}.tar.gz.sha256"
-          fi
+          tar czf "${archive_name}.tar.gz" "${archive_name}"
+          sha256sum "${archive_name}.tar.gz" > "${archive_name}.tar.gz.sha256"
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -208,8 +142,6 @@ jobs:
           path: |
             staging/archivis-*.tar.gz
             staging/archivis-*.tar.gz.sha256
-            staging/archivis-*.zip
-            staging/archivis-*.zip.sha256
           retention-days: 1
 
   # ── Build and push Docker image ──────────────────────────────────────────────
@@ -331,7 +263,6 @@ jobs:
           body_path: RELEASE_NOTES.md
           files: |
             dist/archivis-*.tar.gz
-            dist/archivis-*.zip
             dist/SHA256SUMS.txt
           fail_on_unmatched_files: true
           generate_release_notes: false
