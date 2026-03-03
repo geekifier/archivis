@@ -163,7 +163,10 @@ mod platform {
             },
             |stat| {
                 // nix::sys::statfs::FsType wraps the magic number.
-                let magic = stat.filesystem_type().0;
+                // The underlying libc type (`__fsword_t`) is `i64` on glibc
+                // but `u64` on musl, so we cast to `i64` here.
+                #[allow(clippy::unnecessary_cast)]
+                let magic = stat.filesystem_type().0 as i64;
                 classify_magic(magic)
             },
         )
