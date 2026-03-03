@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 #[command(
     name = "archivis",
     about = "A modern, self-hosted e-book collection manager",
-    version
+    version = env!("ARCHIVIS_VERSION")
 )]
 pub struct Cli {
     /// Path to the TOML configuration file.

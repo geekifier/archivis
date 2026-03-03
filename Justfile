@@ -280,6 +280,16 @@ test-e2e-headed:
 playwright-install:
     cd frontend && npx playwright install --with-deps chromium
 
+# ── Release ──────────────────────────────────────────────────────────────────
+
+# Generate changelog (requires git-cliff: cargo install git-cliff)
+changelog:
+    git cliff --output CHANGELOG.md
+
+# Preview changelog for next release (unreleased changes)
+changelog-preview:
+    git cliff --unreleased
+
 # ── CI ────────────────────────────────────────────────────────────────────────
 
 # Run full CI pipeline locally via act (requires Docker)

@@ -1,0 +1,53 @@
+# ==============================================================================
+# Archivis — Release Docker image
+# Assembles pre-built binaries and frontend assets into a minimal Alpine image.
+# Used by CI workflows (release.yml, dev-build.yml) for fast multi-arch builds.
+# ==============================================================================
+
+FROM alpine:3.21
+
+ARG TARGETARCH
+ARG VERSION=dev
+ARG REVISION=unknown
+
+LABEL org.opencontainers.image.title="Archivis"
+LABEL org.opencontainers.image.description="Self-hosted ebook collection manager"
+LABEL org.opencontainers.image.url="https://github.com/geekifier/archivis"
+LABEL org.opencontainers.image.source="https://github.com/geekifier/archivis"
+LABEL org.opencontainers.image.documentation="https://github.com/geekifier/archivis"
+LABEL org.opencontainers.image.version="${VERSION}"
+LABEL org.opencontainers.image.revision="${REVISION}"
+LABEL org.opencontainers.image.vendor="Archivis"
+LABEL org.opencontainers.image.licenses="AGPL-3.0-or-later"
+LABEL org.opencontainers.image.base.name="alpine:3.21"
+
+# ca-certificates — required for outbound HTTPS (metadata fetching, etc.)
+# tzdata          — allows TZ environment variable to work correctly
+RUN apk add --no-cache ca-certificates tzdata
+
+RUN addgroup -S archivis && adduser -S -G archivis -u 1000 archivis
+
+# Copy the pre-built binary for the target architecture
+COPY dist/${TARGETARCH}/archivis /usr/local/bin/archivis
+
+# Copy the pre-built frontend assets
+COPY dist/frontend/ /usr/share/archivis/frontend
+
+# Create data directories and set ownership
+RUN mkdir -p /data /books && chown -R archivis:archivis /data /books
+
+# Configuration — listen on all interfaces inside the container
+ENV ARCHIVIS_LISTEN_ADDRESS=0.0.0.0
+ENV ARCHIVIS_PORT=9514
+ENV ARCHIVIS_DATA_DIR=/data
+ENV ARCHIVIS_BOOK_STORAGE_PATH=/books
+ENV ARCHIVIS_FRONTEND_DIR=/usr/share/archivis/frontend
+
+EXPOSE 9514
+
+# Persist database and book storage across container restarts
+VOLUME ["/data", "/books"]
+
+USER archivis
+
+ENTRYPOINT ["/usr/local/bin/archivis"]

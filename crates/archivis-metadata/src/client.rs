@@ -90,8 +90,8 @@ impl MetadataHttpClient {
     /// `contact` — optional contact email for API identification.
     pub fn new(version: &str, contact: Option<&str>) -> Self {
         let user_agent = contact.map_or_else(
-            || format!("Archivis/{version} (+https://github.com/archivis/archivis)"),
-            |email| format!("Archivis/{version} ({email}; +https://github.com/archivis/archivis)"),
+            || format!("Archivis/{version} (+https://github.com/geekifier/archivis)"),
+            |email| format!("Archivis/{version} ({email}; +https://github.com/geekifier/archivis)"),
         );
 
         let mut default_headers = HeaderMap::new();
@@ -324,7 +324,7 @@ mod tests {
         let client = MetadataHttpClient::new("0.1.0", Some("admin@example.com"));
         assert_eq!(
             client.user_agent(),
-            "Archivis/0.1.0 (admin@example.com; +https://github.com/archivis/archivis)"
+            "Archivis/0.1.0 (admin@example.com; +https://github.com/geekifier/archivis)"
         );
     }
 
@@ -333,7 +333,7 @@ mod tests {
         let client = MetadataHttpClient::new("0.1.0", None);
         assert_eq!(
             client.user_agent(),
-            "Archivis/0.1.0 (+https://github.com/archivis/archivis)"
+            "Archivis/0.1.0 (+https://github.com/geekifier/archivis)"
         );
     }
 
