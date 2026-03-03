@@ -5,6 +5,7 @@ use uuid::Uuid;
 use archivis_core::models::TaskStatus;
 use archivis_db::TaskRepository;
 
+use crate::auth::AuthUser;
 use crate::errors::ApiError;
 use crate::state::AppState;
 
@@ -17,10 +18,13 @@ use super::types::TaskResponse;
     tag = "tasks",
     responses(
         (status = 200, description = "List of recent top-level tasks", body = Vec<TaskResponse>),
-    )
+        (status = 401, description = "Not authenticated"),
+    ),
+    security(("bearer" = []))
 )]
 pub async fn list_tasks(
     State(state): State<AppState>,
+    AuthUser(_user): AuthUser,
 ) -> Result<Json<Vec<TaskResponse>>, ApiError> {
     let tasks = TaskRepository::list_recent(state.db_pool(), 50).await?;
     let mut responses = Vec::with_capacity(tasks.len());
@@ -47,11 +51,14 @@ pub async fn list_tasks(
     ),
     responses(
         (status = 200, description = "Task details", body = TaskResponse),
+        (status = 401, description = "Not authenticated"),
         (status = 404, description = "Task not found"),
-    )
+    ),
+    security(("bearer" = []))
 )]
 pub async fn get_task(
     State(state): State<AppState>,
+    AuthUser(_user): AuthUser,
     Path(id): Path<Uuid>,
 ) -> Result<Json<TaskResponse>, ApiError> {
     let task = TaskRepository::get_by_id(state.db_pool(), id).await?;
@@ -73,11 +80,14 @@ pub async fn get_task(
     ),
     responses(
         (status = 200, description = "List of child tasks", body = Vec<TaskResponse>),
+        (status = 401, description = "Not authenticated"),
         (status = 404, description = "Task not found"),
-    )
+    ),
+    security(("bearer" = []))
 )]
 pub async fn list_children(
     State(state): State<AppState>,
+    AuthUser(_user): AuthUser,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Vec<TaskResponse>>, ApiError> {
     // Verify parent exists
@@ -98,11 +108,14 @@ pub async fn list_children(
     responses(
         (status = 200, description = "Task cancelled", body = TaskResponse),
         (status = 400, description = "Task cannot be cancelled"),
+        (status = 401, description = "Not authenticated"),
         (status = 404, description = "Task not found"),
-    )
+    ),
+    security(("bearer" = []))
 )]
 pub async fn cancel_task(
     State(state): State<AppState>,
+    AuthUser(_user): AuthUser,
     Path(id): Path<Uuid>,
 ) -> Result<Json<TaskResponse>, ApiError> {
     let task = TaskRepository::get_by_id(state.db_pool(), id).await?;

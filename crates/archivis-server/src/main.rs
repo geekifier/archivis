@@ -25,6 +25,7 @@ use tokio::net::TcpListener;
 use tokio::sync::RwLock;
 
 #[tokio::main]
+#[allow(clippy::too_many_lines)]
 async fn main() {
     let cli = Cli::parse();
 
@@ -83,6 +84,34 @@ async fn main() {
     let auth_adapter = LocalAuthAdapter::new(db_pool.clone());
     let auth_service = AuthService::new(db_pool.clone(), auth_adapter);
 
+    // 3a. Bootstrap admin from environment variables (if no admin exists yet)
+    bootstrap_admin(&auth_service).await;
+
+    // 3b. Proxy auth (ForwardAuth)
+    let proxy_auth = if config.auth.proxy.enabled {
+        match archivis_auth::ProxyAuth::new(
+            &config.auth.proxy.trusted_proxies,
+            config.auth.proxy.user_header.clone(),
+            config.auth.proxy.email_header.clone(),
+            config.auth.proxy.groups_header.clone(),
+        ) {
+            Ok(pa) => {
+                tracing::info!(
+                    trusted_proxies = ?config.auth.proxy.trusted_proxies,
+                    user_header = %config.auth.proxy.user_header,
+                    "Reverse proxy authentication enabled"
+                );
+                Some(std::sync::Arc::new(pa))
+            }
+            Err(err) => {
+                tracing::error!(%err, "Failed to initialize proxy auth — disabling");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     // 4. Metadata providers
     let settings_reader: Arc<dyn archivis_core::settings::SettingsReader> =
         Arc::clone(&config_service) as _;
@@ -97,6 +126,7 @@ async fn main() {
         &config,
         config_service,
         Arc::clone(&settings_reader),
+        proxy_auth,
     )
     .await;
 
@@ -112,6 +142,7 @@ async fn main() {
 
     tracing::info!(addr = %bind_addr, "Archivis ready — listening for connections");
 
+    let router = router.into_make_service_with_connect_info::<std::net::SocketAddr>();
     let server = axum::serve(listener, router).with_graceful_shutdown(shutdown_signal());
 
     if let Err(err) = server.await {
@@ -125,6 +156,88 @@ async fn main() {
     }
 
     tracing::info!("Archivis stopped");
+}
+
+/// Create an admin user from bootstrap environment variables.
+///
+/// Reads `ARCHIVIS_ADMIN_USERNAME`, `ARCHIVIS_ADMIN_PASSWORD` (or
+/// `ARCHIVIS_ADMIN_PASSWORD_FILE`), and optionally `ARCHIVIS_ADMIN_EMAIL`.
+/// These are intentionally NOT part of `AppConfig` / Figment — they are
+/// one-time bootstrap vars that should never be persisted or shown in the
+/// settings API.
+async fn bootstrap_admin(auth_service: &AuthService<LocalAuthAdapter>) {
+    let setup_required = match auth_service.is_setup_required().await {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!(%e, "Failed to check setup status during bootstrap");
+            std::process::exit(1);
+        }
+    };
+
+    let has_env = std::env::var("ARCHIVIS_ADMIN_USERNAME").is_ok()
+        || std::env::var("ARCHIVIS_ADMIN_PASSWORD").is_ok()
+        || std::env::var("ARCHIVIS_ADMIN_PASSWORD_FILE").is_ok();
+
+    if !setup_required {
+        if has_env {
+            tracing::warn!(
+                "Bootstrap env vars (ARCHIVIS_ADMIN_*) are set but an admin already exists \
+                 — consider removing them for security"
+            );
+        }
+        return;
+    }
+
+    let username = match std::env::var("ARCHIVIS_ADMIN_USERNAME") {
+        Ok(u) if !u.is_empty() => u,
+        _ => return, // No bootstrap requested — setup wizard will handle it
+    };
+
+    // Read password: try _FILE variant first (for Docker secrets), then plain env var
+    let password = match std::env::var("ARCHIVIS_ADMIN_PASSWORD_FILE") {
+        Ok(path) if !path.is_empty() => match std::fs::read_to_string(&path) {
+            Ok(contents) => contents.trim().to_string(),
+            Err(e) => {
+                tracing::error!(path = %path, %e, "Failed to read ARCHIVIS_ADMIN_PASSWORD_FILE");
+                std::process::exit(1);
+            }
+        },
+        _ => match std::env::var("ARCHIVIS_ADMIN_PASSWORD") {
+            Ok(p) if !p.is_empty() => p,
+            _ => {
+                tracing::error!(
+                    "ARCHIVIS_ADMIN_USERNAME is set but ARCHIVIS_ADMIN_PASSWORD \
+                     (or ARCHIVIS_ADMIN_PASSWORD_FILE) is missing — cannot bootstrap admin"
+                );
+                std::process::exit(1);
+            }
+        },
+    };
+
+    let email = std::env::var("ARCHIVIS_ADMIN_EMAIL")
+        .ok()
+        .filter(|e| !e.is_empty());
+
+    match auth_service
+        .create_user(
+            &username,
+            &password,
+            email.as_deref(),
+            archivis_core::models::UserRole::Admin,
+        )
+        .await
+    {
+        Ok(_) => {
+            tracing::info!(
+                username = %username,
+                "Admin user created from bootstrap environment variables"
+            );
+        }
+        Err(e) => {
+            tracing::error!(%e, "Failed to create bootstrap admin user");
+            std::process::exit(1);
+        }
+    }
 }
 
 /// Load settings from the database, apply them to the effective config, and build
@@ -189,6 +302,7 @@ async fn init_services_and_router(
     config: &AppConfig,
     config_service: Arc<archivis_api::settings::service::ConfigService>,
     settings_reader: Arc<dyn archivis_core::settings::SettingsReader>,
+    proxy_auth: Option<Arc<archivis_auth::ProxyAuth>>,
 ) -> (axum::Router, Option<Arc<RwLock<WatcherService>>>) {
     let (task_queue, dispatch_rx) = TaskQueue::new(db_pool.clone());
     let task_queue = Arc::new(task_queue);
@@ -272,6 +386,7 @@ async fn init_services_and_router(
         api_config,
         config_service,
         watcher_service,
+        proxy_auth,
     );
     (archivis_api::build_router(state), watcher_handle)
 }

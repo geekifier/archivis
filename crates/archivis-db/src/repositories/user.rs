@@ -134,6 +134,20 @@ impl UserRepository {
 
         Ok(count)
     }
+
+    /// Count users with a specific `role` that are still active.
+    pub async fn count_by_role(pool: &SqlitePool, role: UserRole) -> Result<i64, DbError> {
+        let role_str = role.to_string();
+        let count = sqlx::query_scalar!(
+            "SELECT COUNT(*) FROM users WHERE role = ? AND is_active = 1",
+            role_str,
+        )
+        .fetch_one(pool)
+        .await
+        .map_err(|e| DbError::Query(e.to_string()))?;
+
+        Ok(count)
+    }
 }
 
 // ── Row type for sqlx mapping ──────────────────────────────────

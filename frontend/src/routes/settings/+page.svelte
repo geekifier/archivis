@@ -5,6 +5,8 @@
 	import { api } from '$lib/api/index.js';
 	import type { SettingEntry } from '$lib/api/types.js';
 	import { Button } from '$lib/components/ui/button/index.js';
+	import { Separator } from '$lib/components/ui/separator/index.js';
+	import UserManagement from '$lib/components/settings/UserManagement.svelte';
 	import WatchedDirectoriesSettings from '$lib/components/settings/WatchedDirectoriesSettings.svelte';
 
 	// Admin guard
@@ -341,6 +343,11 @@
 			<span>{error}</span>
 		</div>
 	{/if}
+
+	<!-- User Management section -->
+	<UserManagement />
+
+	<Separator />
 
 	<!-- Watched Directories section (always visible, handles its own loading) -->
 	<WatchedDirectoriesSettings />

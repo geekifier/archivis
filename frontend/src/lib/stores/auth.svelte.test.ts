@@ -16,18 +16,16 @@ vi.mock('$lib/api/index.js', async () => {
 });
 
 // Import after mocking
-const { api, setSessionToken, getSessionToken } = await import('$lib/api/index.js');
+const { api, setSessionToken } = await import('$lib/api/index.js');
 const { auth } = await import('./auth.svelte.js');
 
 const mockApi = api as unknown as import('$lib/test-utils/api-mock.js').MockApi;
 const mockSetSessionToken = setSessionToken as unknown as ReturnType<typeof vi.fn>;
-const mockGetSessionToken = getSessionToken as unknown as ReturnType<typeof vi.fn>;
 
 describe('auth store', () => {
 	beforeEach(() => {
 		vi.mocked(goto).mockReset();
 		mockSetSessionToken.mockReset();
-		mockGetSessionToken.mockReset();
 		// Reset all mock API functions
 		for (const group of Object.values(mockApi)) {
 			for (const fn of Object.values(group as Record<string, ReturnType<typeof vi.fn>>)) {
@@ -58,18 +56,19 @@ describe('auth store', () => {
 			expect(auth.loading).toBe(false);
 		});
 
-		it('leaves user null when no token exists', async () => {
+		it('leaves user null when api.auth.me rejects (no valid session)', async () => {
 			mockApi.auth.status.mockResolvedValue({ setup_required: false });
-			mockGetSessionToken.mockReturnValue(null);
+			mockApi.auth.me.mockRejectedValue(new ApiError(401, 'Unauthorized'));
 
 			await auth.checkAuth();
 
+			expect(mockSetSessionToken).toHaveBeenCalledWith(null);
 			expect(auth.setupRequired).toBe(false);
 			expect(auth.user).toBeNull();
 			expect(auth.loading).toBe(false);
 		});
 
-		it('sets user from api.auth.me when token is valid', async () => {
+		it('sets user from api.auth.me when session is valid', async () => {
 			const mockUser = {
 				id: '1',
 				username: 'admin',
@@ -79,25 +78,12 @@ describe('auth store', () => {
 				created_at: '2024-01-01T00:00:00Z'
 			};
 			mockApi.auth.status.mockResolvedValue({ setup_required: false });
-			mockGetSessionToken.mockReturnValue('valid-token');
 			mockApi.auth.me.mockResolvedValue(mockUser);
 
 			await auth.checkAuth();
 
 			expect(auth.user).toEqual(mockUser);
 			expect(auth.isAuthenticated).toBe(true);
-			expect(auth.loading).toBe(false);
-		});
-
-		it('clears token and user when api.auth.me throws 401', async () => {
-			mockApi.auth.status.mockResolvedValue({ setup_required: false });
-			mockGetSessionToken.mockReturnValue('expired-token');
-			mockApi.auth.me.mockRejectedValue(new ApiError(401, 'Unauthorized'));
-
-			await auth.checkAuth();
-
-			expect(mockSetSessionToken).toHaveBeenCalledWith(null);
-			expect(auth.user).toBeNull();
 			expect(auth.loading).toBe(false);
 		});
 	});

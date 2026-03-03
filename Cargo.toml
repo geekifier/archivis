@@ -100,6 +100,9 @@ image = { version = "0.25", default-features = false, features = [
 # SVG rasterization for cover thumbnails
 resvg = "0.44"
 
+# IP network parsing (CIDR)
+ipnet = "2"
+
 # HTTP client
 reqwest = { version = "0.12", default-features = false, features = [
     "json",

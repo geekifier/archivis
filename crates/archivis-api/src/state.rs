@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use archivis_auth::{AuthService, LocalAuthAdapter};
+use archivis_auth::{AuthService, LocalAuthAdapter, ProxyAuth};
 use archivis_db::DbPool;
 use archivis_metadata::ProviderRegistry;
 use archivis_storage::local::LocalStorage;
@@ -42,6 +42,8 @@ struct AppStateInner {
     config_service: Arc<ConfigService>,
     /// Optional — `None` when the watcher subsystem is disabled.
     watcher_service: Option<Arc<RwLock<WatcherService>>>,
+    /// Optional — `None` when proxy auth is not configured.
+    proxy_auth: Option<Arc<ProxyAuth>>,
 }
 
 impl AppState {
@@ -57,6 +59,7 @@ impl AppState {
         config: ApiConfig,
         config_service: Arc<ConfigService>,
         watcher_service: Option<Arc<RwLock<WatcherService>>>,
+        proxy_auth: Option<Arc<ProxyAuth>>,
     ) -> Self {
         Self {
             inner: Arc::new(AppStateInner {
@@ -70,6 +73,7 @@ impl AppState {
                 config,
                 config_service,
                 watcher_service,
+                proxy_auth,
             }),
         }
     }
@@ -112,5 +116,9 @@ impl AppState {
 
     pub fn watcher_service(&self) -> Option<&Arc<RwLock<WatcherService>>> {
         self.inner.watcher_service.as_ref()
+    }
+
+    pub fn proxy_auth(&self) -> Option<&Arc<ProxyAuth>> {
+        self.inner.proxy_auth.as_ref()
     }
 }

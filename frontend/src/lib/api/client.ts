@@ -20,6 +20,7 @@ import type {
 	CreateAuthorRequest,
 	CreateBookmarkRequest,
 	CreatePublisherRequest,
+	CreateUserRequest,
 	DetectFsRequest,
 	DuplicateCountResponse,
 	DuplicateLinkResponse,
@@ -55,6 +56,7 @@ import type {
 	UpdateIdentifierRequest,
 	UpdateProgressRequest,
 	UpdateSettingsResponse,
+	UpdateUserRequest,
 	UpdateWatchedDirectoryRequest,
 	UploadResponse,
 	User,
@@ -189,6 +191,50 @@ export const api = {
 		/** Get the currently authenticated user. */
 		me(): Promise<User> {
 			return request<User>('GET', '/auth/me');
+		},
+
+		/** Change the current user's password. */
+		changePassword(data: {
+			current_password: string;
+			new_password: string;
+		}): Promise<void> {
+			return request<void>('PUT', '/auth/password', data);
+		}
+	},
+
+	users: {
+		/** List all users (admin only). */
+		list(): Promise<User[]> {
+			return request<User[]>('GET', '/users');
+		},
+
+		/** Create a new user (admin only). */
+		create(data: CreateUserRequest): Promise<User> {
+			return request<User>('POST', '/users', data);
+		},
+
+		/** Get a user by ID (admin only). */
+		get(id: string): Promise<User> {
+			return request<User>('GET', `/users/${encodeURIComponent(id)}`);
+		},
+
+		/** Update a user (admin only). */
+		update(id: string, data: UpdateUserRequest): Promise<User> {
+			return request<User>('PUT', `/users/${encodeURIComponent(id)}`, data);
+		},
+
+		/** Deactivate a user (admin only). */
+		delete(id: string): Promise<void> {
+			return request<void>('DELETE', `/users/${encodeURIComponent(id)}`);
+		},
+
+		/** Reset a user's password (admin only). */
+		resetPassword(id: string, data: { new_password: string }): Promise<void> {
+			return request<void>(
+				'PUT',
+				`/users/${encodeURIComponent(id)}/password`,
+				data
+			);
 		}
 	},
 
@@ -845,6 +891,7 @@ export type {
 	CreateAuthorRequest,
 	CreateBookmarkRequest,
 	CreatePublisherRequest,
+	CreateUserRequest,
 	DetectFsRequest,
 	DuplicateCountResponse,
 	DuplicateLinkResponse,
@@ -898,6 +945,7 @@ export type {
 	UpdateIdentifierRequest,
 	UpdateProgressRequest,
 	UpdateSettingsResponse,
+	UpdateUserRequest,
 	UpdateWatchedDirectoryRequest,
 	UploadResponse,
 	User,

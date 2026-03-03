@@ -1,5 +1,5 @@
 import { goto } from '$app/navigation';
-import { api, setSessionToken, getSessionToken } from '$lib/api/index.js';
+import { api, setSessionToken } from '$lib/api/index.js';
 import { ApiError } from '$lib/api/errors.js';
 import type { User } from '$lib/api/types.js';
 import { navCounts } from '$lib/stores/nav-counts.svelte.js';
@@ -26,20 +26,18 @@ function createAuthStore() {
 				return;
 			}
 
-			const token = getSessionToken();
-			if (token) {
-				try {
-					user = await api.auth.me();
-				} catch (err) {
-					if (err instanceof ApiError && err.isUnauthorized) {
-						setSessionToken(null);
-						user = null;
-					} else {
-						throw err;
-					}
+			// Always call /auth/me — proxy-authenticated users may not have a
+			// local token, but the backend will still authenticate them via
+			// forwarded headers.
+			try {
+				user = await api.auth.me();
+			} catch (err) {
+				if (err instanceof ApiError && err.isUnauthorized) {
+					setSessionToken(null);
+					user = null;
+				} else {
+					throw err;
 				}
-			} else {
-				user = null;
 			}
 		} catch (err) {
 			// If we can't reach the API at all, treat as unauthenticated

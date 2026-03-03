@@ -71,12 +71,41 @@ sqlx-prepare:
 dev:
     #!/usr/bin/env bash
     trap 'kill 0' EXIT
+    export ARCHIVIS_ADMIN_USERNAME="${ARCHIVIS_ADMIN_USERNAME:-dev}"
+    creds_file=".local/data/.dev-creds"
+    if [[ -z "${ARCHIVIS_ADMIN_PASSWORD:-}" && -f "$creds_file" ]]; then
+      source "$creds_file"
+      export ARCHIVIS_ADMIN_PASSWORD="${DEV_PASSWORD}"
+    else
+      export ARCHIVIS_ADMIN_PASSWORD="${ARCHIVIS_ADMIN_PASSWORD:-$(openssl rand -base64 18)}"
+      mkdir -p .local/data
+      cat > "$creds_file" <<CREDS
+    DEV_USERNAME=${ARCHIVIS_ADMIN_USERNAME}
+    DEV_PASSWORD=${ARCHIVIS_ADMIN_PASSWORD}
+    CREDS
+    fi
+    printf 'Dev admin: %s / %s\n' "$ARCHIVIS_ADMIN_USERNAME" "$ARCHIVIS_ADMIN_PASSWORD"
     cargo run --package archivis-server -- --data-dir .local/data &
     cd frontend && npm run dev &
     wait
 
 # Run backend only with local dev data
 dev-backend:
+    #!/usr/bin/env bash
+    export ARCHIVIS_ADMIN_USERNAME="${ARCHIVIS_ADMIN_USERNAME:-dev}"
+    creds_file=".local/data/.dev-creds"
+    if [[ -z "${ARCHIVIS_ADMIN_PASSWORD:-}" && -f "$creds_file" ]]; then
+      source "$creds_file"
+      export ARCHIVIS_ADMIN_PASSWORD="${DEV_PASSWORD}"
+    else
+      export ARCHIVIS_ADMIN_PASSWORD="${ARCHIVIS_ADMIN_PASSWORD:-$(openssl rand -base64 18)}"
+      mkdir -p .local/data
+      cat > "$creds_file" <<CREDS
+    DEV_USERNAME=${ARCHIVIS_ADMIN_USERNAME}
+    DEV_PASSWORD=${ARCHIVIS_ADMIN_PASSWORD}
+    CREDS
+    fi
+    printf 'Dev admin: %s / %s\n' "$ARCHIVIS_ADMIN_USERNAME" "$ARCHIVIS_ADMIN_PASSWORD"
     cargo run --package archivis-server -- --data-dir .local/data
 
 # Run frontend dev server only (expects backend on :9514)
@@ -143,7 +172,19 @@ _dev-api-ensure-running:
     set -euo pipefail
 
     base_url="${ARCHIVIS_BASE_URL:-http://127.0.0.1:${ARCHIVIS_PORT:-9514}}"
+    export ARCHIVIS_DATA_DIR=".local/clean"
+
+    needs_setup() {
+      [[ ! -f .local/clean/.dev-creds ]] || return 1
+      local status
+      status=$(curl -sf "${base_url}/api/auth/status" 2>/dev/null) || return 1
+      echo "$status" | jq -e '.setup_required == true' > /dev/null 2>&1
+    }
+
     if curl -sf "${base_url}/api/auth/status" > /dev/null 2>&1; then
+      if needs_setup; then
+        ./scripts/dev-boot.sh setup
+      fi
       exit 0
     fi
 
@@ -151,6 +192,10 @@ _dev-api-ensure-running:
     echo "Dev API not reachable at ${base_url}; starting 'just dev-resume' in background..." >&2
     nohup just dev-resume > .local/clean/dev-resume.log 2>&1 &
     ARCHIVIS_PORT="${ARCHIVIS_PORT:-9514}" ./scripts/dev-boot.sh wait
+
+    if needs_setup; then
+      ./scripts/dev-boot.sh setup
+    fi
 
 # Call local API with dev auth (reads token from .local/clean/.dev-creds)
 [positional-arguments]

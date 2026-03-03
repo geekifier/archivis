@@ -17,6 +17,7 @@ pub mod stats;
 pub mod tags;
 pub mod tasks;
 pub mod ui;
+pub mod users;
 pub mod watcher;
 
 use axum::Router;
@@ -138,6 +139,14 @@ mod openapi {
             super::stats::handlers::get_stats,
             // UI
             super::ui::handlers::sidebar_counts,
+            // Users
+            super::users::handlers::list_users,
+            super::users::handlers::create_user,
+            super::users::handlers::get_user,
+            super::users::handlers::update_user,
+            super::users::handlers::delete_user,
+            super::users::handlers::admin_reset_password,
+            super::users::handlers::change_password,
             // Watched Directories
             super::watcher::handlers::list_watched,
             super::watcher::handlers::add_watched,
@@ -244,6 +253,11 @@ mod openapi {
             super::settings::service::ConfigSource,
             super::settings::service::ConfigOverride,
             super::settings::registry::SettingType,
+            // Users
+            super::users::types::CreateUserRequest,
+            super::users::types::UpdateUserRequest,
+            super::users::types::AdminResetPasswordRequest,
+            super::users::types::ChangePasswordRequest,
             // Watched Directories
             super::watcher::types::AddWatchedDirectoryRequest,
             super::watcher::types::UpdateWatchedDirectoryRequest,
@@ -282,6 +296,7 @@ mod openapi {
             (name = "settings", description = "Instance settings management"),
             (name = "ui", description = "UI helper endpoints"),
             (name = "stats", description = "Library and usage statistics"),
+            (name = "users", description = "User management"),
             (name = "watched-directories", description = "Watched directory management"),
         )
     )]
@@ -311,6 +326,7 @@ pub fn build_router(state: AppState) -> Router {
         .nest("/settings", settings::router())
         .nest("/stats", stats::router())
         .nest("/ui", ui::router())
+        .nest("/users", users::router())
         .nest("/watched-directories", watcher::router());
 
     let mut router = Router::new()
@@ -419,6 +435,7 @@ mod tests {
                 frontend_dir,
             },
             config_service,
+            None,
             None,
         )
     }

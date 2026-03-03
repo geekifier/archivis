@@ -103,6 +103,9 @@ pub enum AuthError {
     #[error("forbidden: insufficient permissions")]
     Forbidden,
 
+    #[error("user not found: {0}")]
+    UserNotFound(String),
+
     #[error("user already exists: {0}")]
     UserExists(String),
 

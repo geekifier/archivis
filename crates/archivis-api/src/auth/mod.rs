@@ -4,7 +4,7 @@ pub mod types;
 
 pub use extractors::{AuthUser, RequireAdmin};
 
-use axum::routing::{get, post};
+use axum::routing::{get, post, put};
 use axum::Router;
 
 use crate::state::AppState;
@@ -17,4 +17,5 @@ pub fn router() -> Router<AppState> {
         .route("/login", post(handlers::auth_login))
         .route("/logout", post(handlers::auth_logout))
         .route("/me", get(handlers::auth_me))
+        .route("/password", put(crate::users::handlers::change_password))
 }

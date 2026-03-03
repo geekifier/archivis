@@ -87,6 +87,9 @@ fn map_core_error(err: &ArchivisError) -> (StatusCode, String) {
             AuthError::InvalidCredentials | AuthError::SessionExpired | AuthError::Unauthorized,
         ) => (StatusCode::UNAUTHORIZED, err.to_string()),
         ArchivisError::Auth(AuthError::Forbidden) => (StatusCode::FORBIDDEN, err.to_string()),
+        ArchivisError::Auth(AuthError::UserNotFound(msg)) => {
+            (StatusCode::NOT_FOUND, format!("user not found: {msg}"))
+        }
         ArchivisError::Auth(AuthError::UserExists(name)) => {
             (StatusCode::CONFLICT, format!("user already exists: {name}"))
         }

@@ -8,11 +8,13 @@
 	import { filters } from '$lib/stores/filters.svelte.js';
 	import { navCounts } from '$lib/stores/nav-counts.svelte.js';
 	import { theme } from '$lib/theme.svelte.js';
+	import ChangePasswordDialog from '$lib/components/settings/ChangePasswordDialog.svelte';
 	import '../app.css';
 
 	let { children } = $props();
 
 	let sidebarOpen = $state(false);
+	let changePasswordOpen = $state(false);
 
 	/** Pages that don't require authentication. */
 	const publicPaths = ['/login', '/setup'];
@@ -509,8 +511,31 @@
 							<Button
 								variant="ghost"
 								size="icon-sm"
+								onclick={() => (changePasswordOpen = true)}
+								aria-label="Change password"
+								title="Change password"
+							>
+								<svg
+									class="size-4"
+									xmlns="http://www.w3.org/2000/svg"
+									viewBox="0 0 24 24"
+									fill="none"
+									stroke="currentColor"
+									stroke-width="2"
+									stroke-linecap="round"
+									stroke-linejoin="round"
+								>
+									<circle cx="7.5" cy="15.5" r="5.5" />
+									<path d="m21 2-9.6 9.6" />
+									<path d="m15.5 7.5 3 3L22 7l-3-3" />
+								</svg>
+							</Button>
+							<Button
+								variant="ghost"
+								size="icon-sm"
 								onclick={() => auth.logout()}
 								aria-label="Log out"
+								title="Log out"
 							>
 								<svg
 									class="size-4"
@@ -538,4 +563,6 @@
 			</main>
 		</div>
 	</div>
+
+<ChangePasswordDialog bind:open={changePasswordOpen} />
 {/if}

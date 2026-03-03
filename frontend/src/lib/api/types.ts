@@ -701,6 +701,22 @@ export interface UpdateWatchedDirectoryRequest {
 	enabled?: boolean;
 }
 
+// --- User management types ---
+
+export interface CreateUserRequest {
+	username: string;
+	password: string;
+	email?: string;
+	role: string;
+}
+
+export interface UpdateUserRequest {
+	username?: string;
+	email?: string | null;
+	role?: string;
+	is_active?: boolean;
+}
+
 export interface DetectFsRequest {
 	path: string;
 }

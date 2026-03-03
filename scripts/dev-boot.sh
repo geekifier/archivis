@@ -83,7 +83,7 @@ cmd_wait() {
       echo "Server is ready."
       return 0
     fi
-    sleep 0.5
+    sleep 1
     elapsed=$((elapsed + 1))
   done
   echo "ERROR: Server did not become ready within ${MAX_WAIT}s" >&2

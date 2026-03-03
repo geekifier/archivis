@@ -84,6 +84,9 @@ pub struct AppConfig {
     /// Import behavior configuration.
     #[serde(default)]
     pub import: ImportAppConfig,
+    /// Authentication configuration.
+    #[serde(default)]
+    pub auth: AuthAppConfig,
 }
 
 /// Configuration for metadata provider lookups.
@@ -232,6 +235,42 @@ impl Default for IsbnScanConfig {
     }
 }
 
+/// Top-level authentication configuration.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(default)]
+pub struct AuthAppConfig {
+    /// Reverse proxy (`ForwardAuth`) settings.
+    pub proxy: ProxyAuthConfig,
+}
+
+/// Reverse proxy (`ForwardAuth`) authentication configuration.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct ProxyAuthConfig {
+    /// Enable reverse proxy authentication.
+    pub enabled: bool,
+    /// List of trusted proxy IP addresses or CIDR ranges.
+    pub trusted_proxies: Vec<String>,
+    /// Header containing the authenticated username.
+    pub user_header: String,
+    /// Header containing the user's email address.
+    pub email_header: Option<String>,
+    /// Header containing comma-separated group names.
+    pub groups_header: Option<String>,
+}
+
+impl Default for ProxyAuthConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            trusted_proxies: Vec::new(),
+            user_header: "X-Forwarded-User".to_owned(),
+            email_header: Some("X-Forwarded-Email".to_owned()),
+            groups_header: Some("X-Forwarded-Groups".to_owned()),
+        }
+    }
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
@@ -246,6 +285,7 @@ impl Default for AppConfig {
             isbn_scan: IsbnScanConfig::default(),
             watcher: WatcherConfig::default(),
             import: ImportAppConfig::default(),
+            auth: AuthAppConfig::default(),
         }
     }
 }
@@ -330,6 +370,25 @@ pub fn flatten_config(config: &AppConfig) -> HashMap<String, serde_json::Value> 
     let value = serde_json::to_value(config).expect("AppConfig must be serializable");
     let mut map = HashMap::new();
     flatten_value(&value, "", &mut map);
+
+    // Post-process: convert array fields to comma-separated strings for the
+    // settings API (which represents them as `SettingType::String`).
+    if let Some(arr) = map.remove("auth.proxy.trusted_proxies") {
+        let csv = arr
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .unwrap_or_default();
+        map.insert(
+            "auth.proxy.trusted_proxies".to_string(),
+            serde_json::Value::String(csv),
+        );
+    }
+
     map
 }
 
@@ -356,6 +415,7 @@ fn flatten_value(
 }
 
 /// Detect which env vars override settings. Returns only keys that have active overrides.
+#[allow(clippy::too_many_lines)]
 pub fn detect_env_overrides(cli: &Cli) -> HashMap<String, ConfigOverride> {
     let mut overrides = HashMap::new();
 
@@ -422,6 +482,23 @@ pub fn detect_env_overrides(cli: &Cli) -> HashMap<String, ConfigOverride> {
         (
             "import.auto_link_formats",
             "ARCHIVIS_IMPORT__AUTO_LINK_FORMATS",
+        ),
+        ("auth.proxy.enabled", "ARCHIVIS_AUTH__PROXY__ENABLED"),
+        (
+            "auth.proxy.trusted_proxies",
+            "ARCHIVIS_AUTH__PROXY__TRUSTED_PROXIES",
+        ),
+        (
+            "auth.proxy.user_header",
+            "ARCHIVIS_AUTH__PROXY__USER_HEADER",
+        ),
+        (
+            "auth.proxy.email_header",
+            "ARCHIVIS_AUTH__PROXY__EMAIL_HEADER",
+        ),
+        (
+            "auth.proxy.groups_header",
+            "ARCHIVIS_AUTH__PROXY__GROUPS_HEADER",
         ),
     ];
 
@@ -677,6 +754,45 @@ fn apply_setting_to_config(config: &mut AppConfig, key: &str, value: &serde_json
                 config.import.auto_link_formats = b;
             }
         }
+        "auth.proxy.enabled" => {
+            if let Some(b) = value.as_bool() {
+                config.auth.proxy.enabled = b;
+            }
+        }
+        "auth.proxy.trusted_proxies" => {
+            // Stored as a JSON array of strings or a comma-separated string
+            if let Some(arr) = value.as_array() {
+                config.auth.proxy.trusted_proxies = arr
+                    .iter()
+                    .filter_map(|v| v.as_str().map(ToString::to_string))
+                    .collect();
+            } else if let Some(s) = value.as_str() {
+                config.auth.proxy.trusted_proxies = s
+                    .split(',')
+                    .map(|p| p.trim().to_string())
+                    .filter(|p| !p.is_empty())
+                    .collect();
+            }
+        }
+        "auth.proxy.user_header" => {
+            if let Some(s) = value.as_str() {
+                config.auth.proxy.user_header = s.to_string();
+            }
+        }
+        "auth.proxy.email_header" => match value {
+            serde_json::Value::Null => config.auth.proxy.email_header = None,
+            serde_json::Value::String(s) => {
+                config.auth.proxy.email_header = Some(s.clone());
+            }
+            _ => {}
+        },
+        "auth.proxy.groups_header" => match value {
+            serde_json::Value::Null => config.auth.proxy.groups_header = None,
+            serde_json::Value::String(s) => {
+                config.auth.proxy.groups_header = Some(s.clone());
+            }
+            _ => {}
+        },
         _ => {}
     }
 }

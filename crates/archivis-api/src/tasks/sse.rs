@@ -12,6 +12,7 @@ use uuid::Uuid;
 use archivis_core::models::TaskStatus;
 use archivis_db::TaskRepository;
 
+use crate::auth::AuthUser;
 use crate::errors::ApiError;
 use crate::state::AppState;
 
@@ -41,11 +42,14 @@ fn progress_to_event(status: TaskStatus, data: serde_json::Value) -> Option<Even
     ),
     responses(
         (status = 200, description = "SSE stream of task progress events"),
+        (status = 401, description = "Not authenticated"),
         (status = 404, description = "Task not found"),
-    )
+    ),
+    security(("bearer" = []))
 )]
 pub async fn task_progress_sse(
     State(state): State<AppState>,
+    AuthUser(_user): AuthUser,
     Path(task_id): Path<Uuid>,
 ) -> Result<Response, ApiError> {
     // Verify the task exists and check its current status.
@@ -109,10 +113,13 @@ pub async fn task_progress_sse(
     tag = "tasks",
     responses(
         (status = 200, description = "SSE stream of all active task events"),
-    )
+        (status = 401, description = "Not authenticated"),
+    ),
+    security(("bearer" = []))
 )]
 pub async fn active_tasks_sse(
     State(state): State<AppState>,
+    AuthUser(_user): AuthUser,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let rx = state.task_queue().subscribe_all();
 
