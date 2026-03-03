@@ -1,10 +1,16 @@
 name: CI
 
 on:
-  push:
-    branches: [master]
   pull_request:
     branches: [master]
+    paths-ignore:
+      - '**.md'
+      - '_docs/**'
+      - 'LICENSE'
+      - 'Justfile'
+      - 'docker-compose*.yml'
+      - 'cliff.toml'
+      - 'scripts/**'
   workflow_call:
 
 concurrency:
