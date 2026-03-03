@@ -3,6 +3,14 @@ name: Dev Build
 on:
   push:
     branches: [master]
+    paths-ignore:
+      - '**.md'
+      - '_docs/**'
+      - 'LICENSE'
+      - 'Justfile'
+      - 'docker-compose*.yml'
+      - 'cliff.toml'
+      - 'scripts/**'
   workflow_dispatch:
 
 permissions:
@@ -20,8 +28,14 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
+  # ── CI quality gate ────────────────────────────────────────────────────────
+  ci:
+    name: CI checks
+    uses: ./.github/workflows/ci.yml
+
   # ── Build frontend ───────────────────────────────────────────────────────────
   frontend:
+    needs: ci
     name: Build frontend
     runs-on: ubuntu-latest
     permissions:
@@ -48,7 +62,7 @@ jobs:
   # ── Build Linux binaries ─────────────────────────────────────────────────────
   build-binary:
     name: Build linux-${{ matrix.arch }}
-    needs: frontend
+    needs: [ci, frontend]
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
