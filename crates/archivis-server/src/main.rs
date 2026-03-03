@@ -451,7 +451,7 @@ fn init_metadata_providers(
     metadata_config: &config::MetadataConfig,
     settings: &Arc<dyn archivis_core::settings::SettingsReader>,
 ) -> Arc<ProviderRegistry> {
-    let version = env!("CARGO_PKG_VERSION");
+    let version = env!("ARCHIVIS_VERSION");
     let mut http_client =
         MetadataHttpClient::new(version, metadata_config.contact_email.as_deref());
 

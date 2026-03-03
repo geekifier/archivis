@@ -75,11 +75,19 @@ RUN touch crates/*/src/lib.rs crates/archivis-server/src/main.rs \
 # ------------------------------------------------------------------------------
 FROM alpine:3.21
 
+LABEL org.opencontainers.image.title="Archivis"
+LABEL org.opencontainers.image.description="Self-hosted ebook collection manager"
+LABEL org.opencontainers.image.url="https://github.com/geekifier/archivis"
+LABEL org.opencontainers.image.source="https://github.com/geekifier/archivis"
+LABEL org.opencontainers.image.documentation="https://github.com/geekifier/archivis"
+LABEL org.opencontainers.image.vendor="Archivis"
+LABEL org.opencontainers.image.licenses="AGPL-3.0-or-later"
+LABEL org.opencontainers.image.base.name="alpine:3.21"
+
 # ca-certificates — required for outbound HTTPS (metadata fetching, etc.)
 # tzdata          — allows TZ environment variable to work correctly
 RUN apk add --no-cache ca-certificates tzdata
 
-# Non-root user for security
 RUN addgroup -S archivis && adduser -S -G archivis -u 1000 archivis
 
 # Copy the statically linked binary from the backend stage
