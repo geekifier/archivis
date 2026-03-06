@@ -1,13 +1,15 @@
 use archivis_core::models::{
-    Author, Book, BookFile, BookFormat, Bookmark, Identifier, IdentifierType, MetadataSource,
-    MetadataStatus, Publisher, Series, Tag, User, UserRole, WatchMode,
+    Author, Book, BookFile, BookFormat, Bookmark, IdentificationCandidate, Identifier,
+    IdentifierType, MetadataSource, MetadataStatus, Publisher, ResolutionRun, ResolutionState,
+    Series, Tag, User, UserRole, WatchMode,
 };
 use archivis_db::{
     create_pool, run_migrations, AuthorRepository, BookFileRepository, BookFilter, BookRepository,
-    BookmarkRepository, DbPool, IdentifierRepository, PaginationParams, ReadingProgressRepository,
-    SeriesRepository, SortOrder, StatsRepository, TagRepository, UserRepository,
-    WatchedDirectoryRepository,
+    BookmarkRepository, CandidateRepository, DbPool, IdentifierRepository, PaginationParams,
+    ReadingProgressRepository, ResolutionRunRepository, SeriesRepository, SortOrder,
+    StatsRepository, TagRepository, UserRepository, WatchedDirectoryRepository,
 };
+use chrono::{Duration, Utc};
 use tempfile::TempDir;
 use uuid::Uuid;
 
@@ -62,7 +64,7 @@ async fn book_update() {
     book.description = Some("A desert planet saga".into());
     book.rating = Some(4.5);
     book.metadata_status = MetadataStatus::Identified;
-    book.metadata_confidence = 0.95;
+    book.ingest_quality_score = 0.95;
 
     BookRepository::update(&pool, &book).await.unwrap();
     let fetched = BookRepository::get_by_id(&pool, book.id).await.unwrap();
@@ -89,6 +91,59 @@ async fn book_delete_not_found() {
     let (pool, _dir) = test_pool().await;
     let result = BookRepository::delete(&pool, Uuid::new_v4()).await;
     assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn book_resolution_queue_orders_by_requested_at_and_filters_locked_books() {
+    let (pool, _dir) = test_pool().await;
+    let base = Utc::now();
+
+    let mut first = test_book("First");
+    first.resolution_requested_at = base - Duration::hours(3);
+    first.metadata_status = MetadataStatus::Identified;
+    first.ingest_quality_score = 1.0;
+    BookRepository::create(&pool, &first).await.unwrap();
+
+    let mut locked = test_book("Locked");
+    locked.resolution_requested_at = base - Duration::hours(4);
+    locked.metadata_locked = true;
+    BookRepository::create(&pool, &locked).await.unwrap();
+
+    let mut done = test_book("Done");
+    done.resolution_requested_at = base - Duration::hours(5);
+    done.resolution_state = ResolutionState::Done;
+    BookRepository::create(&pool, &done).await.unwrap();
+
+    let mut second = test_book("Second");
+    second.resolution_requested_at = base - Duration::hours(1);
+    BookRepository::create(&pool, &second).await.unwrap();
+
+    let queued = BookRepository::list_pending_resolution(&pool, 10)
+        .await
+        .unwrap();
+
+    let queued_ids: Vec<Uuid> = queued.into_iter().map(|book| book.id).collect();
+    assert_eq!(queued_ids, vec![first.id, second.id]);
+}
+
+#[tokio::test]
+async fn book_resolution_claim_is_compare_and_set_noop_after_first_claim() {
+    let (pool, _dir) = test_pool().await;
+    let book = test_book("Claimed Once");
+    BookRepository::create(&pool, &book).await.unwrap();
+
+    let claimed_first = BookRepository::claim_pending_resolution(&pool, book.id)
+        .await
+        .unwrap();
+    let claimed_second = BookRepository::claim_pending_resolution(&pool, book.id)
+        .await
+        .unwrap();
+
+    assert!(claimed_first);
+    assert!(!claimed_second);
+
+    let updated = BookRepository::get_by_id(&pool, book.id).await.unwrap();
+    assert_eq!(updated.resolution_state, ResolutionState::Running);
 }
 
 #[tokio::test]
@@ -801,6 +856,64 @@ async fn stats_repository_returns_library_usage_and_db_stats() {
     let objects = StatsRepository::db_object_stats(&pool).await.unwrap();
     assert!(!objects.objects.is_empty());
     assert!(objects.objects.iter().any(|entry| entry.name == "books"));
+}
+
+#[tokio::test]
+async fn stats_pending_candidate_count_ignores_historical_runs() {
+    let (pool, _dir) = test_pool().await;
+    let book = test_book("Children of Dune");
+    BookRepository::create(&pool, &book).await.unwrap();
+
+    let mut historical_run = ResolutionRun::new(
+        book.id,
+        "import",
+        serde_json::json!({"title":"Children of Dune"}),
+    );
+    historical_run.state = archivis_core::models::ResolutionRunState::Done;
+    historical_run.started_at = Utc::now() - Duration::minutes(10);
+    historical_run.finished_at = Some(Utc::now() - Duration::minutes(9));
+    ResolutionRunRepository::create(&pool, &historical_run)
+        .await
+        .unwrap();
+
+    let mut historical_candidate = IdentificationCandidate::new(
+        book.id,
+        "historical",
+        0.6,
+        serde_json::json!({"title":"Children of Dune"}),
+        vec!["fallback".into()],
+    );
+    historical_candidate.run_id = Some(historical_run.id);
+    CandidateRepository::create(&pool, &historical_candidate)
+        .await
+        .unwrap();
+
+    let current_run = ResolutionRunRepository::start(
+        &pool,
+        book.id,
+        "manual_refresh",
+        serde_json::json!({"title":"Children of Dune"}),
+        "running",
+    )
+    .await
+    .unwrap();
+
+    let mut current_candidate = IdentificationCandidate::new(
+        book.id,
+        "current",
+        0.9,
+        serde_json::json!({"title":"Children of Dune"}),
+        vec!["title_match".into()],
+    );
+    current_candidate.run_id = Some(current_run.id);
+    CandidateRepository::create(&pool, &current_candidate)
+        .await
+        .unwrap();
+
+    let pending_candidates = StatsRepository::pending_candidate_count(&pool)
+        .await
+        .unwrap();
+    assert_eq!(pending_candidates, 1);
 }
 
 // ── Helper: create a test user ─────────────────────────────────

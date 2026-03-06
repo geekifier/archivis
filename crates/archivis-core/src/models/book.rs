@@ -2,7 +2,37 @@ use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::enums::MetadataStatus;
+use super::enums::{MetadataSource, MetadataStatus, ResolutionOutcome, ResolutionState};
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MetadataProvenance {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<FieldProvenance>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subtitle: Option<FieldProvenance>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<FieldProvenance>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub authors: Option<FieldProvenance>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub series: Option<FieldProvenance>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub publisher: Option<FieldProvenance>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub publication_date: Option<FieldProvenance>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub language: Option<FieldProvenance>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub page_count: Option<FieldProvenance>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cover: Option<FieldProvenance>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FieldProvenance {
+    pub origin: MetadataSource,
+    pub protected: bool,
+}
 
 /// A logical book in the library. May have multiple associated files (formats),
 /// authors, series memberships, and identifiers.
@@ -22,8 +52,21 @@ pub struct Book {
     pub rating: Option<f32>,
     pub page_count: Option<i32>,
     pub metadata_status: MetadataStatus,
-    /// Confidence score from the metadata identification pipeline (0.0–1.0).
-    pub metadata_confidence: f32,
+    /// Import-time local metadata quality score (0.0–1.0).
+    #[serde(default)]
+    pub ingest_quality_score: f32,
+    #[serde(default)]
+    pub resolution_state: ResolutionState,
+    pub resolution_outcome: Option<ResolutionOutcome>,
+    #[serde(default = "default_resolution_requested_at")]
+    pub resolution_requested_at: DateTime<Utc>,
+    pub resolution_requested_reason: Option<String>,
+    pub last_resolved_at: Option<DateTime<Utc>>,
+    pub last_resolution_run_id: Option<Uuid>,
+    #[serde(default)]
+    pub metadata_locked: bool,
+    #[serde(default)]
+    pub metadata_provenance: MetadataProvenance,
     /// Path to the primary cover image in storage, if available.
     pub cover_path: Option<String>,
 }
@@ -55,10 +98,22 @@ impl Book {
             rating: None,
             page_count: None,
             metadata_status: MetadataStatus::Unidentified,
-            metadata_confidence: 0.0,
+            ingest_quality_score: 0.0,
+            resolution_state: ResolutionState::Pending,
+            resolution_outcome: None,
+            resolution_requested_at: now,
+            resolution_requested_reason: None,
+            last_resolved_at: None,
+            last_resolution_run_id: None,
+            metadata_locked: false,
+            metadata_provenance: MetadataProvenance::default(),
             cover_path: None,
         }
     }
+}
+
+fn default_resolution_requested_at() -> DateTime<Utc> {
+    Utc::now()
 }
 
 /// Generate a sort-friendly title by stripping leading articles.
@@ -123,7 +178,14 @@ mod tests {
         assert_eq!(book.title, "Dune");
         assert_eq!(book.sort_title, "Dune");
         assert_eq!(book.metadata_status, MetadataStatus::Unidentified);
-        assert!((book.metadata_confidence - 0.0).abs() < f32::EPSILON);
+        assert!((book.ingest_quality_score - 0.0).abs() < f32::EPSILON);
+        assert_eq!(book.resolution_state, ResolutionState::Pending);
+        assert!(book.resolution_outcome.is_none());
+        assert!(book.resolution_requested_reason.is_none());
+        assert!(book.last_resolved_at.is_none());
+        assert!(book.last_resolution_run_id.is_none());
+        assert!(!book.metadata_locked);
+        assert_eq!(book.metadata_provenance, MetadataProvenance::default());
         assert!(book.description.is_none());
         assert!(book.rating.is_none());
     }
@@ -149,5 +211,22 @@ mod tests {
         assert_eq!(deserialized.title, book.title);
         assert_eq!(deserialized.sort_title, book.sort_title);
         assert_eq!(deserialized.id, book.id);
+    }
+
+    #[test]
+    fn metadata_provenance_is_sparse() {
+        let provenance = MetadataProvenance {
+            title: Some(FieldProvenance {
+                origin: MetadataSource::User,
+                protected: true,
+            }),
+            ..MetadataProvenance::default()
+        };
+
+        let json = serde_json::to_string(&provenance).unwrap();
+        assert_eq!(
+            json,
+            r#"{"title":{"origin":{"type":"user"},"protected":true}}"#
+        );
     }
 }

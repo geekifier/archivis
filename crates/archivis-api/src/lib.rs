@@ -5,11 +5,11 @@ pub mod duplicates;
 pub mod errors;
 pub mod filesystem;
 pub mod health;
-pub mod identify;
 pub mod import;
 pub mod isbn_scan;
 pub mod publishers;
 pub mod reader;
+pub mod resolve;
 pub mod series;
 pub mod settings;
 pub mod state;
@@ -66,6 +66,10 @@ mod openapi {
             super::books::handlers::batch_update_books,
             super::books::handlers::batch_set_tags,
             super::books::handlers::serve_file_content,
+            super::books::handlers::lock_metadata,
+            super::books::handlers::unlock_metadata,
+            super::books::handlers::protect_fields,
+            super::books::handlers::unprotect_fields,
             // Authors
             super::authors::handlers::list_authors,
             super::authors::handlers::create_author,
@@ -103,14 +107,14 @@ mod openapi {
             super::tasks::handlers::get_task,
             super::tasks::sse::task_progress_sse,
             super::tasks::sse::active_tasks_sse,
-            // Identify
-            super::identify::handlers::identify_book,
-            super::identify::handlers::list_candidates,
-            super::identify::handlers::apply_candidate,
-            super::identify::handlers::reject_candidate,
-            super::identify::handlers::undo_candidate,
-            super::identify::handlers::batch_identify,
-            super::identify::handlers::identify_all,
+            // Resolution
+            super::resolve::handlers::refresh_metadata,
+            super::resolve::handlers::list_candidates,
+            super::resolve::handlers::apply_candidate,
+            super::resolve::handlers::reject_candidate,
+            super::resolve::handlers::undo_candidate,
+            super::resolve::handlers::batch_refresh_metadata,
+            super::resolve::handlers::refresh_all_metadata,
             // Reader
             super::reader::handlers::get_progress,
             super::reader::handlers::update_progress,
@@ -178,6 +182,8 @@ mod openapi {
             super::books::types::TagEntry,
             super::books::types::FileEntry,
             super::books::types::IdentifierEntry,
+            super::books::types::FieldProvenanceResponse,
+            super::books::types::MetadataProvenanceResponse,
             super::books::types::PaginatedBooks,
             super::books::types::AddIdentifierRequest,
             super::books::types::UpdateIdentifierRequest,
@@ -188,6 +194,7 @@ mod openapi {
             super::books::types::BatchUpdateResponse,
             super::books::types::BatchTagsResponse,
             super::books::types::BatchUpdateError,
+            super::books::types::FieldProtectionRequest,
             // Authors
             super::authors::types::CreateAuthorRequest,
             super::authors::types::UpdateAuthorRequest,
@@ -217,14 +224,14 @@ mod openapi {
             super::import::types::UploadResponse,
             // Tasks
             super::tasks::types::TaskResponse,
-            // Identify
-            super::identify::types::CandidateResponse,
-            super::identify::types::SeriesInfo,
-            super::identify::types::IdentifyResponse,
-            super::identify::types::ApplyCandidateBody,
-            super::identify::types::BatchIdentifyRequest,
-            super::identify::types::IdentifyAllRequest,
-            super::identify::types::IdentifyAllResponse,
+            // Resolution
+            super::resolve::types::CandidateResponse,
+            super::resolve::types::SeriesInfo,
+            super::resolve::types::ApplyCandidateBody,
+            super::resolve::types::RefreshMetadataResponse,
+            super::resolve::types::BatchRefreshMetadataRequest,
+            super::resolve::types::RefreshAllMetadataRequest,
+            super::resolve::types::RefreshAllMetadataResponse,
             // Reader
             super::reader::types::ReadingProgressResponse,
             super::reader::types::UpdateProgressRequest,
@@ -288,7 +295,7 @@ mod openapi {
             (name = "tags", description = "Tag management"),
             (name = "reader", description = "Reading progress and bookmarks"),
             (name = "import", description = "File and directory import"),
-            (name = "identify", description = "Book metadata identification"),
+            (name = "resolution", description = "Book metadata resolution and review"),
             (name = "isbn-scan", description = "ISBN content scanning"),
             (name = "tasks", description = "Background task management"),
             (name = "duplicates", description = "Duplicate book management and merging"),
@@ -319,7 +326,6 @@ pub fn build_router(state: AppState) -> Router {
         .nest("/tags", tags::router())
         .nest("/reader", reader::router())
         .nest("/import", import::router())
-        .nest("/identify", identify::router())
         .nest("/isbn-scan", isbn_scan::router())
         .nest("/duplicates", duplicates::router())
         .nest("/filesystem", filesystem::router())
@@ -400,7 +406,7 @@ mod tests {
             Arc::clone(&provider_registry),
             Arc::new(TestSettings),
         ));
-        let identify_service = Arc::new(archivis_tasks::identify::IdentificationService::new(
+        let resolve_service = Arc::new(archivis_tasks::resolve::ResolutionService::new(
             db_pool.clone(),
             resolver,
             storage.clone(),
@@ -428,7 +434,7 @@ mod tests {
             auth_service,
             storage,
             provider_registry,
-            identify_service,
+            resolve_service,
             merge_service,
             ApiConfig {
                 data_dir: dir.to_path_buf(),

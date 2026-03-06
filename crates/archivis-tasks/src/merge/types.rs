@@ -10,8 +10,8 @@ pub enum MergePreference {
     Primary,
     /// Use secondary's value if present, else keep primary's.
     Secondary,
-    /// Use whichever book has higher `metadata_confidence`.
-    HigherConfidence,
+    /// Use whichever book has the higher ingest quality score.
+    HigherIngestQuality,
 }
 
 impl MergePreference {
@@ -19,7 +19,7 @@ impl MergePreference {
     pub fn from_str_or_default(s: Option<&str>) -> Self {
         match s {
             Some("secondary") => Self::Secondary,
-            Some("higher_confidence") => Self::HigherConfidence,
+            Some("higher_ingest_quality") => Self::HigherIngestQuality,
             _ => Self::Primary,
         }
     }
@@ -30,7 +30,7 @@ impl fmt::Display for MergePreference {
         match self {
             Self::Primary => write!(f, "primary"),
             Self::Secondary => write!(f, "secondary"),
-            Self::HigherConfidence => write!(f, "higher_confidence"),
+            Self::HigherIngestQuality => write!(f, "higher_ingest_quality"),
         }
     }
 }
@@ -88,8 +88,8 @@ mod tests {
             MergePreference::Secondary,
         );
         assert_eq!(
-            MergePreference::from_str_or_default(Some("higher_confidence")),
-            MergePreference::HigherConfidence,
+            MergePreference::from_str_or_default(Some("higher_ingest_quality")),
+            MergePreference::HigherIngestQuality,
         );
         assert_eq!(
             MergePreference::from_str_or_default(Some("unknown")),
@@ -102,8 +102,8 @@ mod tests {
         assert_eq!(MergePreference::Primary.to_string(), "primary");
         assert_eq!(MergePreference::Secondary.to_string(), "secondary");
         assert_eq!(
-            MergePreference::HigherConfidence.to_string(),
-            "higher_confidence"
+            MergePreference::HigherIngestQuality.to_string(),
+            "higher_ingest_quality"
         );
     }
 

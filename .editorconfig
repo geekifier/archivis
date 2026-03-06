@@ -11,10 +11,10 @@ trim_trailing_whitespace = true
 indent_style = space
 indent_size = 4
 
-# Frontend (Svelte/TS/JS): tabs (matches .prettierrc useTabs: true)
+# Frontend (Svelte/TS/JS): 2 spaces (matches .prettierrc)
 [*.{svelte,ts,js,json,css,html}]
-indent_style = tab
-indent_size = 4
+indent_style = space
+indent_size = 2
 
 # Config files that conventionally use spaces
 [*.{toml,yml,yaml,md}]

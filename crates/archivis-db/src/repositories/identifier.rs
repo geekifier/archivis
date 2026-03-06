@@ -1,6 +1,6 @@
 use archivis_core::errors::DbError;
 use archivis_core::models::{Identifier, MetadataSource};
-use sqlx::SqlitePool;
+use sqlx::{SqliteConnection, SqlitePool};
 use uuid::Uuid;
 
 use super::book::IdentifierRow;
@@ -41,6 +41,42 @@ impl IdentifierRepository {
         Ok(())
     }
 
+    pub async fn create_conn(
+        conn: &mut SqliteConnection,
+        identifier: &Identifier,
+    ) -> Result<(), DbError> {
+        let id = identifier.id.to_string();
+        let book_id = identifier.book_id.to_string();
+        let identifier_type = serde_json::to_value(identifier.identifier_type)
+            .ok()
+            .and_then(|v| v.as_str().map(String::from))
+            .unwrap_or_default();
+
+        let (source_type, source_name) = match &identifier.source {
+            MetadataSource::Embedded => ("embedded", None),
+            MetadataSource::Filename => ("filename", None),
+            MetadataSource::User => ("user", None),
+            MetadataSource::Provider(name) => ("provider", Some(name.as_str())),
+            MetadataSource::ContentScan => ("content_scan", None),
+        };
+
+        sqlx::query!(
+            "INSERT INTO identifiers (id, book_id, identifier_type, value, source_type, source_name, confidence) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            id,
+            book_id,
+            identifier_type,
+            identifier.value,
+            source_type,
+            source_name,
+            identifier.confidence,
+        )
+        .execute(conn)
+        .await
+        .map_err(|e| DbError::Query(e.to_string()))?;
+
+        Ok(())
+    }
+
     pub async fn get_by_book_id(
         pool: &SqlitePool,
         book_id: Uuid,
@@ -73,6 +109,24 @@ impl IdentifierRepository {
             provider_name,
         )
         .execute(pool)
+        .await
+        .map_err(|e| DbError::Query(e.to_string()))?;
+
+        Ok(result.rows_affected())
+    }
+
+    pub async fn delete_by_provider_conn(
+        conn: &mut SqliteConnection,
+        book_id: Uuid,
+        provider_name: &str,
+    ) -> Result<u64, DbError> {
+        let book_id_str = book_id.to_string();
+        let result = sqlx::query!(
+            "DELETE FROM identifiers WHERE book_id = ? AND source_type = 'provider' AND source_name = ?",
+            book_id_str,
+            provider_name,
+        )
+        .execute(conn)
         .await
         .map_err(|e| DbError::Query(e.to_string()))?;
 
@@ -126,12 +180,18 @@ impl IdentifierRepository {
         identifier_type: &str,
     ) -> Result<(), DbError> {
         let id_str = id.to_string();
-        let result = sqlx::query!(
-            "UPDATE identifiers SET value = ?, identifier_type = ? WHERE id = ?",
-            value,
-            identifier_type,
-            id_str,
+        let result = sqlx::query(
+            "UPDATE identifiers
+             SET value = ?,
+                 identifier_type = ?,
+                 source_type = 'user',
+                 source_name = NULL,
+                 confidence = 1.0
+             WHERE id = ?",
         )
+        .bind(value)
+        .bind(identifier_type)
+        .bind(&id_str)
         .execute(pool)
         .await
         .map_err(|e| DbError::Query(e.to_string()))?;

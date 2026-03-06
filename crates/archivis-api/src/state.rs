@@ -6,9 +6,9 @@ use archivis_db::DbPool;
 use archivis_metadata::ProviderRegistry;
 use archivis_storage::local::LocalStorage;
 use archivis_storage::watcher::WatcherService;
-use archivis_tasks::identify::IdentificationService;
 use archivis_tasks::merge::MergeService;
 use archivis_tasks::queue::TaskQueue;
+use archivis_tasks::resolve::ResolutionService;
 use tokio::sync::RwLock;
 
 use crate::settings::service::ConfigService;
@@ -36,7 +36,7 @@ struct AppStateInner {
     auth_service: AuthService<LocalAuthAdapter>,
     storage: LocalStorage,
     provider_registry: Arc<ProviderRegistry>,
-    identify_service: Arc<IdentificationService<LocalStorage>>,
+    resolve_service: Arc<ResolutionService<LocalStorage>>,
     merge_service: Arc<MergeService<LocalStorage>>,
     config: ApiConfig,
     config_service: Arc<ConfigService>,
@@ -54,7 +54,7 @@ impl AppState {
         auth_service: AuthService<LocalAuthAdapter>,
         storage: LocalStorage,
         provider_registry: Arc<ProviderRegistry>,
-        identify_service: Arc<IdentificationService<LocalStorage>>,
+        resolve_service: Arc<ResolutionService<LocalStorage>>,
         merge_service: Arc<MergeService<LocalStorage>>,
         config: ApiConfig,
         config_service: Arc<ConfigService>,
@@ -68,7 +68,7 @@ impl AppState {
                 auth_service,
                 storage,
                 provider_registry,
-                identify_service,
+                resolve_service,
                 merge_service,
                 config,
                 config_service,
@@ -98,8 +98,8 @@ impl AppState {
         &self.inner.provider_registry
     }
 
-    pub fn identify_service(&self) -> &Arc<IdentificationService<LocalStorage>> {
-        &self.inner.identify_service
+    pub fn resolve_service(&self) -> &Arc<ResolutionService<LocalStorage>> {
+        &self.inner.resolve_service
     }
 
     pub fn merge_service(&self) -> &Arc<MergeService<LocalStorage>> {

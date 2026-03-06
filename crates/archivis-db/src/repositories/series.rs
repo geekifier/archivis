@@ -1,6 +1,6 @@
 use archivis_core::errors::DbError;
 use archivis_core::models::Series;
-use sqlx::SqlitePool;
+use sqlx::{SqliteConnection, SqlitePool};
 use uuid::Uuid;
 
 use super::types::{PaginatedResult, PaginationParams, SortOrder};
@@ -33,6 +33,21 @@ impl SeriesRepository {
             series.description,
         )
         .execute(pool)
+        .await
+        .map_err(|e| DbError::Query(e.to_string()))?;
+
+        Ok(())
+    }
+
+    pub async fn create_conn(conn: &mut SqliteConnection, series: &Series) -> Result<(), DbError> {
+        let id = series.id.to_string();
+        sqlx::query!(
+            "INSERT INTO series (id, name, description) VALUES (?, ?, ?)",
+            id,
+            series.name,
+            series.description,
+        )
+        .execute(conn)
         .await
         .map_err(|e| DbError::Query(e.to_string()))?;
 
@@ -182,6 +197,28 @@ impl SeriesRepository {
 
         let series = Series::new(name);
         Self::create(pool, &series).await?;
+        Ok(series)
+    }
+
+    pub async fn find_or_create_conn(
+        conn: &mut SqliteConnection,
+        name: &str,
+    ) -> Result<Series, DbError> {
+        let row = sqlx::query_as!(
+            SeriesRow,
+            "SELECT id, name, description FROM series WHERE name = ? COLLATE NOCASE",
+            name,
+        )
+        .fetch_optional(&mut *conn)
+        .await
+        .map_err(|e| DbError::Query(e.to_string()))?;
+
+        if let Some(row) = row {
+            return row.into_series();
+        }
+
+        let series = Series::new(name);
+        Self::create_conn(conn, &series).await?;
         Ok(series)
     }
 

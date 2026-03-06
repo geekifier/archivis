@@ -3,13 +3,13 @@ import tailwindcss from '@tailwindcss/vite';
 import { defineConfig } from 'vite';
 
 export default defineConfig({
-	plugins: [tailwindcss(), sveltekit()],
-	server: {
-		proxy: {
-			'/api': {
-				target: 'http://localhost:9514',
-				changeOrigin: true
-			}
-		}
-	}
+  plugins: [tailwindcss(), sveltekit()],
+  server: {
+    proxy: {
+      '/api': {
+        target: 'http://localhost:9514',
+        changeOrigin: true
+      }
+    }
+  }
 });

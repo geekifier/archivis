@@ -295,8 +295,8 @@ impl<S: StorageBackend> MergeService<S> {
         let use_secondary = match options.prefer_metadata_from {
             MergePreference::Primary => false,
             MergePreference::Secondary => true,
-            MergePreference::HigherConfidence => {
-                secondary.book.metadata_confidence > primary.book.metadata_confidence
+            MergePreference::HigherIngestQuality => {
+                secondary.book.ingest_quality_score > primary.book.ingest_quality_score
             }
         };
 
@@ -345,10 +345,10 @@ impl<S: StorageBackend> MergeService<S> {
             }
         }
 
-        // Always use max confidence
-        book.metadata_confidence = book
-            .metadata_confidence
-            .max(secondary.book.metadata_confidence);
+        // Always keep the highest import-time quality score.
+        book.ingest_quality_score = book
+            .ingest_quality_score
+            .max(secondary.book.ingest_quality_score);
 
         BookRepository::update(&self.db_pool, &book).await?;
         debug!(primary_id = %primary_id, preference = %options.prefer_metadata_from, "merged metadata fields");

@@ -249,7 +249,7 @@ mod tests {
             Arc::clone(&provider_registry),
             Arc::new(TestSettings),
         ));
-        let identify_service = Arc::new(archivis_tasks::identify::IdentificationService::new(
+        let resolve_service = Arc::new(archivis_tasks::resolve::ResolutionService::new(
             db_pool.clone(),
             resolver,
             storage.clone(),
@@ -275,7 +275,7 @@ mod tests {
             auth_service,
             storage,
             provider_registry,
-            identify_service,
+            resolve_service,
             merge_service,
             ApiConfig {
                 data_dir: dir.to_path_buf(),

@@ -166,14 +166,16 @@ impl ConfigService {
         let mut updated_keys = Vec::new();
         let mut requires_restart = false;
 
-        for (key, value) in updates {
+        for (requested_key, value) in updates {
+            let key = registry::canonical_setting_key(requested_key);
+
             let Some(meta) = registry::get_setting_meta(key) else {
-                return Err(format!("unknown setting: {key}"));
+                return Err(format!("unknown setting: {requested_key}"));
             };
 
             if meta.scope == SettingScope::Bootstrap {
                 return Err(format!(
-                    "\"{key}\" is a bootstrap setting \
+                    "\"{requested_key}\" is a bootstrap setting \
                      — change it via config file, environment variable, or CLI flag"
                 ));
             }
@@ -197,7 +199,7 @@ impl ConfigService {
 
                 // Update in-memory state
                 let mut configured = self.configured.write().expect("configured lock poisoned");
-                configured.insert(key.clone(), value.clone());
+                configured.insert(key.to_string(), value.clone());
                 drop(configured);
 
                 // Update effective config unless an env/CLI override is active.
@@ -206,17 +208,17 @@ impl ConfigService {
                         .effective_config
                         .write()
                         .expect("effective lock poisoned");
-                    effective.insert(key.clone(), value.clone());
+                    effective.insert(key.to_string(), value.clone());
                 }
 
                 let mut sources = self
                     .configured_sources
                     .write()
                     .expect("sources lock poisoned");
-                sources.insert(key.clone(), ConfigSource::Database);
+                sources.insert(key.to_string(), ConfigSource::Database);
             }
 
-            updated_keys.push(key.clone());
+            updated_keys.push(key.to_string());
         }
 
         Ok(UpdateResult {
@@ -267,10 +269,11 @@ impl ConfigService {
 
 impl SettingsReader for ConfigService {
     fn get_setting(&self, key: &str) -> Option<serde_json::Value> {
+        let canonical = registry::canonical_setting_key(key);
         self.effective_config
             .read()
             .expect("effective lock poisoned")
-            .get(key)
+            .get(canonical)
             .cloned()
     }
 }
@@ -473,5 +476,29 @@ mod tests {
             svc.get_setting(TEST_KEY),
             Some(serde_json::Value::Bool(true))
         );
+    }
+
+    #[tokio::test]
+    async fn canonical_setting_updates_store_under_same_key() {
+        let canonical = "metadata.auto_apply_threshold";
+
+        let mut baseline = HashMap::new();
+        baseline.insert(canonical.to_string(), serde_json::json!(0.85));
+
+        let (svc, _tmp) = test_service(baseline).await;
+
+        let mut updates = HashMap::new();
+        updates.insert(canonical.to_string(), serde_json::json!(0.91));
+        let result = svc.update(&updates).await.unwrap();
+
+        assert_eq!(result.updated, vec![canonical.to_string()]);
+        assert_eq!(svc.get_setting(canonical), Some(serde_json::json!(0.91)));
+
+        let entry = svc
+            .get_all_entries()
+            .into_iter()
+            .find(|e| e.key == canonical)
+            .unwrap();
+        assert_eq!(entry.value, serde_json::json!(0.91));
     }
 }

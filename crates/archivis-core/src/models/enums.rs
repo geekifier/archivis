@@ -107,6 +107,80 @@ impl fmt::Display for MetadataStatus {
     }
 }
 
+/// Internal lifecycle state for provider resolution work.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResolutionState {
+    #[default]
+    Pending,
+    Running,
+    Done,
+    Failed,
+}
+
+impl fmt::Display for ResolutionState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Pending => write!(f, "pending"),
+            Self::Running => write!(f, "running"),
+            Self::Done => write!(f, "done"),
+            Self::Failed => write!(f, "failed"),
+        }
+    }
+}
+
+impl FromStr for ResolutionState {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().replace('-', "_").as_str() {
+            "pending" => Ok(Self::Pending),
+            "running" => Ok(Self::Running),
+            "done" => Ok(Self::Done),
+            "failed" => Ok(Self::Failed),
+            _ => Err(format!("unknown resolution state: {s}")),
+        }
+    }
+}
+
+/// Internal outcome for the last completed resolution attempt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResolutionOutcome {
+    Confirmed,
+    Enriched,
+    Disputed,
+    Ambiguous,
+    Unmatched,
+}
+
+impl fmt::Display for ResolutionOutcome {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Confirmed => write!(f, "confirmed"),
+            Self::Enriched => write!(f, "enriched"),
+            Self::Disputed => write!(f, "disputed"),
+            Self::Ambiguous => write!(f, "ambiguous"),
+            Self::Unmatched => write!(f, "unmatched"),
+        }
+    }
+}
+
+impl FromStr for ResolutionOutcome {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().replace('-', "_").as_str() {
+            "confirmed" => Ok(Self::Confirmed),
+            "enriched" => Ok(Self::Enriched),
+            "disputed" => Ok(Self::Disputed),
+            "ambiguous" => Ok(Self::Ambiguous),
+            "unmatched" => Ok(Self::Unmatched),
+            _ => Err(format!("unknown resolution outcome: {s}")),
+        }
+    }
+}
+
 impl FromStr for MetadataStatus {
     type Err = String;
 
@@ -261,6 +335,34 @@ mod tests {
         assert_eq!(json, r#""epub""#);
         let deserialized: BookFormat = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized, format);
+    }
+
+    #[test]
+    fn resolution_state_roundtrip() {
+        assert_eq!(
+            "pending".parse::<ResolutionState>().unwrap(),
+            ResolutionState::Pending
+        );
+        assert_eq!(ResolutionState::Running.to_string(), "running");
+
+        let json = serde_json::to_string(&ResolutionState::Done).unwrap();
+        assert_eq!(json, r#""done""#);
+        let deserialized: ResolutionState = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, ResolutionState::Done);
+    }
+
+    #[test]
+    fn resolution_outcome_roundtrip() {
+        assert_eq!(
+            "unmatched".parse::<ResolutionOutcome>().unwrap(),
+            ResolutionOutcome::Unmatched
+        );
+        assert_eq!(ResolutionOutcome::Ambiguous.to_string(), "ambiguous");
+
+        let json = serde_json::to_string(&ResolutionOutcome::Confirmed).unwrap();
+        assert_eq!(json, r#""confirmed""#);
+        let deserialized: ResolutionOutcome = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, ResolutionOutcome::Confirmed);
     }
 
     #[test]

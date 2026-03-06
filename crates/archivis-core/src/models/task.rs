@@ -11,7 +11,7 @@ use uuid::Uuid;
 pub enum TaskType {
     ImportFile,
     ImportDirectory,
-    IdentifyBook,
+    ResolveBook,
     ScanIsbn,
 }
 
@@ -20,7 +20,7 @@ impl fmt::Display for TaskType {
         match self {
             Self::ImportFile => write!(f, "import_file"),
             Self::ImportDirectory => write!(f, "import_directory"),
-            Self::IdentifyBook => write!(f, "identify_book"),
+            Self::ResolveBook => write!(f, "resolve_book"),
             Self::ScanIsbn => write!(f, "scan_isbn"),
         }
     }
@@ -33,7 +33,7 @@ impl FromStr for TaskType {
         match s {
             "import_file" => Ok(Self::ImportFile),
             "import_directory" => Ok(Self::ImportDirectory),
-            "identify_book" => Ok(Self::IdentifyBook),
+            "resolve_book" => Ok(Self::ResolveBook),
             "scan_isbn" => Ok(Self::ScanIsbn),
             other => Err(format!("unknown task type: {other}")),
         }
@@ -156,7 +156,7 @@ mod tests {
     fn task_type_display_and_parse() {
         assert_eq!(TaskType::ImportFile.to_string(), "import_file");
         assert_eq!(TaskType::ImportDirectory.to_string(), "import_directory");
-        assert_eq!(TaskType::IdentifyBook.to_string(), "identify_book");
+        assert_eq!(TaskType::ResolveBook.to_string(), "resolve_book");
         assert_eq!(TaskType::ScanIsbn.to_string(), "scan_isbn");
         assert_eq!(
             "import_file".parse::<TaskType>().unwrap(),
@@ -167,8 +167,8 @@ mod tests {
             TaskType::ImportDirectory,
         );
         assert_eq!(
-            "identify_book".parse::<TaskType>().unwrap(),
-            TaskType::IdentifyBook,
+            "resolve_book".parse::<TaskType>().unwrap(),
+            TaskType::ResolveBook,
         );
         assert_eq!("scan_isbn".parse::<TaskType>().unwrap(), TaskType::ScanIsbn,);
         assert!("bogus".parse::<TaskType>().is_err());
@@ -182,9 +182,9 @@ mod tests {
         let deserialized: TaskType = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized, tt);
 
-        let tt2 = TaskType::IdentifyBook;
+        let tt2 = TaskType::ResolveBook;
         let json2 = serde_json::to_string(&tt2).unwrap();
-        assert_eq!(json2, r#""identify_book""#);
+        assert_eq!(json2, r#""resolve_book""#);
         let deserialized2: TaskType = serde_json::from_str(&json2).unwrap();
         assert_eq!(deserialized2, tt2);
 

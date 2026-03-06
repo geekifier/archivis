@@ -5,7 +5,8 @@ use uuid::Uuid;
 use validator::Validate;
 
 use archivis_core::models::{
-    Book, BookFile, BookFormat, Identifier, IdentifierType, MetadataSource, MetadataStatus, Tag,
+    Book, BookFile, BookFormat, FieldProvenance, Identifier, IdentifierType, MetadataProvenance,
+    MetadataSource, MetadataStatus, ResolutionOutcome, ResolutionState, Tag,
 };
 use archivis_db::{BookAuthorEntry, BookSeriesEntry, BookWithRelations, PaginatedResult};
 
@@ -72,14 +73,29 @@ pub struct UpdateBookRequest {
     #[validate(range(min = 0.0, max = 5.0))]
     pub rating: Option<f32>,
     pub page_count: Option<i32>,
-    #[schema(value_type = Option<String>)]
-    pub metadata_status: Option<MetadataStatus>,
     /// Set or clear the publisher. Pass a UUID to set, `null` to clear.
     /// Omit entirely to leave unchanged.
     #[serde(default, deserialize_with = "deserialize_optional_field")]
     #[schema(value_type = Option<String>)]
     #[allow(clippy::option_option)]
     pub publisher_id: Option<Option<Uuid>>,
+}
+
+/// Request body for `POST /api/books/{id}/protect-fields` and `unprotect-fields`.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct FieldProtectionRequest {
+    /// Fields to protect or unprotect.
+    /// Supported values: `title`, `subtitle`, `description`, `authors`, `series`,
+    /// `publisher`, `publication_date`, `language`, `page_count`, `cover`.
+    pub fields: Vec<String>,
+}
+
+/// Request body for `POST /api/books/{id}/override-status`.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct OverrideStatusRequest {
+    /// The metadata status to set.
+    #[schema(value_type = String)]
+    pub metadata_status: MetadataStatus,
 }
 
 /// A single author link in a set-authors request.
@@ -169,9 +185,6 @@ pub struct BatchUpdateBooksRequest {
 pub struct BatchBookFields {
     /// Set language for all books.
     pub language: Option<String>,
-    /// Set metadata status for all books.
-    #[schema(value_type = Option<String>)]
-    pub metadata_status: Option<MetadataStatus>,
     /// Set rating for all books (0.0 -- 5.0).
     #[validate(range(min = 0.0, max = 5.0))]
     pub rating: Option<f32>,
@@ -249,7 +262,12 @@ pub struct BookSummary {
     pub page_count: Option<i32>,
     #[schema(value_type = String)]
     pub metadata_status: MetadataStatus,
-    pub metadata_confidence: f32,
+    #[schema(value_type = String)]
+    pub resolution_state: ResolutionState,
+    #[schema(value_type = Option<String>)]
+    pub resolution_outcome: Option<ResolutionOutcome>,
+    pub metadata_locked: bool,
+    pub ingest_quality_score: f32,
     pub has_cover: bool,
     /// Populated when `?include=authors`.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -284,7 +302,13 @@ pub struct BookDetail {
     pub page_count: Option<i32>,
     #[schema(value_type = String)]
     pub metadata_status: MetadataStatus,
-    pub metadata_confidence: f32,
+    #[schema(value_type = String)]
+    pub resolution_state: ResolutionState,
+    #[schema(value_type = Option<String>)]
+    pub resolution_outcome: Option<ResolutionOutcome>,
+    pub metadata_locked: bool,
+    pub metadata_provenance: MetadataProvenanceResponse,
+    pub ingest_quality_score: f32,
     pub has_cover: bool,
     pub authors: Vec<AuthorEntry>,
     pub series: Vec<SeriesEntry>,
@@ -339,6 +363,37 @@ pub struct IdentifierEntry {
     pub confidence: f32,
 }
 
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct FieldProvenanceResponse {
+    #[schema(value_type = Object)]
+    pub origin: MetadataSource,
+    pub protected: bool,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct MetadataProvenanceResponse {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<FieldProvenanceResponse>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subtitle: Option<FieldProvenanceResponse>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<FieldProvenanceResponse>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub authors: Option<FieldProvenanceResponse>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub series: Option<FieldProvenanceResponse>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub publisher: Option<FieldProvenanceResponse>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub publication_date: Option<FieldProvenanceResponse>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub language: Option<FieldProvenanceResponse>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub page_count: Option<FieldProvenanceResponse>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cover: Option<FieldProvenanceResponse>,
+}
+
 /// Paginated list of books.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct PaginatedBooks {
@@ -368,7 +423,11 @@ impl From<BookWithRelations> for BookDetail {
             rating: bwr.book.rating,
             page_count: bwr.book.page_count,
             metadata_status: bwr.book.metadata_status,
-            metadata_confidence: bwr.book.metadata_confidence,
+            resolution_state: bwr.book.resolution_state,
+            resolution_outcome: bwr.book.resolution_outcome,
+            metadata_locked: bwr.book.metadata_locked,
+            metadata_provenance: bwr.book.metadata_provenance.into(),
+            ingest_quality_score: bwr.book.ingest_quality_score,
             has_cover: bwr.book.cover_path.is_some(),
             authors: bwr.authors.into_iter().map(AuthorEntry::from).collect(),
             series: bwr.series.into_iter().map(SeriesEntry::from).collect(),
@@ -398,7 +457,10 @@ impl From<Book> for BookSummary {
             rating: book.rating,
             page_count: book.page_count,
             metadata_status: book.metadata_status,
-            metadata_confidence: book.metadata_confidence,
+            resolution_state: book.resolution_state,
+            resolution_outcome: book.resolution_outcome,
+            metadata_locked: book.metadata_locked,
+            ingest_quality_score: book.ingest_quality_score,
             has_cover: book.cover_path.is_some(),
             authors: None,
             series: None,
@@ -463,6 +525,32 @@ impl From<Identifier> for IdentifierEntry {
             value: ident.value,
             source: ident.source,
             confidence: ident.confidence,
+        }
+    }
+}
+
+impl From<FieldProvenance> for FieldProvenanceResponse {
+    fn from(provenance: FieldProvenance) -> Self {
+        Self {
+            origin: provenance.origin,
+            protected: provenance.protected,
+        }
+    }
+}
+
+impl From<MetadataProvenance> for MetadataProvenanceResponse {
+    fn from(provenance: MetadataProvenance) -> Self {
+        Self {
+            title: provenance.title.map(Into::into),
+            subtitle: provenance.subtitle.map(Into::into),
+            description: provenance.description.map(Into::into),
+            authors: provenance.authors.map(Into::into),
+            series: provenance.series.map(Into::into),
+            publisher: provenance.publisher.map(Into::into),
+            publication_date: provenance.publication_date.map(Into::into),
+            language: provenance.language.map(Into::into),
+            page_count: provenance.page_count.map(Into::into),
+            cover: provenance.cover.map(Into::into),
         }
     }
 }

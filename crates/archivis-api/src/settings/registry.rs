@@ -40,9 +40,21 @@ pub fn all_settings() -> &'static [SettingMeta] {
     SETTINGS
 }
 
+/// Return the canonical setting key.
+pub fn canonical_setting_key(key: &str) -> &str {
+    key
+}
+
+/// Return legacy aliases that should resolve to the given canonical key.
+pub fn legacy_setting_keys(key: &str) -> &'static [&'static str] {
+    let _ = key;
+    &[]
+}
+
 /// Look up a setting by key.
 pub fn get_setting_meta(key: &str) -> Option<&'static SettingMeta> {
-    SETTINGS.iter().find(|s| s.key == key)
+    let canonical = canonical_setting_key(key);
+    SETTINGS.iter().find(|s| s.key == canonical)
 }
 
 static SETTINGS: &[SettingMeta] = &[
@@ -137,9 +149,9 @@ static SETTINGS: &[SettingMeta] = &[
         options: None,
     },
     SettingMeta {
-        key: "metadata.auto_identify_threshold",
-        label: "Auto-Identify Threshold",
-        description: "Auto-identify books after import when confidence is below this threshold",
+        key: "metadata.auto_apply_threshold",
+        label: "Auto-Apply Threshold",
+        description: "Automatically apply a resolved candidate when its score meets this threshold",
         section: "metadata",
         value_type: SettingType::Float,
         scope: SettingScope::Runtime,
@@ -148,9 +160,9 @@ static SETTINGS: &[SettingMeta] = &[
         options: None,
     },
     SettingMeta {
-        key: "metadata.max_concurrent_identifies",
-        label: "Max Concurrent Identifies",
-        description: "Maximum concurrent identification tasks",
+        key: "metadata.max_concurrent_resolutions",
+        label: "Max Concurrent Resolutions",
+        description: "Maximum concurrent metadata resolution tasks",
         section: "metadata",
         value_type: SettingType::Integer,
         scope: SettingScope::Runtime,

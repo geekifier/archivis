@@ -1,0 +1,32 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT run_id, disputes, status FROM identification_candidates WHERE id = 'candidate-1'",
+  "describe": {
+    "columns": [
+      {
+        "name": "run_id",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "disputes",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "status",
+        "ordinal": 2,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "c949b8cdad6357d6788b2af327dc1706f52b3c8b4e8dc613f5ddcf37ee348b22"
+}

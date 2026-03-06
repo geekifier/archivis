@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT resolution_state, resolution_outcome, resolution_requested_at, resolution_requested_reason, metadata_locked, metadata_provenance FROM books WHERE id = 'book-1'",
+  "describe": {
+    "columns": [
+      {
+        "name": "resolution_state",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "resolution_outcome",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "resolution_requested_at",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "resolution_requested_reason",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "metadata_locked",
+        "ordinal": 4,
+        "type_info": "Integer"
+      },
+      {
+        "name": "metadata_provenance",
+        "ordinal": 5,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      true,
+      false,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "7233eb39768a0630c5e7250d4f4c1c94dfb131af95bd74e5bc4bfe34f658ad79"
+}

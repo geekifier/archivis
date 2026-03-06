@@ -19,7 +19,7 @@
 
 use archivis_core::errors::TaskError;
 use archivis_core::models::{Identifier, IdentifierType, MetadataSource};
-use archivis_db::{BookFileRepository, DbPool, IdentifierRepository};
+use archivis_db::{BookFileRepository, BookRepository, DbPool, IdentifierRepository};
 use archivis_formats::content_text::ContentScanConfig;
 use archivis_formats::isbn_scan::{scan_text_for_isbns, ScannedIsbn};
 use archivis_storage::StorageBackend;
@@ -312,6 +312,14 @@ impl<S: StorageBackend> IsbnScanService<S> {
             isbns_stored = isbns_stored,
             "ISBN content scan complete"
         );
+
+        if isbns_stored > 0 {
+            BookRepository::mark_resolution_pending(&self.db_pool, book_id, "isbn_scan")
+                .await
+                .map_err(|e| {
+                    TaskError::Failed(format!("failed to mark resolution pending: {e}"))
+                })?;
+        }
 
         Ok(IsbnScanResult {
             book_id,

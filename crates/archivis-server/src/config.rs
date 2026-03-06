@@ -102,10 +102,10 @@ pub struct MetadataConfig {
     pub open_library: OpenLibraryConfig,
     /// Hardcover provider settings.
     pub hardcover: HardcoverConfig,
-    /// Auto-identify books after import when confidence is below this threshold.
-    pub auto_identify_threshold: f32,
-    /// Maximum concurrent identification tasks.
-    pub max_concurrent_identifies: usize,
+    /// Automatically apply a resolved candidate when its score meets this threshold.
+    pub auto_apply_threshold: f32,
+    /// Maximum concurrent metadata resolution tasks.
+    pub max_concurrent_resolutions: usize,
     /// How strictly to score embedded metadata quality.
     pub scoring_profile: ScoringProfile,
 }
@@ -117,8 +117,8 @@ impl Default for MetadataConfig {
             contact_email: None,
             open_library: OpenLibraryConfig::default(),
             hardcover: HardcoverConfig::default(),
-            auto_identify_threshold: 0.85,
-            max_concurrent_identifies: 2,
+            auto_apply_threshold: 0.85,
+            max_concurrent_resolutions: 2,
             scoring_profile: ScoringProfile::default(),
         }
     }
@@ -430,12 +430,20 @@ pub fn detect_env_overrides(cli: &Cli) -> HashMap<String, ConfigOverride> {
         ("metadata.enabled", "ARCHIVIS_METADATA__ENABLED"),
         ("metadata.contact_email", "ARCHIVIS_METADATA__CONTACT_EMAIL"),
         (
-            "metadata.auto_identify_threshold",
+            "metadata.auto_apply_threshold",
             "ARCHIVIS_METADATA__AUTO_IDENTIFY_THRESHOLD",
         ),
         (
-            "metadata.max_concurrent_identifies",
+            "metadata.max_concurrent_resolutions",
             "ARCHIVIS_METADATA__MAX_CONCURRENT_IDENTIFIES",
+        ),
+        (
+            "metadata.auto_apply_threshold",
+            "ARCHIVIS_METADATA__AUTO_APPLY_THRESHOLD",
+        ),
+        (
+            "metadata.max_concurrent_resolutions",
+            "ARCHIVIS_METADATA__MAX_CONCURRENT_RESOLUTIONS",
         ),
         (
             "metadata.scoring_profile",
@@ -553,9 +561,13 @@ pub fn detect_configured_sources(
     let mut sources = HashMap::new();
 
     for meta in archivis_api::settings::registry::all_settings() {
+        let has_db_value = db_keys.contains(&meta.key.to_string())
+            || archivis_api::settings::registry::legacy_setting_keys(meta.key)
+                .iter()
+                .any(|legacy| db_keys.contains(&(*legacy).to_string()));
         let source = match meta.scope {
             SettingScope::Bootstrap => {
-                if db_keys.contains(&meta.key.to_string()) {
+                if has_db_value {
                     ConfigSource::Database
                 } else if file_flat.get(meta.key) != default_flat.get(meta.key) {
                     ConfigSource::File
@@ -564,7 +576,7 @@ pub fn detect_configured_sources(
                 }
             }
             SettingScope::Runtime => {
-                if db_keys.contains(&meta.key.to_string()) {
+                if has_db_value {
                     ConfigSource::Database
                 } else {
                     ConfigSource::Default
@@ -635,18 +647,18 @@ fn apply_setting_to_config(config: &mut AppConfig, key: &str, value: &serde_json
             serde_json::Value::String(s) => config.metadata.contact_email = Some(s.clone()),
             _ => {}
         },
-        "metadata.auto_identify_threshold" => {
+        "metadata.auto_apply_threshold" => {
             if let Some(f) = value.as_f64() {
                 #[allow(clippy::cast_possible_truncation)]
                 {
-                    config.metadata.auto_identify_threshold = f as f32;
+                    config.metadata.auto_apply_threshold = f as f32;
                 }
             }
         }
-        "metadata.max_concurrent_identifies" => {
+        "metadata.max_concurrent_resolutions" => {
             if let Some(n) = value.as_u64() {
                 if let Ok(v) = usize::try_from(n) {
-                    config.metadata.max_concurrent_identifies = v;
+                    config.metadata.max_concurrent_resolutions = v;
                 }
             }
         }
@@ -931,8 +943,8 @@ frontend_dir = "/opt/archivis/frontend"
         assert!(!config.hardcover.enabled);
         assert!(config.hardcover.api_token.is_none());
         assert_eq!(config.hardcover.max_requests_per_minute, 50);
-        assert!((config.auto_identify_threshold - 0.85).abs() < f32::EPSILON);
-        assert_eq!(config.max_concurrent_identifies, 2);
+        assert!((config.auto_apply_threshold - 0.85).abs() < f32::EPSILON);
+        assert_eq!(config.max_concurrent_resolutions, 2);
     }
 
     #[test]
@@ -965,6 +977,23 @@ frontend_dir = "/opt/archivis/frontend"
         assert_eq!(sources["isbn_scan.confidence"], ConfigSource::Database);
         // Unchanged bootstrap key → Default
         assert_eq!(sources["listen_address"], ConfigSource::Default);
+    }
+
+    #[test]
+    fn detect_configured_sources_marks_runtime_db_keys() {
+        use archivis_api::settings::service::ConfigSource;
+
+        let default_flat = flatten_config(&AppConfig::default());
+        let sources = detect_configured_sources(
+            &default_flat,
+            &default_flat,
+            &["metadata.auto_apply_threshold".to_string()],
+        );
+
+        assert_eq!(
+            sources["metadata.auto_apply_threshold"],
+            ConfigSource::Database
+        );
     }
 
     /// Every setting in the registry must be backed by an `AppConfig` field so
@@ -1007,5 +1036,15 @@ frontend_dir = "/opt/archivis/frontend"
                 SettingType::OptionalString => {} // null or string, both fine
             }
         }
+    }
+
+    #[test]
+    fn flatten_config_uses_task_11_metadata_setting_keys() {
+        let flat = flatten_config(&AppConfig::default());
+
+        assert!(flat.contains_key("metadata.auto_apply_threshold"));
+        assert!(flat.contains_key("metadata.max_concurrent_resolutions"));
+        assert!(!flat.contains_key("metadata.auto_identify_threshold"));
+        assert!(!flat.contains_key("metadata.max_concurrent_identifies"));
     }
 }

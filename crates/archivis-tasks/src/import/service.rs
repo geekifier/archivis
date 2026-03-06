@@ -2,7 +2,8 @@ use std::fmt::Write as _;
 use std::path::Path;
 
 use archivis_core::models::{
-    Book, BookFile, BookFormat, DuplicateLink, Identifier, MetadataSource,
+    Book, BookFile, BookFormat, DuplicateLink, FieldProvenance, Identifier, MetadataProvenance,
+    MetadataSource,
 };
 use archivis_db::{
     AuthorRepository, BookFileRepository, BookRepository, DbPool, DuplicateRepository,
@@ -161,6 +162,8 @@ impl<S: StorageBackend> ImportService<S> {
             fuzzy_duplicate
         };
 
+        BookRepository::mark_resolution_pending(&self.db_pool, book_id, "import").await?;
+
         Ok(ImportResult {
             book_id,
             book_file_id: book_file,
@@ -290,8 +293,9 @@ impl<S: StorageBackend> ImportService<S> {
             book.language.clone_from(&embedded.language);
             book.page_count = embedded.page_count;
             book.metadata_status = score.status;
-            book.metadata_confidence = score.confidence;
+            book.ingest_quality_score = score.confidence;
             book.cover_path = cover_path;
+            book.metadata_provenance = initial_metadata_provenance(&book, embedded, parsed);
 
             BookRepository::create(&self.db_pool, &book).await?;
             BookFileRepository::create(&self.db_pool, &book_file).await?;
@@ -623,6 +627,76 @@ fn resolve_author(embedded: &ExtractedMetadata, parsed: &ParsedFilename) -> Stri
         .or(parsed.author.as_deref())
         .unwrap_or("Unknown Author")
         .to_string()
+}
+
+fn initial_metadata_provenance(
+    book: &Book,
+    embedded: &ExtractedMetadata,
+    parsed: &ParsedFilename,
+) -> MetadataProvenance {
+    MetadataProvenance {
+        title: Some(protected_field(title_source(embedded))),
+        subtitle: book
+            .subtitle
+            .as_ref()
+            .and(embedded.subtitle.as_ref())
+            .map(|_| protected_field(embedded.source.clone())),
+        description: book
+            .description
+            .as_ref()
+            .and(embedded.description.as_ref())
+            .map(|_| protected_field(embedded.source.clone())),
+        authors: authors_source(embedded, parsed).map(protected_field),
+        series: series_source(embedded, parsed).map(protected_field),
+        publisher: None,
+        publication_date: None,
+        language: book
+            .language
+            .as_ref()
+            .map(|_| protected_field(embedded.source.clone())),
+        page_count: book
+            .page_count
+            .map(|_| protected_field(embedded.source.clone())),
+        cover: book
+            .cover_path
+            .as_ref()
+            .map(|_| protected_field(embedded.source.clone())),
+    }
+}
+
+fn title_source(embedded: &ExtractedMetadata) -> MetadataSource {
+    if embedded.title.is_some() {
+        embedded.source.clone()
+    } else {
+        MetadataSource::Filename
+    }
+}
+
+fn authors_source(embedded: &ExtractedMetadata, parsed: &ParsedFilename) -> Option<MetadataSource> {
+    if !embedded.authors.is_empty() {
+        Some(embedded.source.clone())
+    } else if parsed.author.is_some() {
+        Some(MetadataSource::Filename)
+    } else {
+        None
+    }
+}
+
+fn series_source(embedded: &ExtractedMetadata, parsed: &ParsedFilename) -> Option<MetadataSource> {
+    if embedded.series.is_some() {
+        Some(embedded.source.clone())
+    } else if parsed.series.is_some() {
+        Some(MetadataSource::Filename)
+    } else {
+        None
+    }
+}
+
+fn protected_field(origin: MetadataSource) -> FieldProvenance {
+    FieldProvenance {
+        origin,
+        protected: true,
+    }
 }
 
 /// Compute the SHA-256 hash of data, returning a hex-encoded string.

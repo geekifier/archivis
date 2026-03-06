@@ -1,9 +1,19 @@
 use std::io::Write;
 use std::path::Path;
+use std::sync::Arc;
 
-use archivis_db::{BookFileRepository, BookRepository, DuplicateRepository, SettingRepository};
+use archivis_core::models::{
+    Identifier, IdentifierType, MetadataSource, ResolutionState, Task, TaskType,
+};
+use archivis_db::{
+    BookFileRepository, BookRepository, DuplicateRepository, IdentifierRepository,
+    SettingRepository, TaskRepository,
+};
 use archivis_storage::local::LocalStorage;
 use archivis_tasks::import::{ImportConfig, ImportError, ImportService, ThumbnailSizes};
+use archivis_tasks::isbn_scan::{IsbnScanConfig, IsbnScanService};
+use archivis_tasks::queue::{ProgressSender, TaskQueue, Worker};
+use archivis_tasks::workers::{ImportFileWorker, IsbnScanWorker};
 use tempfile::TempDir;
 
 /// Create a test EPUB with an SVG cover image (EPUB 3 properties="cover-image").
@@ -233,6 +243,20 @@ async fn get_pool(tmp: &TempDir) -> archivis_db::DbPool {
     archivis_db::create_pool(&db_path).await.unwrap()
 }
 
+async fn progress_sender_for_task(
+    queue: &TaskQueue,
+    pool: &archivis_db::DbPool,
+    task_type: TaskType,
+    payload: serde_json::Value,
+) -> ProgressSender {
+    let task = Task::new(task_type, payload);
+    let task_id = task.id;
+
+    TaskRepository::create(pool, &task).await.unwrap();
+
+    queue.progress_sender().for_task(task_id)
+}
+
 #[tokio::test]
 async fn import_valid_epub() {
     let tmp = TempDir::new().unwrap();
@@ -270,6 +294,131 @@ async fn import_valid_epub() {
     let storage_dir = tmp.path().join("storage");
     assert!(storage_dir.join(storage_path).exists());
 
+    pool.close().await;
+}
+
+#[tokio::test]
+async fn import_sets_pending_resolution_and_protected_provenance() {
+    let tmp = TempDir::new().unwrap();
+    let service = setup_test_env(&tmp).await;
+
+    let epub_bytes = create_test_epub("Dune", "Frank Herbert");
+    let epub_path = tmp.path().join("dune.epub");
+    std::fs::write(&epub_path, &epub_bytes).unwrap();
+
+    let result = service.import_file(&epub_path).await.unwrap();
+    let pool = get_pool(&tmp).await;
+    let book = BookRepository::get_by_id(&pool, result.book_id)
+        .await
+        .unwrap();
+
+    assert_eq!(book.resolution_state, ResolutionState::Pending);
+    assert_eq!(book.resolution_requested_reason.as_deref(), Some("import"));
+    assert!(!book.metadata_locked);
+
+    let title = book.metadata_provenance.title.as_ref().unwrap();
+    assert_eq!(title.origin, MetadataSource::Embedded);
+    assert!(title.protected);
+
+    let authors = book.metadata_provenance.authors.as_ref().unwrap();
+    assert_eq!(authors.origin, MetadataSource::Embedded);
+    assert!(authors.protected);
+
+    let language = book.metadata_provenance.language.as_ref().unwrap();
+    assert_eq!(language.origin, MetadataSource::Embedded);
+    assert!(language.protected);
+
+    pool.close().await;
+}
+
+#[tokio::test]
+async fn import_worker_with_scan_on_import_enqueues_only_scan_child() {
+    let tmp = TempDir::new().unwrap();
+    let import_service = Arc::new(setup_test_env(&tmp).await);
+    let worker = ImportFileWorker::new(Arc::clone(&import_service));
+    let pool = get_pool(&tmp).await;
+    let (queue_inner, rx) = TaskQueue::new(pool.clone());
+    let queue = Arc::new(queue_inner);
+    let worker = worker.with_isbn_scan(Arc::clone(&queue), true);
+
+    let epub_bytes = create_test_epub("Dune", "Frank Herbert");
+    let epub_path = tmp.path().join("dune.epub");
+    std::fs::write(&epub_path, &epub_bytes).unwrap();
+
+    let payload = serde_json::json!({
+        "file_path": epub_path.to_string_lossy(),
+    });
+    let progress =
+        progress_sender_for_task(&queue, &pool, TaskType::ImportFile, payload.clone()).await;
+
+    worker.execute(payload, progress.clone()).await.unwrap();
+
+    let children = TaskRepository::list_children(&pool, progress.task_id())
+        .await
+        .unwrap();
+    assert_eq!(
+        children.len(),
+        1,
+        "import should enqueue only the scan child"
+    );
+    assert_eq!(children[0].task_type, TaskType::ScanIsbn);
+    assert_eq!(children[0].payload["resolve_after_scan"], true);
+
+    drop(rx);
+    pool.close().await;
+}
+
+#[tokio::test]
+async fn manual_isbn_scan_noop_does_not_enqueue_resolution_child() {
+    let tmp = TempDir::new().unwrap();
+    let import_service = setup_test_env(&tmp).await;
+
+    let epub_bytes = create_test_epub("Dune", "Frank Herbert");
+    let epub_path = tmp.path().join("dune.epub");
+    std::fs::write(&epub_path, &epub_bytes).unwrap();
+    let import_result = import_service.import_file(&epub_path).await.unwrap();
+
+    let pool = get_pool(&tmp).await;
+    let existing = Identifier::new(
+        import_result.book_id,
+        IdentifierType::Isbn13,
+        "9780441172719",
+        MetadataSource::Embedded,
+        1.0,
+    );
+    IdentifierRepository::create(&pool, &existing)
+        .await
+        .unwrap();
+
+    let storage = LocalStorage::new(&tmp.path().join("storage"))
+        .await
+        .unwrap();
+    let scan_service = Arc::new(IsbnScanService::new(
+        pool.clone(),
+        storage,
+        IsbnScanConfig::default(),
+    ));
+    let (queue_inner, rx) = TaskQueue::new(pool.clone());
+    let queue = Arc::new(queue_inner);
+    let worker = IsbnScanWorker::new(scan_service).with_resolution_queue(Arc::clone(&queue));
+
+    let payload = serde_json::json!({
+        "book_id": import_result.book_id.to_string(),
+    });
+    let progress =
+        progress_sender_for_task(&queue, &pool, TaskType::ScanIsbn, payload.clone()).await;
+
+    worker.execute(payload, progress.clone()).await.unwrap();
+
+    let children = TaskRepository::list_children(&pool, progress.task_id())
+        .await
+        .unwrap();
+    assert!(
+        children.is_empty(),
+        "scan no-op should not enqueue a resolve child"
+    );
+
+    drop(rx);
     pool.close().await;
 }
 

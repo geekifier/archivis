@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
@@ -73,31 +74,36 @@ impl<S: StorageBackend + 'static> Worker for ImportFileWorker<S> {
                 .send_progress(100, Some("Import complete".into()))
                 .await;
 
-            // Enqueue ISBN content scan as a child task if enabled
-            if self.isbn_scan_on_import {
-                if let Some(queue) = &self.task_queue {
+            if let Some(queue) = &self.task_queue {
+                if self.isbn_scan_on_import {
                     let scan_payload = serde_json::json!({
                         "book_id": result.book_id.to_string(),
+                        "resolve_after_scan": true,
                     });
-                    match queue
-                        .enqueue_child(TaskType::ScanIsbn, scan_payload, progress.task_id())
-                        .await
-                    {
-                        Ok(task_id) => {
-                            tracing::debug!(
-                                %task_id,
-                                book_id = %result.book_id,
-                                "enqueued ISBN scan as child of import",
-                            );
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                book_id = %result.book_id,
-                                error = %e,
-                                "failed to enqueue ISBN scan after import",
-                            );
-                        }
-                    }
+                    log_enqueue_result(
+                        queue
+                            .enqueue_child(TaskType::ScanIsbn, scan_payload, progress.task_id())
+                            .await,
+                        "ISBN scan after import",
+                        Some(result.book_id),
+                        None,
+                    );
+                } else {
+                    let resolve_payload = serde_json::json!({
+                        "book_id": result.book_id.to_string(),
+                    });
+                    log_enqueue_result(
+                        queue
+                            .enqueue_child(
+                                TaskType::ResolveBook,
+                                resolve_payload,
+                                progress.task_id(),
+                            )
+                            .await,
+                        "resolution after import",
+                        Some(result.book_id),
+                        None,
+                    );
                 }
             }
 
@@ -182,36 +188,39 @@ impl<S: StorageBackend + 'static> Worker for ImportDirectoryWorker<S> {
                 .unwrap_or_else(|| "Directory import complete".into());
             progress.send_progress(100, Some(message)).await;
 
-            // Enqueue batch ISBN content scan as a child task for all successfully imported books
-            if self.isbn_scan_on_import && !result.imported.is_empty() {
-                if let Some(queue) = &self.task_queue {
-                    let book_ids: Vec<String> = result
-                        .imported
-                        .iter()
-                        .map(|r| r.book_id.to_string())
-                        .collect();
+            let book_ids = unique_book_ids(result.imported.iter().map(|import| import.book_id));
+            if let Some(queue) = &self.task_queue {
+                if self.isbn_scan_on_import && !book_ids.is_empty() {
+                    let count = book_ids.len();
                     let scan_payload = serde_json::json!({
                         "book_ids": book_ids,
+                        "resolve_after_scan": true,
                     });
-                    match queue
-                        .enqueue_child(TaskType::ScanIsbn, scan_payload, progress.task_id())
-                        .await
-                    {
-                        Ok(task_id) => {
-                            tracing::debug!(
-                                %task_id,
-                                count = book_ids.len(),
-                                "enqueued batch ISBN scan as child of directory import",
-                            );
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                count = result.imported.len(),
-                                error = %e,
-                                "failed to enqueue batch ISBN scan after directory import",
-                            );
-                        }
-                    }
+                    log_enqueue_result(
+                        queue
+                            .enqueue_child(TaskType::ScanIsbn, scan_payload, progress.task_id())
+                            .await,
+                        "batch ISBN scan after directory import",
+                        None,
+                        Some(count),
+                    );
+                } else if !self.isbn_scan_on_import && !book_ids.is_empty() {
+                    let count = book_ids.len();
+                    let resolve_payload = serde_json::json!({
+                        "book_ids": book_ids,
+                    });
+                    log_enqueue_result(
+                        queue
+                            .enqueue_child(
+                                TaskType::ResolveBook,
+                                resolve_payload,
+                                progress.task_id(),
+                            )
+                            .await,
+                        "batch resolution after directory import",
+                        None,
+                        Some(count),
+                    );
                 }
             }
 
@@ -224,6 +233,38 @@ impl<S: StorageBackend + 'static> Worker for ImportDirectoryWorker<S> {
 
             Ok(json)
         })
+    }
+}
+
+fn unique_book_ids<I>(book_ids: I) -> Vec<String>
+where
+    I: IntoIterator<Item = uuid::Uuid>,
+{
+    let mut seen = HashSet::new();
+    let mut unique = Vec::new();
+
+    for book_id in book_ids {
+        if seen.insert(book_id) {
+            unique.push(book_id.to_string());
+        }
+    }
+
+    unique
+}
+
+fn log_enqueue_result(
+    result: Result<uuid::Uuid, TaskError>,
+    action: &str,
+    book_id: Option<uuid::Uuid>,
+    count: Option<usize>,
+) {
+    match result {
+        Ok(task_id) => {
+            tracing::debug!(%task_id, action, ?book_id, ?count, "child task enqueued");
+        }
+        Err(error) => {
+            tracing::warn!(action, ?book_id, ?count, %error, "failed to enqueue child task");
+        }
     }
 }
 

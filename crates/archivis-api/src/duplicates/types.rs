@@ -34,7 +34,7 @@ pub struct MergeRequest {
     pub primary_id: Uuid,
     /// Which book to absorb and delete (the secondary).
     pub secondary_id: Uuid,
-    /// Metadata preference: "primary", "secondary", or "`higher_confidence`".
+    /// Metadata preference: "primary", "secondary", or "`higher_ingest_quality`".
     pub prefer_metadata_from: Option<String>,
 }
 

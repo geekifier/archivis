@@ -15,6 +15,8 @@ pub enum CandidateStatus {
     Applied,
     /// User rejected this candidate.
     Rejected,
+    /// Candidate was invalidated by a newer resolution run.
+    Superseded,
 }
 
 impl fmt::Display for CandidateStatus {
@@ -23,6 +25,7 @@ impl fmt::Display for CandidateStatus {
             Self::Pending => write!(f, "pending"),
             Self::Applied => write!(f, "applied"),
             Self::Rejected => write!(f, "rejected"),
+            Self::Superseded => write!(f, "superseded"),
         }
     }
 }
@@ -35,6 +38,7 @@ impl FromStr for CandidateStatus {
             "pending" => Ok(Self::Pending),
             "applied" => Ok(Self::Applied),
             "rejected" => Ok(Self::Rejected),
+            "superseded" => Ok(Self::Superseded),
             other => Err(format!("unknown candidate status: {other}")),
         }
     }
@@ -49,11 +53,14 @@ impl FromStr for CandidateStatus {
 pub struct IdentificationCandidate {
     pub id: Uuid,
     pub book_id: Uuid,
+    pub run_id: Option<Uuid>,
     pub provider_name: String,
     pub score: f32,
     /// Serialized `ProviderMetadata` from the metadata provider.
     pub metadata: serde_json::Value,
     pub match_reasons: Vec<String>,
+    #[serde(default)]
+    pub disputes: Vec<String>,
     pub status: CandidateStatus,
     pub created_at: DateTime<Utc>,
 }
@@ -70,10 +77,12 @@ impl IdentificationCandidate {
         Self {
             id: Uuid::new_v4(),
             book_id,
+            run_id: None,
             provider_name: provider_name.into(),
             score: score.clamp(0.0, 1.0),
             metadata,
             match_reasons,
+            disputes: Vec::new(),
             status: CandidateStatus::Pending,
             created_at: Utc::now(),
         }
@@ -89,6 +98,7 @@ mod tests {
         assert_eq!(CandidateStatus::Pending.to_string(), "pending");
         assert_eq!(CandidateStatus::Applied.to_string(), "applied");
         assert_eq!(CandidateStatus::Rejected.to_string(), "rejected");
+        assert_eq!(CandidateStatus::Superseded.to_string(), "superseded");
         assert_eq!(
             "pending".parse::<CandidateStatus>().unwrap(),
             CandidateStatus::Pending,
@@ -100,6 +110,10 @@ mod tests {
         assert_eq!(
             "rejected".parse::<CandidateStatus>().unwrap(),
             CandidateStatus::Rejected,
+        );
+        assert_eq!(
+            "superseded".parse::<CandidateStatus>().unwrap(),
+            CandidateStatus::Superseded,
         );
         assert!("bogus".parse::<CandidateStatus>().is_err());
     }
@@ -132,6 +146,8 @@ mod tests {
         assert!((candidate.score - 0.95).abs() < f32::EPSILON);
         assert_eq!(candidate.status, CandidateStatus::Pending);
         assert_eq!(candidate.match_reasons.len(), 1);
+        assert!(candidate.run_id.is_none());
+        assert!(candidate.disputes.is_empty());
     }
 
     #[test]

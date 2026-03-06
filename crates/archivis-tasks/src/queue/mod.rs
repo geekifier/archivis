@@ -8,8 +8,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use archivis_core::errors::TaskError;
-use archivis_core::models::{Task, TaskProgress, TaskStatus, TaskType};
-use archivis_db::{DbPool, TaskRepository};
+use archivis_core::models::{ResolutionRunState, Task, TaskProgress, TaskStatus, TaskType};
+use archivis_db::{
+    BookRepository, CandidateRepository, DbPool, ResolutionRunRepository, TaskRepository,
+};
 use chrono::Utc;
 use tokio::sync::{broadcast, mpsc};
 
@@ -316,6 +318,7 @@ pub async fn recover_tasks(
     pool: &DbPool,
     dispatch_tx: &mpsc::Sender<Task>,
 ) -> Result<usize, TaskError> {
+    let repaired = repair_resolution_lifecycle(pool).await?;
     let tasks = TaskRepository::recover_interrupted(pool)
         .await
         .map_err(|e| TaskError::Internal(e.to_string()))?;
@@ -331,6 +334,192 @@ pub async fn recover_tasks(
     if count > 0 {
         tracing::info!(count, "recovered pending tasks");
     }
+    if repaired.runs > 0 || repaired.books > 0 {
+        tracing::info!(
+            recovered_runs = repaired.runs,
+            reset_books = repaired.books,
+            "repaired resolution lifecycle after restart"
+        );
+    }
 
     Ok(count)
+}
+
+struct ResolutionRecoverySummary {
+    runs: usize,
+    books: usize,
+}
+
+async fn repair_resolution_lifecycle(
+    pool: &DbPool,
+) -> Result<ResolutionRecoverySummary, TaskError> {
+    let mut repaired_runs = 0;
+    for mut run in ResolutionRunRepository::list_running(pool)
+        .await
+        .map_err(|e| TaskError::Internal(e.to_string()))?
+    {
+        let book = BookRepository::get_by_id(pool, run.book_id)
+            .await
+            .map_err(|e| TaskError::Internal(e.to_string()))?;
+
+        if book.resolution_requested_at > run.started_at {
+            CandidateRepository::mark_run_superseded(pool, run.id)
+                .await
+                .map_err(|e| TaskError::Internal(e.to_string()))?;
+            run.state = ResolutionRunState::Superseded;
+            run.decision_code = "superseded".into();
+            run.error = None;
+        } else {
+            run.state = ResolutionRunState::Failed;
+            run.decision_code = "failed".into();
+            run.error = Some("interrupted by restart".into());
+        }
+
+        run.outcome = None;
+        run.finished_at = Some(Utc::now());
+        ResolutionRunRepository::finalize(pool, &run)
+            .await
+            .map_err(|e| TaskError::Internal(e.to_string()))?;
+        repaired_runs += 1;
+    }
+
+    let mut reset_books = 0;
+    for book in BookRepository::list_running_resolution(pool)
+        .await
+        .map_err(|e| TaskError::Internal(e.to_string()))?
+    {
+        if BookRepository::reset_resolution_to_pending(pool, book.id)
+            .await
+            .map_err(|e| TaskError::Internal(e.to_string()))?
+        {
+            reset_books += 1;
+        }
+    }
+
+    Ok(ResolutionRecoverySummary {
+        runs: repaired_runs,
+        books: reset_books,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use archivis_core::models::{
+        Book, CandidateStatus, IdentificationCandidate, ResolutionRun, ResolutionState, Task,
+    };
+    use chrono::Duration;
+
+    async fn test_pool() -> (archivis_db::DbPool, tempfile::TempDir) {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("test.db");
+        let pool = archivis_db::create_pool(&db_path).await.unwrap();
+        archivis_db::run_migrations(&pool).await.unwrap();
+        (pool, dir)
+    }
+
+    #[tokio::test]
+    async fn recover_tasks_repairs_superseded_runs_and_requeues_running_tasks() {
+        let (pool, _dir) = test_pool().await;
+        let requested_at = Utc::now();
+
+        let mut book = Book::new("Recovery Superseded");
+        book.resolution_state = ResolutionState::Running;
+        book.resolution_requested_at = requested_at;
+        BookRepository::create(&pool, &book).await.unwrap();
+
+        let mut run = ResolutionRun::new(book.id, "automatic", serde_json::json!({}));
+        run.state = ResolutionRunState::Running;
+        run.started_at = requested_at - Duration::minutes(5);
+        ResolutionRunRepository::create(&pool, &run).await.unwrap();
+
+        book.last_resolution_run_id = Some(run.id);
+        BookRepository::update(&pool, &book).await.unwrap();
+
+        let mut candidate =
+            IdentificationCandidate::new(book.id, "provider", 0.91, serde_json::json!({}), vec![]);
+        candidate.run_id = Some(run.id);
+        CandidateRepository::create(&pool, &candidate)
+            .await
+            .unwrap();
+
+        let task = Task::new(
+            TaskType::ResolveBook,
+            serde_json::json!({ "book_id": book.id.to_string() }),
+        );
+        TaskRepository::create(&pool, &task).await.unwrap();
+        TaskRepository::update_status(
+            &pool,
+            task.id,
+            TaskStatus::Running,
+            Some(Utc::now()),
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let (dispatch_tx, mut dispatch_rx) = mpsc::channel(4);
+        let count = recover_tasks(&pool, &dispatch_tx).await.unwrap();
+
+        assert_eq!(count, 1);
+        let recovered_task = dispatch_rx.recv().await.unwrap();
+        assert_eq!(recovered_task.id, task.id);
+        assert_eq!(recovered_task.status, TaskStatus::Pending);
+
+        let recovered_task_row = TaskRepository::get_by_id(&pool, task.id).await.unwrap();
+        assert_eq!(recovered_task_row.status, TaskStatus::Pending);
+
+        let recovered_run = ResolutionRunRepository::get_by_id(&pool, run.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(recovered_run.state, ResolutionRunState::Superseded);
+
+        let recovered_candidate = CandidateRepository::get_by_id(&pool, candidate.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(recovered_candidate.status, CandidateStatus::Superseded);
+
+        let recovered_book = BookRepository::get_by_id(&pool, book.id).await.unwrap();
+        assert_eq!(recovered_book.resolution_state, ResolutionState::Pending);
+    }
+
+    #[tokio::test]
+    async fn recover_tasks_marks_interrupted_runs_failed_when_not_superseded() {
+        let (pool, _dir) = test_pool().await;
+        let requested_at = Utc::now();
+
+        let mut book = Book::new("Recovery Failed");
+        book.resolution_state = ResolutionState::Running;
+        book.resolution_requested_at = requested_at;
+        BookRepository::create(&pool, &book).await.unwrap();
+
+        let mut run = ResolutionRun::new(book.id, "automatic", serde_json::json!({}));
+        run.state = ResolutionRunState::Running;
+        run.started_at = requested_at;
+        ResolutionRunRepository::create(&pool, &run).await.unwrap();
+
+        book.last_resolution_run_id = Some(run.id);
+        BookRepository::update(&pool, &book).await.unwrap();
+
+        let (dispatch_tx, _dispatch_rx) = mpsc::channel(1);
+        recover_tasks(&pool, &dispatch_tx).await.unwrap();
+
+        let recovered_run = ResolutionRunRepository::get_by_id(&pool, run.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(recovered_run.state, ResolutionRunState::Failed);
+        assert_eq!(
+            recovered_run.error.as_deref(),
+            Some("interrupted by restart")
+        );
+
+        let recovered_book = BookRepository::get_by_id(&pool, book.id).await.unwrap();
+        assert_eq!(recovered_book.resolution_state, ResolutionState::Pending);
+    }
 }

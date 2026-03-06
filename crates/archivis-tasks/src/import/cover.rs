@@ -20,8 +20,7 @@ pub async fn store_cover(
     book_path_dir: &str,
     cover: &CoverData,
 ) -> Result<String, String> {
-    let ext = media_type_to_extension(&cover.media_type);
-    let cover_path = format!("{book_path_dir}/cover.{ext}");
+    let cover_path = cover_storage_path(book_path_dir, &cover.media_type);
 
     storage
         .store(&cover_path, &cover.bytes)
@@ -29,6 +28,12 @@ pub async fn store_cover(
         .map_err(|e| format!("failed to store cover: {e}"))?;
 
     Ok(cover_path)
+}
+
+/// Build the canonical storage path for a book cover from its directory and media type.
+pub fn cover_storage_path(book_path_dir: &str, media_type: &str) -> String {
+    let ext = media_type_to_extension(media_type);
+    format!("{book_path_dir}/cover.{ext}")
 }
 
 /// Generate small and medium WebP thumbnails from cover image data.

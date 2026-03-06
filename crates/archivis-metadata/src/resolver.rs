@@ -265,7 +265,7 @@ impl MetadataResolver {
     fn with_fixed_threshold(registry: Arc<ProviderRegistry>, threshold: f32) -> Self {
         use crate::test_util::StubSettings;
         let settings = Arc::new(StubSettings::new(vec![(
-            "metadata.auto_identify_threshold",
+            "metadata.auto_apply_threshold",
             serde_json::json!(threshold),
         )]));
         Self { registry, settings }
@@ -281,8 +281,8 @@ impl MetadataResolver {
     #[allow(clippy::cast_possible_truncation)] // threshold is always in 0.0..1.0
     fn auto_apply_threshold(&self) -> f32 {
         self.settings
-            .get_setting("metadata.auto_identify_threshold")
-            .and_then(|v| v.as_f64())
+            .get_setting("metadata.auto_apply_threshold")
+            .and_then(|value| value.as_f64())
             .map_or(DEFAULT_AUTO_APPLY_THRESHOLD, |f| f as f32)
     }
 
@@ -668,6 +668,7 @@ fn score_candidate(
                 .metadata
                 .authors
                 .iter()
+                .filter(|a| matches!(a.role.as_deref(), None | Some("author")))
                 .map(|a| a.name.clone())
                 .collect();
 
@@ -1256,6 +1257,7 @@ mod tests {
     use super::*;
     use crate::errors::ProviderError;
     use crate::provider::MetadataProvider;
+    use crate::test_util::StubSettings;
     use crate::types::{ProviderAuthor, ProviderSeries};
 
     /// Helper to build a minimal `ProviderMetadata`.
@@ -1296,6 +1298,20 @@ mod tests {
             rating: None,
             confidence,
         }
+    }
+
+    #[test]
+    fn auto_apply_threshold_reads_canonical_setting_key() {
+        let registry = Arc::new(ProviderRegistry::new());
+        let resolver = MetadataResolver::new(
+            registry,
+            Arc::new(StubSettings::new(vec![(
+                "metadata.auto_apply_threshold",
+                serde_json::json!(0.92),
+            )])),
+        );
+
+        assert!((resolver.auto_apply_threshold() - 0.92).abs() < f32::EPSILON);
     }
 
     /// A configurable stub provider for testing the resolver.
@@ -3417,7 +3433,7 @@ mod tests {
         );
     }
 
-    // ── Regression tests: identify pipeline hardening ────────────────
+    // ── Regression tests: resolution pipeline hardening ──────────────
 
     /// Regression: fuzzy title + author match alone must NOT trigger auto-apply.
     ///
@@ -4244,6 +4260,58 @@ mod tests {
         assert!(
             !result_scan.auto_apply,
             "scan-only ISBN must not auto-apply"
+        );
+    }
+
+    #[test]
+    fn score_candidate_filters_non_author_roles() {
+        let mut meta = make_metadata(
+            "ol",
+            "The Lady of the Lake",
+            &[],
+            Some("9780316273770"),
+            0.95,
+        );
+        meta.authors = vec![
+            ProviderAuthor {
+                name: "Andrzej Sapkowski".into(),
+                role: Some("author".into()),
+            },
+            ProviderAuthor {
+                name: "David A. French".into(),
+                role: Some("translator".into()),
+            },
+        ];
+
+        let query = MetadataQuery {
+            isbn: Some("9780316273770".into()),
+            ..Default::default()
+        };
+
+        let existing = ExistingBookMetadata {
+            title: Some("The Lady of the Lake".into()),
+            authors: vec!["Andrzej Sapkowski".into()],
+            ..Default::default()
+        };
+
+        let mut candidate = ScoredCandidate {
+            metadata: meta,
+            score: 0.95,
+            provider_name: "open_library".into(),
+            match_reasons: Vec::new(),
+            signals: HashSet::new(),
+            tier: CandidateMatchTier::WeakMatch,
+        };
+
+        score_candidate(&mut candidate, &query, Some(&existing));
+
+        assert!(
+            candidate
+                .match_reasons
+                .iter()
+                .any(|r| r.contains("Author match (100%)")),
+            "author score should be 100%% when translator is excluded; reasons: {:?}",
+            candidate.match_reasons
         );
     }
 }

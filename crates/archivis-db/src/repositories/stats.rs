@@ -224,7 +224,40 @@ impl StatsRepository {
     pub async fn pending_candidate_count(pool: &SqlitePool) -> Result<i64, DbError> {
         Self::count_scalar(
             pool,
-            "SELECT COUNT(*) AS count FROM identification_candidates WHERE status = 'pending'",
+            "SELECT COUNT(*) AS count
+             FROM identification_candidates candidates
+             LEFT JOIN resolution_runs runs ON runs.id = candidates.run_id
+             WHERE candidates.status = 'pending'
+               AND (
+                   (
+                       candidates.run_id IS NULL
+                       AND NOT EXISTS (
+                           SELECT 1
+                           FROM resolution_runs current_runs
+                           WHERE current_runs.book_id = candidates.book_id
+                             AND current_runs.state != 'superseded'
+                       )
+                   )
+                   OR (
+                       runs.state != 'superseded'
+                       AND (
+                           runs.state = 'running'
+                           OR runs.outcome IN ('ambiguous', 'disputed')
+                       )
+                       AND runs.id = (
+                           SELECT current_runs.id
+                           FROM resolution_runs current_runs
+                           WHERE current_runs.book_id = candidates.book_id
+                             AND current_runs.state != 'superseded'
+                             AND (
+                                 current_runs.state = 'running'
+                                 OR current_runs.outcome IN ('ambiguous', 'disputed')
+                             )
+                           ORDER BY current_runs.started_at DESC
+                           LIMIT 1
+                       )
+                   )
+               )",
         )
         .await
     }

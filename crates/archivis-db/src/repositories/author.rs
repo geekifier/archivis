@@ -1,6 +1,6 @@
 use archivis_core::errors::DbError;
 use archivis_core::models::Author;
-use sqlx::SqlitePool;
+use sqlx::{SqliteConnection, SqlitePool};
 use uuid::Uuid;
 
 use super::types::{PaginatedResult, PaginationParams, SortOrder};
@@ -33,6 +33,21 @@ impl AuthorRepository {
             author.sort_name,
         )
         .execute(pool)
+        .await
+        .map_err(|e| DbError::Query(e.to_string()))?;
+
+        Ok(())
+    }
+
+    pub async fn create_conn(conn: &mut SqliteConnection, author: &Author) -> Result<(), DbError> {
+        let id = author.id.to_string();
+        sqlx::query!(
+            "INSERT INTO authors (id, name, sort_name) VALUES (?, ?, ?)",
+            id,
+            author.name,
+            author.sort_name,
+        )
+        .execute(conn)
         .await
         .map_err(|e| DbError::Query(e.to_string()))?;
 
@@ -207,6 +222,22 @@ impl AuthorRepository {
             name,
         )
         .fetch_optional(pool)
+        .await
+        .map_err(|e| DbError::Query(e.to_string()))?;
+
+        row.map(AuthorRow::into_author).transpose()
+    }
+
+    pub async fn find_by_name_conn(
+        conn: &mut SqliteConnection,
+        name: &str,
+    ) -> Result<Option<Author>, DbError> {
+        let row = sqlx::query_as!(
+            AuthorRow,
+            "SELECT id, name, sort_name FROM authors WHERE name = ? COLLATE NOCASE",
+            name,
+        )
+        .fetch_optional(conn)
         .await
         .map_err(|e| DbError::Query(e.to_string()))?;
 

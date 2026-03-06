@@ -289,11 +289,21 @@ impl OpenLibraryProvider {
 
         let subtitle = edition.subtitle.clone();
 
+        let mut all_authors = authors.to_vec();
+        if let Some(contributors) = &edition.contributors {
+            for contrib in contributors {
+                all_authors.push(ProviderAuthor {
+                    name: contrib.name.clone(),
+                    role: Some(contrib.role.to_lowercase()),
+                });
+            }
+        }
+
         ProviderMetadata {
             provider_name: PROVIDER_NAME.to_string(),
             title,
             subtitle,
-            authors: authors.to_vec(),
+            authors: all_authors,
             description,
             language,
             publisher,
@@ -511,6 +521,13 @@ struct OlEdition {
     series: Option<Vec<String>>,
     works: Option<Vec<OlKeyRef>>,
     description: Option<serde_json::Value>,
+    contributors: Option<Vec<OlContributor>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OlContributor {
+    name: String,
+    role: String,
 }
 
 /// Author reference in an edition — may be `{"key": "/authors/OL1234A"}`
@@ -1040,6 +1057,69 @@ mod tests {
         assert!(edition.covers.is_none());
     }
 
+    #[test]
+    fn parse_edition_with_contributors() {
+        let json = r#"{
+            "title": "The Lady of the Lake",
+            "authors": [{"key": "/authors/OL29058A"}],
+            "contributors": [
+                {"name": "David A. French", "role": "Translator"}
+            ],
+            "publishers": ["Orbit"],
+            "isbn_13": ["9780316273770"]
+        }"#;
+
+        let edition: OlEdition = serde_json::from_str(json).unwrap();
+        assert_eq!(edition.contributors.as_ref().unwrap().len(), 1);
+        assert_eq!(
+            edition.contributors.as_ref().unwrap()[0].name,
+            "David A. French"
+        );
+        assert_eq!(edition.contributors.as_ref().unwrap()[0].role, "Translator");
+    }
+
+    #[test]
+    fn build_metadata_includes_contributors_with_role() {
+        let edition = OlEdition {
+            key: None,
+            title: Some("The Lady of the Lake".into()),
+            subtitle: None,
+            authors: None,
+            publishers: Some(vec!["Orbit".into()]),
+            publish_date: None,
+            isbn_13: Some(vec!["9780316273770".into()]),
+            isbn_10: None,
+            number_of_pages: None,
+            covers: None,
+            languages: None,
+            series: None,
+            works: None,
+            description: None,
+            contributors: Some(vec![OlContributor {
+                name: "David A. French".into(),
+                role: "Translator".into(),
+            }]),
+        };
+
+        let resolved_authors = vec![ProviderAuthor {
+            name: "Andrzej Sapkowski".into(),
+            role: Some("author".into()),
+        }];
+
+        let metadata = OpenLibraryProvider::build_metadata_from_edition(
+            &edition,
+            None,
+            &resolved_authors,
+            "9780316273770",
+        );
+
+        assert_eq!(metadata.authors.len(), 2);
+        assert_eq!(metadata.authors[0].name, "Andrzej Sapkowski");
+        assert_eq!(metadata.authors[0].role.as_deref(), Some("author"));
+        assert_eq!(metadata.authors[1].name, "David A. French");
+        assert_eq!(metadata.authors[1].role.as_deref(), Some("translator"));
+    }
+
     // ── Work JSON parsing ────────────────────────────────────────────
 
     #[test]
@@ -1154,6 +1234,7 @@ mod tests {
             series: None,
             works: None,
             description: None,
+            contributors: None,
         };
 
         let work = OlWork {
@@ -1340,6 +1421,7 @@ mod tests {
             series: None,
             works: None,
             description: None,
+            contributors: None,
         };
 
         let metadata =

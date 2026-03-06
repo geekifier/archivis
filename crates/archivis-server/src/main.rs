@@ -11,13 +11,13 @@ use archivis_metadata::{
 };
 use archivis_storage::local::LocalStorage;
 use archivis_storage::watcher::{service::WatcherRuntimeConfig, WatcherService};
-use archivis_tasks::identify::IdentificationService;
 use archivis_tasks::import::{BulkImportService, ImportConfig, ImportService};
 use archivis_tasks::isbn_scan::{IsbnScanConfig as TaskIsbnScanConfig, IsbnScanService};
 use archivis_tasks::merge::MergeService;
 use archivis_tasks::queue::{self, TaskQueue, Worker};
+use archivis_tasks::resolve::ResolutionService;
 use archivis_tasks::workers::{
-    watcher_processor, IdentifyWorker, ImportDirectoryWorker, ImportFileWorker, IsbnScanWorker,
+    watcher_processor, ImportDirectoryWorker, ImportFileWorker, IsbnScanWorker, ResolveWorker,
 };
 use clap::Parser;
 use config::{AppConfig, Cli};
@@ -307,12 +307,12 @@ async fn init_services_and_router(
     let (task_queue, dispatch_rx) = TaskQueue::new(db_pool.clone());
     let task_queue = Arc::new(task_queue);
 
-    // Build shared identification service (used by both worker and API handlers)
+    // Build shared resolution service (used by both workers and compatibility handlers)
     let resolver = Arc::new(MetadataResolver::new(
         Arc::clone(&provider_registry),
         settings_reader,
     ));
-    let identify_service = Arc::new(IdentificationService::new(
+    let resolve_service = Arc::new(ResolutionService::new(
         db_pool.clone(),
         Arc::clone(&resolver),
         storage.clone(),
@@ -324,7 +324,7 @@ async fn init_services_and_router(
         &storage,
         config,
         &provider_registry,
-        &identify_service,
+        &resolve_service,
         &task_queue,
     );
     let progress = task_queue.progress_sender();
@@ -381,7 +381,7 @@ async fn init_services_and_router(
         auth_service,
         storage,
         provider_registry,
-        identify_service,
+        resolve_service,
         merge_service,
         api_config,
         config_service,
@@ -397,7 +397,7 @@ fn init_workers(
     storage: &LocalStorage,
     config: &AppConfig,
     _provider_registry: &Arc<ProviderRegistry>,
-    identify_service: &Arc<IdentificationService<LocalStorage>>,
+    resolve_service: &Arc<ResolutionService<LocalStorage>>,
     task_queue: &Arc<TaskQueue>,
 ) -> HashMap<archivis_core::models::TaskType, Arc<dyn Worker>> {
     let import_config = ImportConfig {
@@ -440,8 +440,8 @@ fn init_workers(
         ),
     );
     workers.insert(
-        archivis_core::models::TaskType::IdentifyBook,
-        Arc::new(IdentifyWorker::new(Arc::clone(identify_service))),
+        archivis_core::models::TaskType::ResolveBook,
+        Arc::new(ResolveWorker::new(Arc::clone(resolve_service))),
     );
 
     // ISBN content-scan worker
@@ -461,7 +461,9 @@ fn init_workers(
     ));
     workers.insert(
         archivis_core::models::TaskType::ScanIsbn,
-        Arc::new(IsbnScanWorker::new(isbn_scan_service)),
+        Arc::new(
+            IsbnScanWorker::new(isbn_scan_service).with_resolution_queue(Arc::clone(task_queue)),
+        ),
     );
 
     workers
