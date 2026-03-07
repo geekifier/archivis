@@ -4,7 +4,9 @@ import {
   formatScore,
   providerColorClass,
   hasChange,
-  getExcludedFields
+  getExcludedFields,
+  tierColorClass,
+  tierLabel
 } from './candidate-utils.js';
 
 describe('scoreColor', () => {
@@ -132,4 +134,44 @@ describe('getExcludedFields', () => {
     };
     expect(getExcludedFields(selections, 'cand-999')).toEqual([]);
   });
+});
+
+describe('tierColorClass', () => {
+    it('returns green class for strong_id_match', () => {
+        expect(tierColorClass('strong_id_match')).toContain('bg-green-100');
+    });
+
+    it('returns amber class for probable_match', () => {
+        expect(tierColorClass('probable_match')).toContain('bg-amber-100');
+    });
+
+    it('returns muted class for weak_match', () => {
+        expect(tierColorClass('weak_match')).toBe('bg-muted text-muted-foreground');
+    });
+
+    it('returns muted class for undefined', () => {
+        expect(tierColorClass(undefined)).toBe('bg-muted text-muted-foreground');
+    });
+});
+
+describe('tierLabel', () => {
+    it('returns "Strong ID match" for strong_id_match', () => {
+        expect(tierLabel('strong_id_match')).toBe('Strong ID match');
+    });
+
+    it('returns "Probable match" for probable_match', () => {
+        expect(tierLabel('probable_match')).toBe('Probable match');
+    });
+
+    it('returns "Weak match" for weak_match', () => {
+        expect(tierLabel('weak_match')).toBe('Weak match');
+    });
+
+    it('returns empty string for undefined', () => {
+        expect(tierLabel(undefined)).toBe('');
+    });
+
+    it('returns raw value for unknown tier', () => {
+        expect(tierLabel('custom_tier')).toBe('custom_tier');
+    });
 });

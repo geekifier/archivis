@@ -517,6 +517,7 @@ export interface CandidateResponse {
   match_reasons: string[];
   disputes: string[];
   status: 'pending' | 'applied' | 'rejected';
+  tier?: string;
 }
 
 /** Response from triggering metadata refresh for a book. */

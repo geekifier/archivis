@@ -206,11 +206,12 @@ async fn asin_book_not_auto_applied_via_fuzzy_search() {
         "precondition: should have at least one candidate from search"
     );
 
-    // The best candidate should have a high score from fuzzy matching.
+    // The best candidate should have a reasonable score from fuzzy matching
+    // (reduced by WeakMatch tier factor since there's no ISBN proof).
     let best = outcome.resolver_result.best_match.as_ref().unwrap();
     assert!(
-        best.score >= 0.85,
-        "precondition: score should be high from fuzzy match, got {}",
+        best.score >= 0.50,
+        "precondition: score should be reasonable from fuzzy match, got {}",
         best.score
     );
 

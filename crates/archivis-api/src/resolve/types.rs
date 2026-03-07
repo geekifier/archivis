@@ -27,6 +27,7 @@ pub struct CandidateResponse {
     pub match_reasons: Vec<String>,
     pub disputes: Vec<String>,
     pub status: String,
+    pub tier: Option<String>,
 }
 
 /// Response from triggering metadata refresh for a book.

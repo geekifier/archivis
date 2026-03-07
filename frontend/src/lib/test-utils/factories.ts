@@ -135,6 +135,7 @@ export function createCandidateResponse(overrides?: Partial<CandidateResponse>):
     match_reasons: ['isbn_match'],
     disputes: [],
     status: 'pending',
+    tier: undefined,
     ...overrides
   };
 }

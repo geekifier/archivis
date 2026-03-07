@@ -353,6 +353,7 @@ impl<S: StorageBackend> ResolutionService<S> {
                 scored.match_reasons.clone(),
             );
             candidate.run_id = Some(run.id);
+            candidate.tier = Some(scored.tier.to_string());
             let candidate_count = i64::try_from(stored_candidates.len())
                 .map_err(|_| TaskError::Failed("candidate count exceeded i64::MAX".into()))?;
 

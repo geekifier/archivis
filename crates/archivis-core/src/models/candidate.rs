@@ -61,6 +61,7 @@ pub struct IdentificationCandidate {
     pub match_reasons: Vec<String>,
     #[serde(default)]
     pub disputes: Vec<String>,
+    pub tier: Option<String>,
     pub status: CandidateStatus,
     pub created_at: DateTime<Utc>,
 }
@@ -83,6 +84,7 @@ impl IdentificationCandidate {
             metadata,
             match_reasons,
             disputes: Vec::new(),
+            tier: None,
             status: CandidateStatus::Pending,
             created_at: Utc::now(),
         }

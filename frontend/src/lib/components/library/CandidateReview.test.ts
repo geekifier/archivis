@@ -329,6 +329,25 @@ describe('CandidateReview', () => {
     expect(screen.getByText('Protected fields: title, authors.')).toBeInTheDocument();
   });
 
+  it('renders tier badge when tier is present', () => {
+    const candidate = createCandidateResponse({
+        id: 'c1',
+        status: 'pending',
+        tier: 'strong_id_match',
+        title: 'Candidate Title'
+    });
+    render(CandidateReview, {
+        props: {
+            book,
+            candidates: [candidate],
+            onapply: vi.fn<ApplyFn>(),
+            onreject: vi.fn<RejectFn>(),
+            onundo: vi.fn<UndoFn>()
+        }
+    });
+    expect(screen.getByText('Strong ID match')).toBeInTheDocument();
+  });
+
   it('when a candidate is applied, pending candidates show "Another candidate was applied"', () => {
     const applied = createCandidateResponse({
       id: 'c1',

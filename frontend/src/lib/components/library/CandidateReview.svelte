@@ -8,7 +8,9 @@
     formatScore,
     providerColorClass,
     hasChange,
-    getExcludedFields
+    getExcludedFields,
+    tierColorClass,
+    tierLabel
   } from './candidate-utils.js';
 
   interface Props {
@@ -183,6 +185,11 @@
             >
               {candidate.provider_name}
             </span>
+            {#if candidate.tier}
+              <span class="inline-flex rounded-full px-2 py-0.5 text-xs font-medium {tierColorClass(candidate.tier)}">
+                {tierLabel(candidate.tier)}
+              </span>
+            {/if}
             <div class="flex items-center gap-2">
               <span class="text-xs font-medium text-muted-foreground">Score:</span>
               <div class="flex items-center gap-1.5">
@@ -235,7 +242,7 @@
           <!-- Match reasons -->
           {#if candidate.match_reasons.length > 0}
             <div class="mb-3 flex flex-wrap gap-1.5">
-              {#each candidate.match_reasons as reason, i (i)}
+              {#each candidate.match_reasons.filter((r) => !r.startsWith('Tier: ')) as reason, i (i)}
                 <span
                   class="inline-flex rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary"
                 >

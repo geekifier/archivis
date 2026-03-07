@@ -466,6 +466,7 @@ fn candidate_to_response(candidate: IdentificationCandidate) -> CandidateRespons
         match_reasons: candidate.match_reasons,
         disputes: candidate.disputes,
         status: candidate.status.to_string(),
+        tier: candidate.tier,
     }
 }
 

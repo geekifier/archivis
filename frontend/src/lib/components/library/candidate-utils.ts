@@ -30,6 +30,33 @@ export function hasChange(
   return cv !== '' && cv !== bv;
 }
 
+/** Return a Tailwind class string for a tier badge. */
+export function tierColorClass(tier: string | undefined): string {
+    switch (tier) {
+        case 'strong_id_match':
+            return 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400';
+        case 'probable_match':
+            return 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400';
+        case 'weak_match':
+        default:
+            return 'bg-muted text-muted-foreground';
+    }
+}
+
+/** Return a human-readable label for a tier value. */
+export function tierLabel(tier: string | undefined): string {
+    switch (tier) {
+        case 'strong_id_match':
+            return 'Strong ID match';
+        case 'probable_match':
+            return 'Probable match';
+        case 'weak_match':
+            return 'Weak match';
+        default:
+            return tier ?? '';
+    }
+}
+
 /** Collect field names the user has deselected (unchecked). */
 export function getExcludedFields(
   fieldSelections: Record<string, Record<string, boolean>>,

@@ -31,8 +31,8 @@ impl CandidateRepository {
         sqlx::query(
             "INSERT INTO identification_candidates (
                  id, book_id, run_id, provider_name, score, metadata, match_reasons,
-                 disputes, status, created_at
-             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                 disputes, tier, status, created_at
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(candidate.id.to_string())
         .bind(candidate.book_id.to_string())
@@ -42,6 +42,7 @@ impl CandidateRepository {
         .bind(metadata_json)
         .bind(reasons_json)
         .bind(disputes_json)
+        .bind(&candidate.tier)
         .bind(candidate.status.to_string())
         .bind(candidate.created_at.to_rfc3339())
         .execute(pool)
@@ -70,7 +71,7 @@ impl CandidateRepository {
     ) -> Result<Vec<IdentificationCandidate>, DbError> {
         let rows = sqlx::query_as::<_, CandidateRow>(
             "SELECT id, book_id, run_id, provider_name, score, metadata, match_reasons,
-                    disputes, status, created_at
+                    disputes, tier, status, created_at
              FROM identification_candidates
              WHERE book_id = ?
              ORDER BY created_at DESC, score DESC",
@@ -90,7 +91,7 @@ impl CandidateRepository {
     ) -> Result<Vec<IdentificationCandidate>, DbError> {
         let rows = sqlx::query_as::<_, CandidateRow>(
             "SELECT id, book_id, run_id, provider_name, score, metadata, match_reasons,
-                    disputes, status, created_at
+                    disputes, tier, status, created_at
              FROM identification_candidates
              WHERE run_id = ?
              ORDER BY score DESC, created_at ASC",
@@ -114,7 +115,7 @@ impl CandidateRepository {
 
         let rows = sqlx::query_as::<_, CandidateRow>(
             "SELECT id, book_id, run_id, provider_name, score, metadata, match_reasons,
-                    disputes, status, created_at
+                    disputes, tier, status, created_at
              FROM identification_candidates
              WHERE book_id = ?
                AND run_id IS NULL
@@ -136,7 +137,7 @@ impl CandidateRepository {
     ) -> Result<Vec<IdentificationCandidate>, DbError> {
         let rows = sqlx::query_as::<_, CandidateRow>(
             "SELECT id, book_id, run_id, provider_name, score, metadata, match_reasons,
-                    disputes, status, created_at
+                    disputes, tier, status, created_at
              FROM identification_candidates
              WHERE book_id = ?
                AND run_id IS NULL
@@ -157,7 +158,7 @@ impl CandidateRepository {
     ) -> Result<Option<IdentificationCandidate>, DbError> {
         let row = sqlx::query_as::<_, CandidateRow>(
             "SELECT id, book_id, run_id, provider_name, score, metadata, match_reasons,
-                    disputes, status, created_at
+                    disputes, tier, status, created_at
              FROM identification_candidates
              WHERE id = ?",
         )
@@ -357,7 +358,7 @@ impl CandidateRepository {
     ) -> Result<Vec<IdentificationCandidate>, DbError> {
         let rows = sqlx::query_as::<_, CandidateRow>(
             "SELECT id, book_id, run_id, provider_name, score, metadata, match_reasons,
-                    disputes, status, created_at
+                    disputes, tier, status, created_at
              FROM identification_candidates
              WHERE run_id = ?
                AND status != 'superseded'
@@ -538,6 +539,7 @@ struct CandidateRow {
     metadata: String,
     match_reasons: Option<String>,
     disputes: Option<String>,
+    tier: Option<String>,
     status: String,
     created_at: String,
 }
@@ -584,6 +586,7 @@ impl CandidateRow {
             metadata,
             match_reasons,
             disputes,
+            tier: self.tier,
             status,
             created_at,
         })

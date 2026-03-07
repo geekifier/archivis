@@ -727,7 +727,7 @@ mod tests {
                 .fetch_all(&pool)
                 .await
                 .unwrap();
-        assert_eq!(applied_versions, (1..=16).collect::<Vec<_>>());
+        assert_eq!(applied_versions, (1..=17).collect::<Vec<_>>());
 
         let columns = table_columns(&pool, "books").await.unwrap();
         assert!(columns.contains("ingest_quality_score"));
