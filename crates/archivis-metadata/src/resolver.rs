@@ -491,6 +491,28 @@ impl MetadataResolver {
             (None, None) => {}
         }
 
+        // Drop candidates with unsupported physical formats (audiobooks, etc.).
+        let pre_filter = candidates.len();
+        candidates.retain(|c| match c.metadata.physical_format.as_deref() {
+            Some(fmt) if is_unsupported_format(fmt) => {
+                debug!(
+                    provider = %c.provider_name,
+                    physical_format = fmt,
+                    title = ?c.metadata.title,
+                    "dropping candidate with unsupported format"
+                );
+                false
+            }
+            _ => true,
+        });
+        if candidates.len() < pre_filter {
+            debug!(
+                dropped = pre_filter - candidates.len(),
+                remaining = candidates.len(),
+                "filtered unsupported-format candidates"
+            );
+        }
+
         // If any identifier lookup produced results, return them
         // (dedup phases will handle overlaps).
         if !candidates.is_empty() {
@@ -1050,6 +1072,9 @@ fn fill_metadata_gaps(target: &mut ProviderMetadata, source: &ProviderMetadata) 
     if target.subjects.is_empty() {
         target.subjects.clone_from(&source.subjects);
     }
+    if target.physical_format.is_none() {
+        target.physical_format.clone_from(&source.physical_format);
+    }
 }
 
 /// Merge unique data from `source` into `target`.
@@ -1261,6 +1286,16 @@ fn identifier_type_belongs_to_provider(id_type: IdentifierType, provider: &str) 
     }
 }
 
+/// Check whether a `physical_format` value indicates an unsupported media type
+/// (audiobook, sound recording, video recording, etc.).
+fn is_unsupported_format(format: &str) -> bool {
+    let lower = format.to_lowercase();
+    lower.contains("audio")
+        || lower.contains("sound recording")
+        || lower.contains("videorecording")
+        || lower.contains("mp3")
+}
+
 // ── Tests ───────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -1309,6 +1344,7 @@ mod tests {
             page_count: None,
             cover_url: None,
             rating: None,
+            physical_format: None,
             confidence,
         }
     }
@@ -1792,6 +1828,7 @@ mod tests {
             page_count: None,
             cover_url: None,
             rating: None,
+            physical_format: None,
             confidence: 0.9,
         };
 
@@ -1822,6 +1859,7 @@ mod tests {
             page_count: Some(412),
             cover_url: Some("https://example.com/cover.jpg".to_string()),
             rating: Some(4.5),
+            physical_format: None,
             confidence: 0.9,
         };
 
@@ -4283,6 +4321,85 @@ mod tests {
                 .any(|r| r.contains("Author match (100%)")),
             "author score should be 100%% when translator is excluded; reasons: {:?}",
             candidate.match_reasons
+        );
+    }
+
+    // ── Unsupported format filtering tests ──
+
+    #[test]
+    fn is_unsupported_format_detects_audio_formats() {
+        let audio_formats = [
+            "Audio CD",
+            "audio cd",
+            "Audio Cassette",
+            "MP3 CD",
+            "Audiobook",
+            "Digital Audio",
+            "[Sound recording]",
+            "Videorecording",
+            "preloaded digital audio player",
+            "10 Audio CDs",
+        ];
+        for fmt in audio_formats {
+            assert!(is_unsupported_format(fmt), "expected unsupported: {fmt:?}");
+        }
+    }
+
+    #[test]
+    fn is_unsupported_format_allows_ebook_formats() {
+        let allowed_formats = [
+            "Paperback",
+            "Hardcover",
+            "E-book",
+            "CD-ROM",
+            "Unknown Binding",
+        ];
+        for fmt in allowed_formats {
+            assert!(!is_unsupported_format(fmt), "expected supported: {fmt:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn gather_candidates_drops_audiobook_keeps_paperback() {
+        let registry = Arc::new(ProviderRegistry::new());
+        let resolver = MetadataResolver::new(registry, Arc::new(StubSettings::new(vec![])));
+
+        let mut audiobook = make_metadata(
+            "ol",
+            "Dune",
+            &["Frank Herbert"],
+            Some("9780441172719"),
+            0.95,
+        );
+        audiobook.physical_format = Some("Audio CD".to_string());
+
+        let mut paperback = make_metadata(
+            "ol",
+            "Dune",
+            &["Frank Herbert"],
+            Some("9780441172719"),
+            0.90,
+        );
+        paperback.physical_format = Some("Paperback".to_string());
+
+        let provider = Arc::new(
+            StubProvider::new("open_library").with_isbn_results(vec![audiobook, paperback]),
+        );
+
+        let query = MetadataQuery {
+            isbn: Some("9780441172719".to_string()),
+            ..Default::default()
+        };
+
+        let candidates = resolver
+            .gather_candidates(&query, &[provider as Arc<dyn MetadataProvider>])
+            .await;
+
+        assert_eq!(candidates.len(), 1, "audiobook candidate should be dropped");
+        assert_eq!(
+            candidates[0].metadata.physical_format.as_deref(),
+            Some("Paperback"),
+            "only paperback candidate should remain"
         );
     }
 }

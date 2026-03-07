@@ -32,6 +32,7 @@ query LookupISBN($isbn: String!) {
     pages
     release_date
     edition_format
+    reading_format { format }
     language { language }
     publisher { name }
     cached_image
@@ -67,6 +68,7 @@ query LookupISBN($isbn: String!) {
     pages
     release_date
     edition_format
+    reading_format { format }
     language { language }
     publisher { name }
     cached_image
@@ -102,6 +104,7 @@ query LookupASIN($asin: String!) {
     pages
     release_date
     edition_format
+    reading_format { format }
     language { language }
     publisher { name }
     cached_image
@@ -363,6 +366,12 @@ impl HardcoverProvider {
             .as_ref()
             .and_then(|l| normalize_language(&l.language));
 
+        let physical_format = edition
+            .reading_format
+            .as_ref()
+            .and_then(|rf| rf.format.clone())
+            .or_else(|| edition.edition_format.clone());
+
         ProviderMetadata {
             provider_name: PROVIDER_NAME.to_string(),
             title,
@@ -378,6 +387,7 @@ impl HardcoverProvider {
             page_count,
             cover_url,
             rating,
+            physical_format,
             confidence: 0.95,
         }
     }
@@ -475,6 +485,7 @@ impl HardcoverProvider {
             page_count,
             cover_url,
             rating,
+            physical_format: None, // Book/work-level results have no edition format.
             confidence,
         }
     }
@@ -713,14 +724,20 @@ struct HcEdition {
     title: Option<String>,
     pages: Option<i32>,
     release_date: Option<String>,
-    #[allow(dead_code)]
     edition_format: Option<String>,
+    reading_format: Option<HcReadingFormat>,
     language: Option<HcLanguage>,
     publisher: Option<HcPublisher>,
     cached_image: Option<serde_json::Value>,
     #[allow(dead_code)]
     cached_contributors: Option<serde_json::Value>,
     book: Option<HcBookInEdition>,
+}
+
+/// Structured reading format from Hardcover (e.g. `"Audiobook"`, `"Physical"`).
+#[derive(Debug, Deserialize)]
+struct HcReadingFormat {
+    format: Option<String>,
 }
 
 /// Book (work) data embedded in an edition response.
@@ -1384,6 +1401,7 @@ mod tests {
                 "pages": 412,
                 "release_date": "1965-08-01",
                 "edition_format": "paperback",
+                "reading_format": null,
                 "language": { "language": "English" },
                 "publisher": { "name": "Chilton Books" },
                 "cached_image": "{\"url\": \"https://cdn.hardcover.app/covers/dune.jpg\"}",
@@ -1440,6 +1458,7 @@ mod tests {
                 "pages": 412,
                 "release_date": "1965-08-01",
                 "edition_format": "paperback",
+                "reading_format": null,
                 "language": { "language": "English" },
                 "publisher": { "name": "Chilton Books" },
                 "cached_image": "{\"url\": \"https://cdn.hardcover.app/covers/dune.jpg\"}",
@@ -1485,6 +1504,9 @@ mod tests {
         assert!((metadata.rating.unwrap() - 4.25).abs() < f32::EPSILON);
         assert!((metadata.confidence - 0.95).abs() < f32::EPSILON);
 
+        // `reading_format` is null → falls back to `edition_format`.
+        assert_eq!(metadata.physical_format.as_deref(), Some("paperback"));
+
         // Check identifiers.
         let isbn13 = metadata
             .identifiers
@@ -1529,6 +1551,7 @@ mod tests {
                 "pages": null,
                 "release_date": null,
                 "edition_format": null,
+                "reading_format": null,
                 "language": null,
                 "publisher": null,
                 "cached_image": null,
@@ -1553,6 +1576,7 @@ mod tests {
         assert!(metadata.subjects.is_empty());
         assert!(metadata.series.is_none());
         assert!(metadata.rating.is_none());
+        assert!(metadata.physical_format.is_none());
 
         // Should have the queried ISBN as an identifier.
         assert_eq!(metadata.identifiers.len(), 1);
@@ -1846,5 +1870,39 @@ mod tests {
 
         let results = provider.search(&query).await.unwrap();
         assert!(!results.is_empty(), "expected search results for Dune");
+    }
+
+    // ── Physical / reading format tests ─────────────────────────────
+
+    #[test]
+    fn reading_format_preferred_over_edition_format() {
+        let json = r#"{
+            "editions": [{
+                "id": 12345,
+                "isbn_13": "9781427201447",
+                "isbn_10": null,
+                "asin": null,
+                "title": "Dune (Audiobook)",
+                "pages": null,
+                "release_date": null,
+                "edition_format": "paperback",
+                "reading_format": { "format": "Audiobook" },
+                "language": null,
+                "publisher": null,
+                "cached_image": null,
+                "cached_contributors": null,
+                "book": null
+            }]
+        }"#;
+
+        let response: EditionsResponse = serde_json::from_str(json).unwrap();
+        let edition = &response.editions[0];
+        let metadata = HardcoverProvider::build_metadata_from_edition(edition, "9781427201447");
+
+        assert_eq!(
+            metadata.physical_format.as_deref(),
+            Some("Audiobook"),
+            "`reading_format.format` should be preferred over `edition_format`"
+        );
     }
 }

@@ -65,6 +65,7 @@ fn provider_meta_with_cover(cover_url: &str) -> ProviderMetadata {
         page_count: None,
         cover_url: Some(cover_url.into()),
         rating: None,
+        physical_format: None,
         confidence: 0.95,
     }
 }

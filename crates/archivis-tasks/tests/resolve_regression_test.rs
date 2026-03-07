@@ -173,6 +173,7 @@ async fn asin_book_not_auto_applied_via_fuzzy_search() {
             page_count: None,
             cover_url: None,
             rating: None,
+            physical_format: None,
             confidence: 0.75,
         }],
     });
@@ -259,6 +260,7 @@ async fn fuzzy_only_single_candidate_remains_needs_review() {
             page_count: None,
             cover_url: None,
             rating: None,
+            physical_format: None,
             confidence: 0.75,
         }],
     });
@@ -325,6 +327,7 @@ async fn strong_isbn_match_auto_applies_correctly() {
             page_count: None,
             cover_url: None,
             rating: None,
+            physical_format: None,
             confidence: 0.95,
         }],
         search_results: vec![],
@@ -434,6 +437,7 @@ async fn stale_author_replaced_under_strong_isbn_proof() {
         page_count: None,
         cover_url: None,
         rating: None,
+        physical_format: None,
         confidence: 0.95,
     };
     let meta_json = serde_json::to_value(&correct_meta).unwrap();
@@ -509,6 +513,7 @@ async fn strong_match_enriches_existing_book() {
             page_count: Some(412),
             cover_url: None,
             rating: None,
+            physical_format: None,
             confidence: 0.95,
         }],
         search_results: vec![],
@@ -594,6 +599,7 @@ async fn protected_core_conflict_becomes_disputed() {
             page_count: None,
             cover_url: None,
             rating: None,
+            physical_format: None,
             confidence: 0.95,
         }],
         search_results: vec![],
@@ -688,6 +694,7 @@ async fn lady_of_the_lake_article_and_translator_regression() {
             page_count: None,
             cover_url: None,
             rating: None,
+            physical_format: None,
             confidence: 0.95,
         }],
         search_results: vec![],

@@ -3040,6 +3040,7 @@ mod tests {
             page_count: None,
             cover_url: None,
             rating: None,
+            physical_format: None,
             confidence: 0.9,
         }
     }
@@ -3077,6 +3078,7 @@ mod tests {
             page_count: None,
             cover_url: None,
             rating: None,
+            physical_format: None,
             confidence: 0.95,
         }
     }
@@ -3495,6 +3497,7 @@ mod tests {
             page_count: None,
             cover_url: None,
             rating: None,
+            physical_format: None,
             confidence: 0.95,
         };
         assert!(
@@ -3524,6 +3527,7 @@ mod tests {
             page_count: None,
             cover_url: None,
             rating: None,
+            physical_format: None,
             confidence: 0.95,
         };
         assert!(candidate_authors_differ(&current, &candidate));
@@ -3556,6 +3560,7 @@ mod tests {
             page_count: None,
             cover_url: None,
             rating: None,
+            physical_format: None,
             confidence: 0.95,
         };
         assert!(
@@ -3585,6 +3590,7 @@ mod tests {
             page_count: None,
             cover_url: None,
             rating: None,
+            physical_format: None,
             confidence: 0.95,
         };
         assert!(
@@ -3720,6 +3726,7 @@ mod tests {
             page_count: Some(300),
             cover_url: None,
             rating: None,
+            physical_format: None,
             confidence: 0.95,
         }
     }
@@ -3962,6 +3969,7 @@ mod tests {
             page_count: None,
             cover_url: None,
             rating: None,
+            physical_format: None,
             confidence: 0.90,
         };
 
@@ -4047,6 +4055,7 @@ mod tests {
             page_count: None,
             cover_url: None,
             rating: None,
+            physical_format: None,
             confidence: 0.80,
         };
 
@@ -4133,6 +4142,7 @@ mod tests {
             page_count: None,
             cover_url: None,
             rating: None,
+            physical_format: None,
             confidence: 0.95,
         };
 
@@ -4237,6 +4247,7 @@ mod tests {
             page_count: None,
             cover_url: None,
             rating: None,
+            physical_format: None,
             confidence: 0.95,
         };
 
@@ -4337,6 +4348,7 @@ mod tests {
             page_count: None,
             cover_url: None,
             rating: None,
+            physical_format: None,
             confidence: 0.95,
         };
 
@@ -4421,6 +4433,7 @@ mod tests {
             page_count: None,
             cover_url: None,
             rating: None,
+            physical_format: None,
             confidence: 0.90,
         };
 
@@ -4532,6 +4545,7 @@ mod tests {
             page_count: None,
             cover_url: Some(format!("{}/cover.jpg", mock_server.uri())),
             rating: None,
+            physical_format: None,
             confidence: 0.93,
         };
         let mut candidate = IdentificationCandidate::new(

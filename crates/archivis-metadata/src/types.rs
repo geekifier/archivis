@@ -23,6 +23,8 @@ pub struct ProviderMetadata {
     /// URL to download cover image.
     pub cover_url: Option<String>,
     pub rating: Option<f32>,
+    /// Physical format of the edition (e.g. `"Paperback"`, `"Audio CD"`).
+    pub physical_format: Option<String>,
     /// Provider's self-assessed match confidence (0.0-1.0).
     pub confidence: f32,
 }
@@ -89,6 +91,7 @@ mod tests {
             page_count: Some(412),
             cover_url: Some("https://covers.openlibrary.org/b/id/12345-L.jpg".to_string()),
             rating: Some(4.5),
+            physical_format: None,
             confidence: 0.95,
         };
 
@@ -125,6 +128,7 @@ mod tests {
             page_count: None,
             cover_url: None,
             rating: None,
+            physical_format: None,
             confidence: 0.0,
         };
 

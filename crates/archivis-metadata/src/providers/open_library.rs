@@ -314,6 +314,7 @@ impl OpenLibraryProvider {
             page_count,
             cover_url,
             rating: None, // Open Library doesn't provide ratings in edition/work API.
+            physical_format: edition.physical_format.clone(),
             confidence: 0.95,
         }
     }
@@ -412,6 +413,7 @@ impl OpenLibraryProvider {
                     page_count,
                     cover_url,
                     rating: None,
+                    physical_format: None, // Search results are work-level.
                     confidence,
                 }
             })
@@ -522,6 +524,7 @@ struct OlEdition {
     works: Option<Vec<OlKeyRef>>,
     description: Option<serde_json::Value>,
     contributors: Option<Vec<OlContributor>>,
+    physical_format: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1099,6 +1102,7 @@ mod tests {
                 name: "David A. French".into(),
                 role: "Translator".into(),
             }]),
+            physical_format: None,
         };
 
         let resolved_authors = vec![ProviderAuthor {
@@ -1235,6 +1239,7 @@ mod tests {
             works: None,
             description: None,
             contributors: None,
+            physical_format: None,
         };
 
         let work = OlWork {
@@ -1422,6 +1427,7 @@ mod tests {
             works: None,
             description: None,
             contributors: None,
+            physical_format: None,
         };
 
         let metadata =
@@ -1589,5 +1595,75 @@ mod tests {
 
         let results = provider.search(&query).await.unwrap();
         assert!(!results.is_empty(), "expected search results for Dune");
+    }
+
+    // ── Physical format tests ───────────────────────────────────────
+
+    #[test]
+    fn parse_edition_with_physical_format() {
+        let json = r#"{
+            "title": "Dune",
+            "physical_format": "Audio CD"
+        }"#;
+
+        let edition: OlEdition = serde_json::from_str(json).unwrap();
+        assert_eq!(edition.physical_format.as_deref(), Some("Audio CD"));
+    }
+
+    #[test]
+    fn parse_edition_minimal_has_no_physical_format() {
+        let json = r#"{
+            "title": "Unknown Book"
+        }"#;
+
+        let edition: OlEdition = serde_json::from_str(json).unwrap();
+        assert!(edition.physical_format.is_none());
+    }
+
+    #[test]
+    fn build_metadata_propagates_physical_format() {
+        let edition = OlEdition {
+            key: None,
+            title: Some("Dune".into()),
+            subtitle: None,
+            authors: None,
+            publishers: None,
+            publish_date: None,
+            isbn_13: Some(vec!["9780441172719".into()]),
+            isbn_10: None,
+            number_of_pages: None,
+            covers: None,
+            languages: None,
+            series: None,
+            works: None,
+            description: None,
+            contributors: None,
+            physical_format: Some("Audio CD".into()),
+        };
+
+        let metadata =
+            OpenLibraryProvider::build_metadata_from_edition(&edition, None, &[], "9780441172719");
+
+        assert_eq!(
+            metadata.physical_format.as_deref(),
+            Some("Audio CD"),
+            "`physical_format` should propagate from edition to metadata"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires live network access to Open Library API"]
+    async fn live_audiobook_isbn_has_physical_format() {
+        let mut client = MetadataHttpClient::new("0.1.0", None);
+        OpenLibraryProvider::register_rate_limiter(&mut client);
+        let provider = OpenLibraryProvider::new(Arc::new(client), enabled_settings());
+
+        let results = provider.lookup_isbn("9781427201447").await.unwrap();
+        let meta = results.first().expect("expected result for audiobook ISBN");
+        assert_eq!(
+            meta.physical_format.as_deref(),
+            Some("Audio CD"),
+            "audiobook ISBN should have `physical_format` = Audio CD"
+        );
     }
 }
