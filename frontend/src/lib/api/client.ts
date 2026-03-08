@@ -718,6 +718,27 @@ export const api = {
       return result;
     },
 
+    /** Batch-reject multiple candidates at once. */
+    async rejectCandidates(bookId: string, candidateIds: string[]): Promise<BookDetail> {
+      const result = await request<BookDetail>(
+        'POST',
+        `/books/${encodeURIComponent(bookId)}/candidates/reject`,
+        { candidate_ids: candidateIds }
+      );
+      notifyCountsChanged();
+      return result;
+    },
+
+    /** Keep current metadata, reject all pending candidates and stop resolution. */
+    async keepMetadata(bookId: string): Promise<BookDetail> {
+      const result = await request<BookDetail>(
+        'POST',
+        `/books/${encodeURIComponent(bookId)}/keep-metadata`
+      );
+      notifyCountsChanged();
+      return result;
+    },
+
     /** Trigger metadata refresh for multiple books. */
     refreshBatch(bookIds: string[]): Promise<RefreshMetadataResponse[]> {
       return request<RefreshMetadataResponse[]>('POST', '/books/refresh-metadata/batch', {

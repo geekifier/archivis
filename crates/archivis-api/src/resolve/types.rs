@@ -69,6 +69,13 @@ pub struct ApplyCandidateBody {
     pub exclude_fields: Vec<String>,
 }
 
+/// Request body for batch-rejecting candidates.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct BatchRejectRequest {
+    /// IDs of the candidates to reject.
+    pub candidate_ids: Vec<Uuid>,
+}
+
 /// Response from the bulk metadata refresh endpoint.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct RefreshAllMetadataResponse {

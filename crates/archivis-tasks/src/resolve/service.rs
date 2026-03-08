@@ -8,6 +8,7 @@ use archivis_core::models::{
     ApplyChangeset, Book, CandidateStatus, ChangesetAuthor, ChangesetEntry, ChangesetSeries,
     FieldProvenance, IdentificationCandidate, Identifier, IdentifierType, MetadataProvenance,
     MetadataSource, MetadataStatus, ResolutionOutcome as BookResolutionOutcome, ResolutionRunState,
+    ResolutionState,
 };
 use archivis_db::{
     AuthorRepository, BookFileRepository, BookRepository, CandidateRepository, DbPool,
@@ -1290,6 +1291,137 @@ impl<S: StorageBackend> ResolutionService<S> {
         .await;
 
         tx_result?;
+
+        Ok(())
+    }
+
+    /// Batch-reject multiple candidates for a book in a single transaction.
+    pub async fn reject_candidates(
+        &self,
+        book_id: Uuid,
+        candidate_ids: &[Uuid],
+    ) -> Result<(), TaskError> {
+        if candidate_ids.is_empty() {
+            return Ok(());
+        }
+
+        // Load and validate all candidates
+        let mut to_reject = Vec::with_capacity(candidate_ids.len());
+        for &cid in candidate_ids {
+            let candidate = CandidateRepository::get_by_id(&self.db_pool, cid)
+                .await
+                .map_err(|e| TaskError::Failed(format!("failed to load candidate: {e}")))?
+                .ok_or_else(|| TaskError::Failed(format!("candidate not found: {cid}")))?;
+
+            if candidate.book_id != book_id {
+                return Err(TaskError::Failed(format!(
+                    "candidate {cid} does not belong to book {book_id}"
+                )));
+            }
+
+            if candidate.status != CandidateStatus::Pending {
+                return Err(TaskError::Failed(format!(
+                    "candidate {cid} already {}, cannot reject",
+                    candidate.status
+                )));
+            }
+
+            to_reject.push(candidate);
+        }
+
+        // Use the first candidate's `run_id` to load the peer group for status recomputation
+        let peer_candidates = self
+            .list_candidate_peer_group(book_id, to_reject[0].run_id)
+            .await?;
+
+        let reject_set: std::collections::HashSet<Uuid> = candidate_ids.iter().copied().collect();
+        let next_candidates: Vec<IdentificationCandidate> = peer_candidates
+            .into_iter()
+            .map(|mut c| {
+                if reject_set.contains(&c.id) {
+                    c.status = CandidateStatus::Rejected;
+                }
+                c
+            })
+            .collect();
+
+        let mut book = BookRepository::get_by_id(&self.db_pool, book_id)
+            .await
+            .map_err(|e| TaskError::Failed(format!("failed to load book: {e}")))?;
+        let relations = BookRepository::get_with_relations(&self.db_pool, book_id)
+            .await
+            .map_err(|e| TaskError::Failed(format!("failed to load book relations: {e}")))?;
+
+        book.metadata_status = manual_review_status(
+            !relations.authors.is_empty(),
+            !relations.identifiers.is_empty(),
+            &next_candidates,
+        );
+
+        let mut tx = self
+            .db_pool
+            .begin()
+            .await
+            .map_err(|e| TaskError::Failed(format!("failed to open transaction: {e}")))?;
+
+        for &cid in candidate_ids {
+            CandidateRepository::update_status_conn(tx.as_mut(), cid, CandidateStatus::Rejected)
+                .await
+                .map_err(|e| TaskError::Failed(format!("failed to reject candidate {cid}: {e}")))?;
+        }
+
+        BookRepository::update_conn(tx.as_mut(), &book)
+            .await
+            .map_err(|e| TaskError::Failed(format!("failed to update book: {e}")))?;
+
+        tx.commit()
+            .await
+            .map_err(|e| TaskError::Failed(format!("failed to commit batch rejection: {e}")))?;
+
+        Ok(())
+    }
+
+    /// Keep the current metadata for a book: reject all pending candidates and
+    /// mark resolution as done with a `Confirmed` outcome.
+    pub async fn keep_current_metadata(&self, book_id: Uuid) -> Result<(), TaskError> {
+        let mut book = BookRepository::get_by_id(&self.db_pool, book_id)
+            .await
+            .map_err(|e| TaskError::Failed(format!("failed to load book: {e}")))?;
+
+        // Load all current reviewable candidates to reject any pending ones
+        let candidates = CandidateRepository::list_by_book(&self.db_pool, book_id)
+            .await
+            .map_err(|e| TaskError::Failed(format!("failed to load candidates: {e}")))?;
+
+        let pending_ids: Vec<Uuid> = candidates
+            .iter()
+            .filter(|c| c.status == CandidateStatus::Pending)
+            .map(|c| c.id)
+            .collect();
+
+        book.metadata_status = MetadataStatus::Identified;
+        book.resolution_outcome = Some(BookResolutionOutcome::Confirmed);
+        book.resolution_state = ResolutionState::Done;
+
+        let mut tx = self
+            .db_pool
+            .begin()
+            .await
+            .map_err(|e| TaskError::Failed(format!("failed to open transaction: {e}")))?;
+
+        for cid in &pending_ids {
+            CandidateRepository::update_status_conn(tx.as_mut(), *cid, CandidateStatus::Rejected)
+                .await
+                .map_err(|e| TaskError::Failed(format!("failed to reject candidate: {e}")))?;
+        }
+
+        BookRepository::update_conn(tx.as_mut(), &book)
+            .await
+            .map_err(|e| TaskError::Failed(format!("failed to update book: {e}")))?;
+
+        tx.commit()
+            .await
+            .map_err(|e| TaskError::Failed(format!("failed to commit keep-metadata: {e}")))?;
 
         Ok(())
     }

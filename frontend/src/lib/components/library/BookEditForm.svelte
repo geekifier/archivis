@@ -421,8 +421,8 @@
 
   <div class="rounded-lg border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
     <p>
-      Saved fields are automatically user-protected. Use the shield toggles to manage protection per
-      field.
+      Locking a field prevents automated metadata refreshes from overwriting it. Saved fields are
+      automatically locked. Use the lock toggles to manage protection per field.
     </p>
   </div>
 

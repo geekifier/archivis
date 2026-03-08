@@ -79,4 +79,12 @@ pub fn router() -> Router<AppState> {
             "/{id}/candidates/{candidate_id}/undo",
             post(resolution_handlers::undo_candidate),
         )
+        .route(
+            "/{id}/candidates/reject",
+            post(resolution_handlers::batch_reject_candidates),
+        )
+        .route(
+            "/{id}/keep-metadata",
+            post(resolution_handlers::keep_metadata),
+        )
 }

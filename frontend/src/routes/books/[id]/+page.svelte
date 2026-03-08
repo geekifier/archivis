@@ -45,7 +45,8 @@
   let candidates = $state<CandidateResponse[]>([]);
   let candidatesError = $state<string | null>(null);
   let candidatesExpanded = $state(false);
-  let candidatesLoaded = $state(false);
+  let keepingMetadata = $state(false);
+  let rejectingAllFromBanner = $state(false);
 
   // --- ISBN content scan state ---
   let scanning = $state(false);
@@ -86,7 +87,6 @@
     error = null;
     notFound = false;
     coverError = false;
-    candidatesLoaded = false;
 
     api.books
       .get(bookId)
@@ -321,16 +321,6 @@
     candidatesError = null;
     try {
       candidates = await api.resolution.candidates(bookId);
-      if (candidates.length > 0 && !candidatesLoaded) {
-        const hasPending = candidates.some((c) => c.status === 'pending');
-        const hasDisputes = candidates.some((candidate) => candidate.disputes.length > 0);
-        candidatesExpanded =
-          hasPending &&
-          (hasDisputes ||
-            book?.resolution_outcome === 'disputed' ||
-            book?.metadata_status === 'needs_review');
-      }
-      candidatesLoaded = true;
     } catch (err) {
       candidatesError = err instanceof Error ? err.message : 'Failed to load candidates';
     }
@@ -358,6 +348,38 @@
     book = updated;
     loadCandidates();
   }
+
+  async function handleKeepMetadata() {
+    keepingMetadata = true;
+    try {
+      const updated = await api.resolution.keepMetadata(bookId);
+      book = updated;
+      candidates = [];
+      candidatesExpanded = false;
+    } catch (err) {
+      candidatesError = err instanceof Error ? err.message : 'Failed to keep metadata';
+    } finally {
+      keepingMetadata = false;
+    }
+  }
+
+  async function handleRejectAllFromBanner() {
+    if (pendingCandidates.length === 0) return;
+    rejectingAllFromBanner = true;
+    try {
+      const ids = pendingCandidates.map((c) => c.id);
+      const updated = await api.resolution.rejectCandidates(bookId, ids);
+      book = updated;
+      candidates = candidates.map((c) =>
+        ids.includes(c.id) ? { ...c, status: 'rejected' as const } : c
+      );
+    } catch (err) {
+      candidatesError = err instanceof Error ? err.message : 'Failed to reject candidates';
+    } finally {
+      rejectingAllFromBanner = false;
+    }
+  }
+
 
   function handleIdentifierUpdate(updated: BookDetail) {
     book = updated;
@@ -1105,17 +1127,76 @@
                         ? ''
                         : 's'} ready for review
                     {:else}
-                      All candidates resolved
+                      All candidates dismissed
                     {/if}
                   </p>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    class="h-7 px-2 text-xs"
-                    onclick={() => (candidatesExpanded = !candidatesExpanded)}
-                  >
-                    {candidatesExpanded ? 'Hide' : 'Review Candidates'}
-                  </Button>
+                  <div class="flex items-center gap-2">
+                    {#if !candidatesExpanded && pendingCandidates.length > 0}
+                      <Button
+                        size="sm"
+                        class="h-7 px-2 text-xs"
+                        onclick={() => (candidatesExpanded = true)}
+                      >
+                        Review Candidates
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        class="h-7 px-2 text-xs"
+                        disabled={keepingMetadata}
+                        onclick={handleKeepMetadata}
+                      >
+                        {keepingMetadata ? 'Keeping...' : 'Keep Current Metadata'}
+                      </Button>
+                    {:else if candidatesExpanded && pendingCandidates.length > 0}
+                      {#if pendingCandidates.length > 1}
+                        <Button
+                          size="sm"
+                          variant="destructive"
+                          class="h-7 px-2 text-xs"
+                          disabled={rejectingAllFromBanner}
+                          onclick={handleRejectAllFromBanner}
+                        >
+                          {rejectingAllFromBanner ? 'Rejecting...' : 'Reject All'}
+                        </Button>
+                      {/if}
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        class="h-7 px-2 text-xs"
+                        disabled={keepingMetadata}
+                        onclick={handleKeepMetadata}
+                      >
+                        {keepingMetadata ? 'Keeping...' : 'Keep Current Metadata'}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        class="h-7 px-2 text-xs"
+                        onclick={() => (candidatesExpanded = false)}
+                      >
+                        Hide
+                      </Button>
+                    {:else}
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        class="h-7 px-2 text-xs"
+                        disabled={keepingMetadata}
+                        onclick={handleKeepMetadata}
+                      >
+                        {keepingMetadata ? 'Keeping...' : 'Keep Current Metadata'}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        class="h-7 px-2 text-xs"
+                        onclick={() => (candidatesExpanded = false)}
+                      >
+                        Hide
+                      </Button>
+                    {/if}
+                  </div>
                 </div>
               {/if}
 

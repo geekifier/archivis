@@ -33,6 +33,8 @@ const { mockApi } = vi.hoisted(() => {
       applyCandidate: vi.fn(),
       rejectCandidate: vi.fn(),
       undoCandidate: vi.fn(),
+      rejectCandidates: vi.fn(),
+      keepMetadata: vi.fn(),
       batch: vi.fn(),
       all: vi.fn()
     }
@@ -86,7 +88,7 @@ describe('CandidateReview', () => {
         candidates: [],
         onapply: vi.fn<ApplyFn>(),
         onreject: vi.fn<RejectFn>(),
-        onundo: vi.fn<UndoFn>()
+        onundo: vi.fn<UndoFn>(),
       }
     });
     expect(screen.getByText('No candidates found for this book.')).toBeInTheDocument();
@@ -106,7 +108,7 @@ describe('CandidateReview', () => {
         candidates: [candidate],
         onapply: vi.fn<ApplyFn>(),
         onreject: vi.fn<RejectFn>(),
-        onundo: vi.fn<UndoFn>()
+        onundo: vi.fn<UndoFn>(),
       }
     });
     expect(screen.getByText('Open Library')).toBeInTheDocument();
@@ -129,7 +131,7 @@ describe('CandidateReview', () => {
         candidates: [candidate],
         onapply: vi.fn<ApplyFn>(),
         onreject: vi.fn<RejectFn>(),
-        onundo: vi.fn<UndoFn>()
+        onundo: vi.fn<UndoFn>(),
       }
     });
     expect(screen.getByText("Title differs from provider's suggestion")).toBeInTheDocument();
@@ -152,7 +154,7 @@ describe('CandidateReview', () => {
         candidates: [rejected],
         onapply: vi.fn<ApplyFn>(),
         onreject: vi.fn<RejectFn>(),
-        onundo: vi.fn<UndoFn>()
+        onundo: vi.fn<UndoFn>(),
       }
     });
     expect(screen.getByText('Rejected (1)')).toBeInTheDocument();
@@ -172,7 +174,7 @@ describe('CandidateReview', () => {
         candidates: [applied],
         onapply: vi.fn<ApplyFn>(),
         onreject: vi.fn<RejectFn>(),
-        onundo: vi.fn<UndoFn>()
+        onundo: vi.fn<UndoFn>(),
       }
     });
     // "Applied" section heading
@@ -196,7 +198,7 @@ describe('CandidateReview', () => {
         candidates: [candidate],
         onapply,
         onreject: vi.fn<RejectFn>(),
-        onundo: vi.fn<UndoFn>()
+        onundo: vi.fn<UndoFn>(),
       }
     });
 
@@ -224,7 +226,7 @@ describe('CandidateReview', () => {
         candidates: [candidate],
         onapply: vi.fn<ApplyFn>(),
         onreject,
-        onundo: vi.fn<UndoFn>()
+        onundo: vi.fn<UndoFn>(),
       }
     });
 
@@ -253,7 +255,7 @@ describe('CandidateReview', () => {
         candidates: [applied],
         onapply: vi.fn<ApplyFn>(),
         onreject: vi.fn<RejectFn>(),
-        onundo
+        onundo,
       }
     });
 
@@ -281,7 +283,7 @@ describe('CandidateReview', () => {
         candidates: [candidate],
         onapply: vi.fn<ApplyFn>(),
         onreject: vi.fn<RejectFn>(),
-        onundo: vi.fn<UndoFn>()
+        onundo: vi.fn<UndoFn>(),
       }
     });
 
@@ -299,7 +301,7 @@ describe('CandidateReview', () => {
         candidates: [createCandidateResponse()],
         onapply: vi.fn<ApplyFn>(),
         onreject: vi.fn<RejectFn>(),
-        onundo: vi.fn<UndoFn>()
+        onundo: vi.fn<UndoFn>(),
       }
     });
 
@@ -308,25 +310,6 @@ describe('CandidateReview', () => {
         'Metadata is locked. Refreshes stay in review-only mode until you unlock the book.'
       )
     ).toBeInTheDocument();
-  });
-
-  it('shows protected fields from metadata provenance', () => {
-    render(CandidateReview, {
-      props: {
-        book: createBookDetail({
-          metadata_provenance: {
-            title: { origin: { type: 'user' }, protected: true },
-            authors: { origin: { type: 'provider', name: 'Open Library' }, protected: true }
-          }
-        }),
-        candidates: [createCandidateResponse()],
-        onapply: vi.fn<ApplyFn>(),
-        onreject: vi.fn<RejectFn>(),
-        onundo: vi.fn<UndoFn>()
-      }
-    });
-
-    expect(screen.getByText('Protected fields: title, authors.')).toBeInTheDocument();
   });
 
   it('renders tier badge when tier is present', () => {
@@ -342,8 +325,8 @@ describe('CandidateReview', () => {
             candidates: [candidate],
             onapply: vi.fn<ApplyFn>(),
             onreject: vi.fn<RejectFn>(),
-            onundo: vi.fn<UndoFn>()
-        }
+            onundo: vi.fn<UndoFn>(),
+            }
     });
     expect(screen.getByText('Strong ID match')).toBeInTheDocument();
   });
@@ -363,7 +346,7 @@ describe('CandidateReview', () => {
         candidates: [candidate],
         onapply: vi.fn<ApplyFn>(),
         onreject: vi.fn<RejectFn>(),
-        onundo: vi.fn<UndoFn>()
+        onundo: vi.fn<UndoFn>(),
       }
     });
     expect(screen.getByText('Translator')).toBeInTheDocument();
@@ -390,7 +373,7 @@ describe('CandidateReview', () => {
         candidates: [applied, pending],
         onapply: vi.fn<ApplyFn>(),
         onreject: vi.fn<RejectFn>(),
-        onundo: vi.fn<UndoFn>()
+        onundo: vi.fn<UndoFn>(),
       }
     });
     // Pending candidates still have Apply/Reject buttons (no blocking text)

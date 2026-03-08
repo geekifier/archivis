@@ -15,8 +15,9 @@ use crate::errors::ApiError;
 use crate::state::AppState;
 
 use super::types::{
-    ApplyCandidateBody, BatchRefreshMetadataRequest, CandidateAuthor, CandidateResponse,
-    RefreshAllMetadataRequest, RefreshAllMetadataResponse, RefreshMetadataResponse, SeriesInfo,
+    ApplyCandidateBody, BatchRefreshMetadataRequest, BatchRejectRequest, CandidateAuthor,
+    CandidateResponse, RefreshAllMetadataRequest, RefreshAllMetadataResponse,
+    RefreshMetadataResponse, SeriesInfo,
 };
 
 const VALID_EXCLUDE_FIELDS: &[&str] = &[
@@ -254,6 +255,75 @@ pub async fn reject_candidate(
         .map_err(|e| ApiError::Internal(format!("failed to reject candidate: {e}")))?;
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// `POST /api/books/{id}/candidates/reject` -- batch-reject multiple candidates.
+#[utoipa::path(
+    post,
+    path = "/api/books/{id}/candidates/reject",
+    tag = "resolution",
+    params(("id" = Uuid, Path, description = "Book ID")),
+    request_body = BatchRejectRequest,
+    responses(
+        (status = 200, description = "Candidates rejected, book updated", body = BookDetail),
+        (status = 404, description = "Book not found"),
+        (status = 409, description = "One or more candidates not in pending state"),
+        (status = 401, description = "Not authenticated"),
+    ),
+    security(("bearer" = []))
+)]
+pub async fn batch_reject_candidates(
+    State(state): State<AppState>,
+    AuthUser(_user): AuthUser,
+    Path(book_id): Path<Uuid>,
+    Json(body): Json<BatchRejectRequest>,
+) -> Result<Json<BookDetail>, ApiError> {
+    let pool = state.db_pool();
+
+    // Verify book exists
+    BookRepository::get_by_id(pool, book_id).await?;
+
+    state
+        .resolve_service()
+        .reject_candidates(book_id, &body.candidate_ids)
+        .await
+        .map_err(|e| ApiError::Internal(format!("failed to reject candidates: {e}")))?;
+
+    let bwr = BookRepository::get_with_relations(pool, book_id).await?;
+    Ok(Json(bwr.into()))
+}
+
+/// `POST /api/books/{id}/keep-metadata` -- keep current metadata and stop resolution.
+#[utoipa::path(
+    post,
+    path = "/api/books/{id}/keep-metadata",
+    tag = "resolution",
+    params(("id" = Uuid, Path, description = "Book ID")),
+    responses(
+        (status = 200, description = "Metadata kept, resolution stopped", body = BookDetail),
+        (status = 404, description = "Book not found"),
+        (status = 401, description = "Not authenticated"),
+    ),
+    security(("bearer" = []))
+)]
+pub async fn keep_metadata(
+    State(state): State<AppState>,
+    AuthUser(_user): AuthUser,
+    Path(book_id): Path<Uuid>,
+) -> Result<Json<BookDetail>, ApiError> {
+    let pool = state.db_pool();
+
+    // Verify book exists
+    BookRepository::get_by_id(pool, book_id).await?;
+
+    state
+        .resolve_service()
+        .keep_current_metadata(book_id)
+        .await
+        .map_err(|e| ApiError::Internal(format!("failed to keep metadata: {e}")))?;
+
+    let bwr = BookRepository::get_with_relations(pool, book_id).await?;
+    Ok(Json(bwr.into()))
 }
 
 /// `POST /api/books/{id}/candidates/{candidate_id}/undo` -- undo an applied candidate.

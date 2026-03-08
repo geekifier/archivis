@@ -41,11 +41,6 @@
   const rejectedCandidates = $derived(candidates.filter((c) => c.status === 'rejected'));
   const appliedCandidates = $derived(candidates.filter((c) => c.status === 'applied'));
   const hasExistingApply = $derived(appliedCandidates.length > 0);
-  const protectedFields = $derived(
-    Object.entries(book.metadata_provenance ?? {})
-      .filter(([, provenance]) => provenance?.protected)
-      .map(([field]) => field)
-  );
 
   function isAuthorRole(role: string | undefined | null): boolean {
     return !role || role === 'author';
@@ -53,17 +48,6 @@
 
   function titleCase(s: string): string {
     return s.charAt(0).toUpperCase() + s.slice(1);
-  }
-
-  function formatFieldLabel(field: string): string {
-    switch (field) {
-      case 'publication_year':
-        return 'publication year';
-      case 'page_count':
-        return 'page count';
-      default:
-        return field.replace('_', ' ');
-    }
   }
 
   /** Initialize default selections for any new pending candidate. */
@@ -161,6 +145,7 @@
       undoingId = null;
     }
   }
+
 </script>
 
 <div class="space-y-4">
@@ -169,14 +154,6 @@
       class="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-900 dark:text-amber-200"
     >
       Metadata is locked. Refreshes stay in review-only mode until you unlock the book.
-    </div>
-  {/if}
-
-  {#if protectedFields.length > 0}
-    <div
-      class="rounded-md border border-sky-500/30 bg-sky-500/10 px-3 py-2 text-sm text-sky-900 dark:text-sky-200"
-    >
-      Protected fields: {protectedFields.map(formatFieldLabel).join(', ')}.
     </div>
   {/if}
 
