@@ -1,8 +1,6 @@
 <script lang="ts">
-  import { page } from '$app/state';
   import { goto } from '$app/navigation';
-  import { api, ApiError } from '$lib/api/index.js';
-  import { navCounts } from '$lib/stores/nav-counts.svelte.js';
+  import { page } from '$app/state';
   import type {
     BookDetail,
     CandidateResponse,
@@ -10,17 +8,19 @@
     TaskProgressEvent,
     TaskStatus
   } from '$lib/api/index.js';
-  import { Button } from '$lib/components/ui/button/index.js';
-  import * as AlertDialog from '$lib/components/ui/alert-dialog/index.js';
-  import * as Dialog from '$lib/components/ui/dialog/index.js';
+  import { api, ApiError } from '$lib/api/index.js';
+  import AutocompleteInput from '$lib/components/library/AutocompleteInput.svelte';
   import BookEditForm from '$lib/components/library/BookEditForm.svelte';
-  import CoverUploadDialog from '$lib/components/library/CoverUploadDialog.svelte';
   import CandidateReview from '$lib/components/library/CandidateReview.svelte';
+  import CoverImage from '$lib/components/library/CoverImage.svelte';
+  import CoverUploadDialog from '$lib/components/library/CoverUploadDialog.svelte';
   import IdentifierEditor from '$lib/components/library/IdentifierEditor.svelte';
   import MergeDialog from '$lib/components/library/MergeDialog.svelte';
-  import AutocompleteInput from '$lib/components/library/AutocompleteInput.svelte';
-  import CoverImage from '$lib/components/library/CoverImage.svelte';
-  import { placeholderHue, formatFileSize } from '$lib/utils.js';
+  import * as AlertDialog from '$lib/components/ui/alert-dialog/index.js';
+  import { Button } from '$lib/components/ui/button/index.js';
+  import * as Dialog from '$lib/components/ui/dialog/index.js';
+  import { navCounts } from '$lib/stores/nav-counts.svelte.js';
+  import { formatFileSize, placeholderHue } from '$lib/utils.js';
 
   let book = $state<BookDetail | null>(null);
   let loading = $state(true);
@@ -1136,25 +1136,6 @@
             <p class="text-sm text-destructive">{candidatesError}</p>
           {/if}
 
-          <!-- Other contributors -->
-          {#if otherContributors.length > 0}
-            <div>
-              <h3 class="text-sm font-semibold text-muted-foreground">Contributors</h3>
-              <div class="mt-1 space-y-0.5">
-                {#each otherContributors as contributor (contributor.id)}
-                  <p class="text-sm">
-                    <a
-                      href="/authors/{contributor.id}"
-                      class="transition-colors hover:text-primary hover:underline"
-                      >{contributor.name}</a
-                    >
-                    <span class="text-muted-foreground">({contributor.role})</span>
-                  </p>
-                {/each}
-              </div>
-            </div>
-          {/if}
-
           <!-- Description -->
           {#if book.description}
             <div>
@@ -1216,6 +1197,22 @@
                 <dt class="text-muted-foreground">Added</dt>
                 <dd class="font-medium">{formatDate(book.added_at)}</dd>
               </div>
+
+              {#if otherContributors.length > 0}
+                <div>
+                  <dt class="text-muted-foreground">Contributors</dt>
+                  {#each otherContributors as contributor (contributor.id)}
+                    <dd class="text-sm">
+                      <a
+                        href="/authors/{contributor.id}"
+                        class="transition-colors hover:text-primary hover:underline"
+                        >{contributor.name}</a
+                      >
+                      <span class="text-muted-foreground">({contributor.role})</span>
+                    </dd>
+                  {/each}
+                </div>
+              {/if}
             </dl>
           </div>
 

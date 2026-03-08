@@ -137,4 +137,15 @@ describe('formatFormats', () => {
     const book = createBookSummary({ files: [] });
     expect(formatFormats(book)).toEqual([]);
   });
+
+  it('deduplicates formats when multiple files share the same format', () => {
+    const book = createBookSummary({
+      files: [
+        createFileEntry({ format: 'epub' }),
+        createFileEntry({ format: 'epub' }),
+        createFileEntry({ format: 'pdf' })
+      ]
+    });
+    expect(formatFormats(book)).toEqual(['EPUB', 'PDF']);
+  });
 });

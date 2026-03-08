@@ -48,5 +48,5 @@ export function formatSeries(book: BookSummary): string {
 
 /** Extract uppercase format labels from a book's files. */
 export function formatFormats(book: BookSummary): string[] {
-  return book.files?.map((f) => f.format.toUpperCase()) ?? [];
+  return [...new Set(book.files?.map((f) => f.format.toUpperCase()) ?? [])];
 }
