@@ -23,6 +23,9 @@ pub struct ImportService<S: StorageBackend> {
     db_pool: DbPool,
     storage: S,
     config: ImportConfig,
+    /// Serializes fuzzy-check through book-creation to prevent concurrent
+    /// imports from missing each other's uncommitted books (TOCTOU race).
+    import_mutex: tokio::sync::Mutex<()>,
 }
 
 impl<S: StorageBackend> ImportService<S> {
@@ -31,6 +34,7 @@ impl<S: StorageBackend> ImportService<S> {
             db_pool,
             storage,
             config,
+            import_mutex: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -84,6 +88,17 @@ impl<S: StorageBackend> ImportService<S> {
             });
         }
 
+        // 7: Store file and cover to storage (I/O-heavy, runs concurrently)
+        let title = resolve_title(&embedded, &parsed, source_path);
+        let author = resolve_author(&embedded, &parsed);
+        let (stored, cover_path) = self
+            .store_file_and_cover(&data, &hash, &title, &author, source_path, &embedded)
+            .await?;
+
+        // Serialize fuzzy-check through DB-commit so concurrent imports
+        // cannot both miss each other's uncommitted books (TOCTOU race).
+        let import_guard = self.import_mutex.lock().await;
+
         // Fuzzy title+author duplicate check (soft — does not block import)
         let fuzzy_duplicate = self
             .check_fuzzy_duplicates(&embedded, &parsed, source_path)
@@ -119,21 +134,6 @@ impl<S: StorageBackend> ImportService<S> {
             .or(fuzzy_link)
             .map_or_else(|| (uuid::Uuid::new_v4(), true), |id| (id, false));
 
-        // 7-8: Store file and handle covers
-        let title = resolve_title(&embedded, &parsed, source_path);
-        let author = resolve_author(&embedded, &parsed);
-        let (stored, cover_path) = self
-            .store_file_and_cover(
-                &data,
-                &hash,
-                &title,
-                &author,
-                source_path,
-                book_id,
-                &embedded,
-            )
-            .await?;
-
         // 9: Create DB records
         let book_file = self
             .create_db_records(
@@ -149,8 +149,6 @@ impl<S: StorageBackend> ImportService<S> {
             )
             .await?;
 
-        info!(book_id = %book_id, format = %format, status = %score.status, "imported file");
-
         // When auto-linked via fuzzy match, the file was cleanly attached —
         // no duplicate to record or surface.
         let report_duplicate = if fuzzy_link.is_some() {
@@ -163,6 +161,26 @@ impl<S: StorageBackend> ImportService<S> {
         };
 
         BookRepository::mark_resolution_pending(&self.db_pool, book_id, "import").await?;
+
+        // Release the import lock before I/O-heavy thumbnail generation.
+        drop(import_guard);
+
+        info!(book_id = %book_id, format = %format, status = %score.status, "imported file");
+
+        // 8: Generate thumbnails (needs `book_id`, but not the lock)
+        if let Some(ref cover_data) = embedded.cover_image {
+            let cache_dir = self.config.data_dir.clone();
+            if let Err(e) = cover::generate_thumbnails(
+                cover_data,
+                book_id,
+                &cache_dir,
+                &self.config.thumbnail_sizes,
+            )
+            .await
+            {
+                warn!("thumbnail generation failed: {e}");
+            }
+        }
 
         Ok(ImportResult {
             book_id,
@@ -200,6 +218,10 @@ impl<S: StorageBackend> ImportService<S> {
     }
 
     /// Store the book file and its cover image (if present) in the storage backend.
+    ///
+    /// Thumbnail generation is intentionally NOT done here — it requires
+    /// `book_id` which is only known after the duplicate check, so the caller
+    /// handles it separately.
     async fn store_file_and_cover(
         &self,
         data: &[u8],
@@ -207,7 +229,6 @@ impl<S: StorageBackend> ImportService<S> {
         title: &str,
         author: &str,
         source_path: &Path,
-        book_id: uuid::Uuid,
         embedded: &ExtractedMetadata,
     ) -> Result<(archivis_storage::StoredFile, Option<String>), ImportError> {
         let filename = source_path
@@ -228,18 +249,6 @@ impl<S: StorageBackend> ImportService<S> {
             match cover::store_cover(&self.storage, book_dir, cover_data).await {
                 Ok(path) => cover_path = Some(path),
                 Err(e) => warn!("cover storage failed, continuing without cover: {e}"),
-            }
-
-            let cache_dir = self.config.data_dir.clone();
-            if let Err(e) = cover::generate_thumbnails(
-                cover_data,
-                book_id,
-                &cache_dir,
-                &self.config.thumbnail_sizes,
-            )
-            .await
-            {
-                warn!("thumbnail generation failed: {e}");
             }
         }
 
