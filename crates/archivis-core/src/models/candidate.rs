@@ -1,9 +1,11 @@
 use std::fmt;
 use std::str::FromStr;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+
+use super::book::FieldProvenance;
 
 /// Status of an identification candidate in the review workflow.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -64,6 +66,9 @@ pub struct IdentificationCandidate {
     pub tier: Option<String>,
     pub status: CandidateStatus,
     pub created_at: DateTime<Utc>,
+    /// JSON-serialized [`ApplyChangeset`] recording what the apply changed.
+    /// Present only while the apply is undoable.
+    pub apply_changeset: Option<serde_json::Value>,
 }
 
 impl IdentificationCandidate {
@@ -87,8 +92,84 @@ impl IdentificationCandidate {
             tier: None,
             status: CandidateStatus::Pending,
             created_at: Utc::now(),
+            apply_changeset: None,
         }
     }
+}
+
+/// Records pre-apply state for each field that was actually mutated,
+/// enabling provenance-guarded undo.
+///
+/// Only populated fields were changed by the apply. Each present field
+/// holds the **pre-apply value** and **pre-apply provenance** so undo
+/// can restore them (after verifying the field hasn't been edited since).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ApplyChangeset {
+    /// Provider name that performed this apply (for provenance matching on undo).
+    pub provider_name: String,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<ChangesetEntry<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sort_title: Option<ChangesetEntry<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subtitle: Option<ChangesetEntry<Option<String>>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<ChangesetEntry<Option<String>>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub language: Option<ChangesetEntry<Option<String>>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub publication_date: Option<ChangesetEntry<Option<NaiveDate>>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub page_count: Option<ChangesetEntry<Option<i32>>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cover_path: Option<ChangesetEntry<Option<String>>>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub authors: Option<ChangesetEntry<Vec<ChangesetAuthor>>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub series: Option<ChangesetEntry<Vec<ChangesetSeries>>>,
+}
+
+impl ApplyChangeset {
+    /// True if no fields were actually changed by the apply.
+    pub fn is_empty(&self) -> bool {
+        self.title.is_none()
+            && self.sort_title.is_none()
+            && self.subtitle.is_none()
+            && self.description.is_none()
+            && self.language.is_none()
+            && self.publication_date.is_none()
+            && self.page_count.is_none()
+            && self.cover_path.is_none()
+            && self.authors.is_none()
+            && self.series.is_none()
+    }
+}
+
+/// A field's pre-apply value and its pre-apply provenance.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChangesetEntry<T> {
+    pub old_value: T,
+    pub old_provenance: Option<FieldProvenance>,
+}
+
+/// Snapshot of a book-author link for changeset storage.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChangesetAuthor {
+    pub author_id: Uuid,
+    pub name: String,
+    pub sort_name: String,
+    pub role: String,
+    pub position: i64,
+}
+
+/// Snapshot of a book-series link for changeset storage.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChangesetSeries {
+    pub series_id: Uuid,
+    pub name: String,
+    pub position: Option<f64>,
 }
 
 #[cfg(test)]

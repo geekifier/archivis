@@ -134,6 +134,7 @@ mod openapi {
             super::duplicates::handlers::merge_duplicate,
             super::duplicates::handlers::dismiss_duplicate,
             super::duplicates::handlers::flag_duplicate,
+            super::duplicates::handlers::list_duplicates_for_book,
             // Filesystem
             super::filesystem::handlers::browse_directory,
             // Settings
@@ -225,6 +226,7 @@ mod openapi {
             // Tasks
             super::tasks::types::TaskResponse,
             // Resolution
+            super::resolve::types::CandidateAuthor,
             super::resolve::types::CandidateResponse,
             super::resolve::types::SeriesInfo,
             super::resolve::types::ApplyCandidateBody,

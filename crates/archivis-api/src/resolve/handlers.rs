@@ -15,8 +15,8 @@ use crate::errors::ApiError;
 use crate::state::AppState;
 
 use super::types::{
-    ApplyCandidateBody, BatchRefreshMetadataRequest, CandidateResponse, RefreshAllMetadataRequest,
-    RefreshAllMetadataResponse, RefreshMetadataResponse, SeriesInfo,
+    ApplyCandidateBody, BatchRefreshMetadataRequest, CandidateAuthor, CandidateResponse,
+    RefreshAllMetadataRequest, RefreshAllMetadataResponse, RefreshMetadataResponse, SeriesInfo,
 };
 
 const VALID_EXCLUDE_FIELDS: &[&str] = &[
@@ -430,7 +430,13 @@ fn candidate_to_response(candidate: IdentificationCandidate) -> CandidateRespons
             (
                 meta.title.clone(),
                 meta.subtitle.clone(),
-                meta.authors.iter().map(|a| a.name.clone()).collect(),
+                meta.authors
+                    .iter()
+                    .map(|a| CandidateAuthor {
+                        name: a.name.clone(),
+                        role: a.role.clone(),
+                    })
+                    .collect(),
                 meta.description.clone(),
                 meta.publisher.clone(),
                 meta.publication_date.clone(),
@@ -452,6 +458,7 @@ fn candidate_to_response(candidate: IdentificationCandidate) -> CandidateRespons
 
     CandidateResponse {
         id: candidate.id,
+        run_id: candidate.run_id,
         provider_name: candidate.provider_name,
         score: candidate.score,
         title,
@@ -760,7 +767,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn list_candidates_returns_empty_for_confirmed_run_with_no_pending() {
+    async fn list_candidates_surfaces_applied_for_confirmed_run() {
         let tmp = TempDir::new().unwrap();
         let state = test_state(&tmp).await;
 
@@ -811,9 +818,9 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(
-            candidates.is_empty(),
-            "confirmed run with no pending candidates should return empty"
-        );
+        // Applied candidate is surfaced (for undo); rejected is not
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].id, applied.id);
+        assert_eq!(candidates[0].status, "applied");
     }
 }

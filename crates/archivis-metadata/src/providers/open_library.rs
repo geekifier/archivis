@@ -327,6 +327,17 @@ impl OpenLibraryProvider {
         results
             .docs
             .iter()
+            .filter(|doc| {
+                let dominated = has_any_supported_format(doc.format.as_deref());
+                if !dominated {
+                    debug!(
+                        title = ?doc.title,
+                        format = ?doc.format,
+                        "dropping audio-only work from search results"
+                    );
+                }
+                dominated
+            })
             .map(|doc| {
                 let title = doc.title.clone();
 
@@ -589,6 +600,18 @@ struct OlSearchDoc {
     publisher: Option<Vec<String>>,
     number_of_pages_median: Option<i32>,
     subject: Option<Vec<String>>,
+    format: Option<Vec<String>>,
+}
+
+/// Returns `true` if the work should be kept: it has at least one supported
+/// format, or no format data (benefit of the doubt).
+fn has_any_supported_format(formats: Option<&[String]>) -> bool {
+    match formats {
+        None | Some(&[]) => true,
+        Some(fmts) => fmts
+            .iter()
+            .any(|f| !crate::resolver::is_unsupported_format(f)),
+    }
 }
 
 // ── Helper functions ─────────────────────────────────────────────────
@@ -778,7 +801,7 @@ fn build_search_url(query: &MetadataQuery) -> String {
 
     serializer.append_pair(
         "fields",
-        "key,title,author_name,first_publish_year,isbn,cover_i,publisher,number_of_pages_median,subject",
+        "key,title,author_name,first_publish_year,isbn,cover_i,publisher,number_of_pages_median,subject,format",
     );
     serializer.append_pair("limit", "5");
 
@@ -1649,6 +1672,73 @@ mod tests {
             Some("Audio CD"),
             "`physical_format` should propagate from edition to metadata"
         );
+    }
+
+    // ── has_any_supported_format tests ────────────────────────────────
+
+    #[test]
+    fn has_any_supported_format_mixed() {
+        let formats = vec!["Audio CD".to_string(), "Paperback".to_string()];
+        assert!(
+            has_any_supported_format(Some(&formats)),
+            "mixed formats should be kept"
+        );
+    }
+
+    #[test]
+    fn has_any_supported_format_audio_only() {
+        let formats = vec!["Audio CD".to_string(), "audio cd".to_string()];
+        assert!(
+            !has_any_supported_format(Some(&formats)),
+            "audio-only should be dropped"
+        );
+    }
+
+    #[test]
+    fn has_any_supported_format_none_and_empty() {
+        assert!(has_any_supported_format(None), "None should be kept");
+        assert!(has_any_supported_format(Some(&[])), "empty should be kept");
+    }
+
+    #[test]
+    fn search_filters_audio_only_works() {
+        let response = OlSearchResponse {
+            docs: vec![
+                OlSearchDoc {
+                    key: Some("/works/OL1".to_string()),
+                    title: Some("Dune (Audiobook)".to_string()),
+                    author_name: None,
+                    first_publish_year: None,
+                    isbn: None,
+                    cover_i: None,
+                    publisher: None,
+                    number_of_pages_median: None,
+                    subject: None,
+                    format: Some(vec!["Audio CD".to_string(), "MP3 CD".to_string()]),
+                },
+                OlSearchDoc {
+                    key: Some("/works/OL2".to_string()),
+                    title: Some("Dune".to_string()),
+                    author_name: None,
+                    first_publish_year: None,
+                    isbn: None,
+                    cover_i: None,
+                    publisher: None,
+                    number_of_pages_median: None,
+                    subject: None,
+                    format: Some(vec!["Paperback".to_string(), "Audio CD".to_string()]),
+                },
+            ],
+        };
+
+        let query = MetadataQuery {
+            title: Some("Dune".to_string()),
+            ..Default::default()
+        };
+
+        let results = OpenLibraryProvider::parse_search_results(&response, &query);
+        assert_eq!(results.len(), 1, "audio-only work should be filtered");
+        assert_eq!(results[0].title.as_deref(), Some("Dune"));
     }
 
     #[tokio::test]

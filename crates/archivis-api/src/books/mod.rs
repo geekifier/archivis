@@ -57,7 +57,11 @@ pub fn router() -> Router<AppState> {
             put(handlers::update_identifier).delete(handlers::delete_identifier),
         )
         // Duplicate flagging route
-        .route("/{id}/duplicates", post(duplicate_handlers::flag_duplicate))
+        .route(
+            "/{id}/duplicates",
+            get(duplicate_handlers::list_duplicates_for_book)
+                .post(duplicate_handlers::flag_duplicate),
+        )
         // Resolution review routes
         .route(
             "/{id}/candidates",

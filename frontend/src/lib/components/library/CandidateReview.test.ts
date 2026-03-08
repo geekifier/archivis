@@ -348,7 +348,29 @@ describe('CandidateReview', () => {
     expect(screen.getByText('Strong ID match')).toBeInTheDocument();
   });
 
-  it('when a candidate is applied, pending candidates show "Another candidate was applied"', () => {
+  it('renders non-author contributors as separate rows', () => {
+    const candidate = createCandidateResponse({
+      id: 'c1',
+      status: 'pending',
+      authors: [
+        { name: 'Andrzej Sapkowski', role: 'author' },
+        { name: 'David French', role: 'translator' }
+      ]
+    });
+    render(CandidateReview, {
+      props: {
+        book,
+        candidates: [candidate],
+        onapply: vi.fn<ApplyFn>(),
+        onreject: vi.fn<RejectFn>(),
+        onundo: vi.fn<UndoFn>()
+      }
+    });
+    expect(screen.getByText('Translator')).toBeInTheDocument();
+    expect(screen.getByText('David French')).toBeInTheDocument();
+  });
+
+  it('when a candidate is applied, pending candidates still show Apply/Reject buttons', () => {
     const applied = createCandidateResponse({
       id: 'c1',
       status: 'applied',
@@ -371,7 +393,9 @@ describe('CandidateReview', () => {
         onundo: vi.fn<UndoFn>()
       }
     });
-    expect(screen.getByText('Another candidate was applied')).toBeInTheDocument();
+    // Pending candidates still have Apply/Reject buttons (no blocking text)
+    expect(screen.getByText('Apply')).toBeInTheDocument();
+    expect(screen.getByText('Reject')).toBeInTheDocument();
     // The Undo button for the applied candidate should be there
     expect(screen.getByText('Undo')).toBeInTheDocument();
   });

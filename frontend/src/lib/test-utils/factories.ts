@@ -125,7 +125,7 @@ export function createCandidateResponse(overrides?: Partial<CandidateResponse>):
     provider_name: 'Open Library',
     score: 0.85,
     title: 'Candidate Title',
-    authors: ['Candidate Author'],
+    authors: [{ name: 'Candidate Author', role: 'author' }],
     description: undefined,
     publisher: undefined,
     publication_date: undefined,

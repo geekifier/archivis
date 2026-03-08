@@ -219,7 +219,7 @@ impl<S: StorageBackend> ResolutionService<S> {
             return Ok(None);
         }
 
-        match self.resolve_book(book_id).await {
+        match self.resolve_book(book_id, manual_refresh).await {
             Ok(outcome) => {
                 if outcome.superseded {
                     BookRepository::mark_resolution_superseded(&self.db_pool, book_id)
@@ -258,8 +258,15 @@ impl<S: StorageBackend> ResolutionService<S> {
     /// Builds a `MetadataQuery` from the book's existing metadata, queries
     /// the resolver, stores all candidates in the database, and optionally
     /// auto-applies the best match.
+    ///
+    /// When `manual_refresh` is `true`, auto-apply is suppressed so the user
+    /// can review candidates and choose which fields (including cover) to apply.
     #[allow(clippy::too_many_lines)]
-    pub async fn resolve_book(&self, book_id: Uuid) -> Result<ResolutionOutcome, TaskError> {
+    pub async fn resolve_book(
+        &self,
+        book_id: Uuid,
+        manual_refresh: bool,
+    ) -> Result<ResolutionOutcome, TaskError> {
         // 1. Load book from DB with identifiers
         let book = BookRepository::get_by_id(&self.db_pool, book_id)
             .await
@@ -423,7 +430,7 @@ impl<S: StorageBackend> ResolutionService<S> {
             )
         };
 
-        if result.auto_apply {
+        if result.auto_apply && !manual_refresh {
             if let Some(ref best) = result.best_match {
                 info!(
                     book_id = %book_id,
@@ -548,7 +555,8 @@ impl<S: StorageBackend> ResolutionService<S> {
             run_outcome = BookResolutionOutcome::Unmatched;
             decision_reason = format_decision(result.decision, None);
         } else {
-            // Candidates exist but resolver declined auto-apply.
+            // Candidates exist but auto-apply was not performed (resolver
+            // declined, or manual refresh suppressed it).
             self.run_step(
                 run.id,
                 candidate_count,
@@ -561,7 +569,14 @@ impl<S: StorageBackend> ResolutionService<S> {
             )
             .await?;
             run_outcome = BookResolutionOutcome::Ambiguous;
-            decision_reason = format_decision(result.decision, result.best_match.as_ref());
+            decision_reason = if manual_refresh && result.auto_apply {
+                format!(
+                    "manual_refresh_review: {}",
+                    format_decision(result.decision, result.best_match.as_ref())
+                )
+            } else {
+                format_decision(result.decision, result.best_match.as_ref())
+            };
         }
 
         self.pause_resolution_at(ResolutionPausePoint::BeforeFinalizeSupersessionCheck)
@@ -836,7 +851,22 @@ impl<S: StorageBackend> ResolutionService<S> {
         provider_meta: &ProviderMetadata,
         plan: &ReconciliationPlan,
     ) -> Result<Book, TaskError> {
+        use archivis_core::models::{
+            ApplyChangeset, ChangesetAuthor, ChangesetEntry, ChangesetSeries,
+        };
+
         if !plan.should_apply_candidate {
+            return persist_recomputed_status(&self.db_pool, book_id).await;
+        }
+
+        // Guard: do not auto-apply if there is already an undoable applied candidate
+        let existing_applied = CandidateRepository::find_applied_for_book(&self.db_pool, book_id)
+            .await
+            .map_err(|e| TaskError::Failed(format!("failed to check existing applied: {e}")))?;
+        if existing_applied
+            .as_ref()
+            .is_some_and(|c| c.apply_changeset.is_some())
+        {
             return persist_recomputed_status(&self.db_pool, book_id).await;
         }
 
@@ -871,6 +901,31 @@ impl<S: StorageBackend> ResolutionService<S> {
         let relations = BookRepository::get_with_relations(&self.db_pool, book_id)
             .await
             .map_err(|e| TaskError::Failed(format!("failed to load book relations: {e}")))?;
+
+        // Snapshot pre-apply state for changeset construction
+        let before_book = book.clone();
+        let before_provenance = book.metadata_provenance.clone();
+        let before_authors: Vec<ChangesetAuthor> = relations
+            .authors
+            .iter()
+            .map(|entry| ChangesetAuthor {
+                author_id: entry.author.id,
+                name: entry.author.name.clone(),
+                sort_name: entry.author.sort_name.clone(),
+                role: entry.role.clone(),
+                position: entry.position,
+            })
+            .collect();
+        let before_series: Vec<ChangesetSeries> = relations
+            .series
+            .iter()
+            .map(|entry| ChangesetSeries {
+                series_id: entry.series.id,
+                name: entry.series.name.clone(),
+                position: entry.position,
+            })
+            .collect();
+
         let existing_series_link = provider_meta.series.as_ref().and_then(|prov_series| {
             relations
                 .series
@@ -950,13 +1005,83 @@ impl<S: StorageBackend> ResolutionService<S> {
             None
         };
 
-        if plan.should_apply(MetadataField::Authors) {
+        let should_update_authors = plan.should_apply(MetadataField::Authors);
+        let should_update_series = plan.should_apply(MetadataField::Series);
+
+        if should_update_authors {
             book.metadata_provenance.authors = Some(provider_provenance.clone());
         }
 
-        if plan.should_apply(MetadataField::Series) {
+        if should_update_series {
             book.metadata_provenance.series = Some(provider_provenance.clone());
         }
+
+        // Build changeset from actual mutations
+        let mut changeset = ApplyChangeset {
+            provider_name: provider_meta.provider_name.clone(),
+            ..Default::default()
+        };
+        if book.title != before_book.title {
+            changeset.title = Some(ChangesetEntry {
+                old_value: before_book.title.clone(),
+                old_provenance: before_provenance.title.clone(),
+            });
+            changeset.sort_title = Some(ChangesetEntry {
+                old_value: before_book.sort_title.clone(),
+                old_provenance: None,
+            });
+        }
+        if book.subtitle != before_book.subtitle {
+            changeset.subtitle = Some(ChangesetEntry {
+                old_value: before_book.subtitle.clone(),
+                old_provenance: before_provenance.subtitle.clone(),
+            });
+        }
+        if book.description != before_book.description {
+            changeset.description = Some(ChangesetEntry {
+                old_value: before_book.description.clone(),
+                old_provenance: before_provenance.description.clone(),
+            });
+        }
+        if book.language != before_book.language {
+            changeset.language = Some(ChangesetEntry {
+                old_value: before_book.language.clone(),
+                old_provenance: before_provenance.language.clone(),
+            });
+        }
+        if book.publication_date != before_book.publication_date {
+            changeset.publication_date = Some(ChangesetEntry {
+                old_value: before_book.publication_date,
+                old_provenance: before_provenance.publication_date.clone(),
+            });
+        }
+        if book.page_count != before_book.page_count {
+            changeset.page_count = Some(ChangesetEntry {
+                old_value: before_book.page_count,
+                old_provenance: before_provenance.page_count.clone(),
+            });
+        }
+        if book.cover_path != before_book.cover_path {
+            changeset.cover_path = Some(ChangesetEntry {
+                old_value: before_book.cover_path.clone(),
+                old_provenance: before_provenance.cover.clone(),
+            });
+        }
+        if should_update_authors {
+            changeset.authors = Some(ChangesetEntry {
+                old_value: before_authors,
+                old_provenance: before_provenance.authors.clone(),
+            });
+        }
+        if should_update_series {
+            changeset.series = Some(ChangesetEntry {
+                old_value: before_series,
+                old_provenance: before_provenance.series.clone(),
+            });
+        }
+
+        let changeset_json = serde_json::to_string(&changeset)
+            .map_err(|e| TaskError::Failed(format!("failed to serialize apply changeset: {e}")))?;
 
         // Wrap all DB mutations in a transaction
         let tx_result = async {
@@ -966,12 +1091,23 @@ impl<S: StorageBackend> ResolutionService<S> {
                 .await
                 .map_err(|e| TaskError::Failed(format!("failed to open transaction: {e}")))?;
 
-            if plan.should_apply(MetadataField::Authors) {
+            // Commit any existing applied candidate (without changeset)
+            if let Some(prev) = &existing_applied {
+                CandidateRepository::commit_applied_conn(tx.as_mut(), prev.id)
+                    .await
+                    .map_err(|e| {
+                        TaskError::Failed(format!(
+                            "failed to commit previous applied candidate: {e}"
+                        ))
+                    })?;
+            }
+
+            if should_update_authors {
                 self.update_authors_from_provider_conn(tx.as_mut(), book_id, provider_meta)
                     .await?;
             }
 
-            if plan.should_apply(MetadataField::Series) {
+            if should_update_series {
                 self.update_series_from_provider_conn(
                     tx.as_mut(),
                     book_id,
@@ -1002,6 +1138,14 @@ impl<S: StorageBackend> ResolutionService<S> {
             )
             .await
             .map_err(|e| TaskError::Failed(format!("failed to update candidate status: {e}")))?;
+
+            CandidateRepository::set_apply_changeset_conn(
+                tx.as_mut(),
+                candidate_id,
+                Some(&changeset_json),
+            )
+            .await
+            .map_err(|e| TaskError::Failed(format!("failed to store apply changeset: {e}")))?;
 
             for other in &peer_candidates {
                 if other.id != candidate_id && other.status == CandidateStatus::Pending {
@@ -1154,6 +1298,10 @@ impl<S: StorageBackend> ResolutionService<S> {
         cover_policy: CoverApplyPolicy,
         is_auto_apply: bool,
     ) -> Result<Book, TaskError> {
+        use archivis_core::models::{
+            ApplyChangeset, ChangesetAuthor, ChangesetEntry, ChangesetSeries,
+        };
+
         let candidate = CandidateRepository::get_by_id(&self.db_pool, candidate_id)
             .await
             .map_err(|e| TaskError::Failed(format!("failed to load candidate: {e}")))?
@@ -1172,20 +1320,6 @@ impl<S: StorageBackend> ResolutionService<S> {
             )));
         }
 
-        // Guard: only one applied candidate per run (or legacy runless group).
-        let peer_candidates = self
-            .list_candidate_peer_group(book_id, candidate.run_id)
-            .await?;
-
-        if peer_candidates
-            .iter()
-            .any(|other| other.status == CandidateStatus::Applied && other.id != candidate_id)
-        {
-            return Err(TaskError::Failed(
-                "another candidate is already applied for this run".into(),
-            ));
-        }
-
         let provider_meta: ProviderMetadata = serde_json::from_value(candidate.metadata.clone())
             .map_err(|e| {
                 TaskError::Failed(format!("failed to deserialize candidate metadata: {e}"))
@@ -1197,6 +1331,29 @@ impl<S: StorageBackend> ResolutionService<S> {
         let relations = BookRepository::get_with_relations(&self.db_pool, book_id)
             .await
             .map_err(|e| TaskError::Failed(format!("failed to load book relations: {e}")))?;
+
+        // Snapshot pre-apply state for changeset construction
+        let before_book = book.clone();
+        let before_authors: Vec<ChangesetAuthor> = relations
+            .authors
+            .iter()
+            .map(|entry| ChangesetAuthor {
+                author_id: entry.author.id,
+                name: entry.author.name.clone(),
+                sort_name: entry.author.sort_name.clone(),
+                role: entry.role.clone(),
+                position: entry.position,
+            })
+            .collect();
+        let before_series: Vec<ChangesetSeries> = relations
+            .series
+            .iter()
+            .map(|entry| ChangesetSeries {
+                series_id: entry.series.id,
+                name: entry.series.name.clone(),
+                position: entry.position,
+            })
+            .collect();
 
         let book_identifiers = relations.identifiers.clone();
         let has_authors_before = !relations.authors.is_empty();
@@ -1236,13 +1393,40 @@ impl<S: StorageBackend> ResolutionService<S> {
         let should_apply_cover = !(exclude_fields.contains("cover") || preserve_existing_cover);
         let should_update_identifiers = !exclude_fields.contains("identifiers");
         let should_update_authors = !exclude_fields.contains("authors")
-            && !is_protected(provenance_snapshot.authors.as_ref())
+            && (!is_auto_apply || !is_protected(provenance_snapshot.authors.as_ref()))
             && apply_ctx.may_overwrite_core()
             && !provider_meta.authors.is_empty();
         let should_update_series = !exclude_fields.contains("series")
-            && !is_protected(provenance_snapshot.series.as_ref())
+            && (!is_auto_apply || !is_protected(provenance_snapshot.series.as_ref()))
             && apply_ctx.may_overwrite_core()
             && provider_meta.series.is_some();
+
+        // Set provenance for changed scalar fields
+        let provider_prov = provider_field_provenance(&provider_meta.provider_name);
+        if book.title != before_book.title {
+            book.metadata_provenance.title = Some(provider_prov.clone());
+        }
+        if book.subtitle != before_book.subtitle {
+            book.metadata_provenance.subtitle = Some(provider_prov.clone());
+        }
+        if book.description != before_book.description {
+            book.metadata_provenance.description = Some(provider_prov.clone());
+        }
+        if book.language != before_book.language {
+            book.metadata_provenance.language = Some(provider_prov.clone());
+        }
+        if book.page_count != before_book.page_count {
+            book.metadata_provenance.page_count = Some(provider_prov.clone());
+        }
+        if book.publication_date != before_book.publication_date {
+            book.metadata_provenance.publication_date = Some(provider_prov.clone());
+        }
+        if should_update_authors {
+            book.metadata_provenance.authors = Some(provider_prov.clone());
+        }
+        if should_update_series {
+            book.metadata_provenance.series = Some(provider_prov.clone());
+        }
 
         let staged_cover = if should_apply_cover {
             if let Some(ref cover_url) = provider_meta.cover_url {
@@ -1252,6 +1436,7 @@ impl<S: StorageBackend> ResolutionService<S> {
                 {
                     Ok(staged) => {
                         book.cover_path = Some(staged.new_path.clone());
+                        book.metadata_provenance.cover = Some(provider_prov.clone());
                         Some(staged)
                     }
                     Err(error) => {
@@ -1281,6 +1466,77 @@ impl<S: StorageBackend> ResolutionService<S> {
             }
         }
 
+        // Build changeset from actual mutations
+        let mut changeset = ApplyChangeset {
+            provider_name: provider_meta.provider_name.clone(),
+            ..Default::default()
+        };
+        if book.title != before_book.title {
+            changeset.title = Some(ChangesetEntry {
+                old_value: before_book.title.clone(),
+                old_provenance: provenance_snapshot.title.clone(),
+            });
+            changeset.sort_title = Some(ChangesetEntry {
+                old_value: before_book.sort_title.clone(),
+                old_provenance: None,
+            });
+        }
+        if book.subtitle != before_book.subtitle {
+            changeset.subtitle = Some(ChangesetEntry {
+                old_value: before_book.subtitle.clone(),
+                old_provenance: provenance_snapshot.subtitle.clone(),
+            });
+        }
+        if book.description != before_book.description {
+            changeset.description = Some(ChangesetEntry {
+                old_value: before_book.description.clone(),
+                old_provenance: provenance_snapshot.description.clone(),
+            });
+        }
+        if book.language != before_book.language {
+            changeset.language = Some(ChangesetEntry {
+                old_value: before_book.language.clone(),
+                old_provenance: provenance_snapshot.language.clone(),
+            });
+        }
+        if book.publication_date != before_book.publication_date {
+            changeset.publication_date = Some(ChangesetEntry {
+                old_value: before_book.publication_date,
+                old_provenance: provenance_snapshot.publication_date.clone(),
+            });
+        }
+        if book.page_count != before_book.page_count {
+            changeset.page_count = Some(ChangesetEntry {
+                old_value: before_book.page_count,
+                old_provenance: provenance_snapshot.page_count.clone(),
+            });
+        }
+        if book.cover_path != before_book.cover_path {
+            changeset.cover_path = Some(ChangesetEntry {
+                old_value: before_book.cover_path.clone(),
+                old_provenance: provenance_snapshot.cover.clone(),
+            });
+        }
+        if should_update_authors {
+            changeset.authors = Some(ChangesetEntry {
+                old_value: before_authors,
+                old_provenance: provenance_snapshot.authors.clone(),
+            });
+        }
+        if should_update_series {
+            changeset.series = Some(ChangesetEntry {
+                old_value: before_series,
+                old_provenance: provenance_snapshot.series.clone(),
+            });
+        }
+
+        let changeset_json = serde_json::to_string(&changeset)
+            .map_err(|e| TaskError::Failed(format!("failed to serialize apply changeset: {e}")))?;
+
+        let peer_candidates = self
+            .list_candidate_peer_group(book_id, candidate.run_id)
+            .await?;
+
         let mut next_candidates = peer_candidates.clone();
         for other in &mut next_candidates {
             if other.id == candidate_id {
@@ -1299,6 +1555,7 @@ impl<S: StorageBackend> ResolutionService<S> {
             ),
             &next_candidates,
         );
+        book.resolution_outcome = Some(BookResolutionOutcome::Enriched);
 
         let tx_result = async {
             let mut tx = self
@@ -1306,6 +1563,25 @@ impl<S: StorageBackend> ResolutionService<S> {
                 .begin()
                 .await
                 .map_err(|e| TaskError::Failed(format!("failed to open transaction: {e}")))?;
+
+            // Commit any existing undoable applied candidate for this book
+            let existing_applied =
+                CandidateRepository::find_applied_for_book(&self.db_pool, book_id)
+                    .await
+                    .map_err(|e| {
+                        TaskError::Failed(format!("failed to check existing applied: {e}"))
+                    })?;
+            if let Some(prev) = existing_applied {
+                if prev.id != candidate_id {
+                    CandidateRepository::commit_applied_conn(tx.as_mut(), prev.id)
+                        .await
+                        .map_err(|e| {
+                            TaskError::Failed(format!(
+                                "failed to commit previous applied candidate: {e}"
+                            ))
+                        })?;
+                }
+            }
 
             if should_update_identifiers {
                 self.add_provider_identifiers_conn(
@@ -1339,6 +1615,14 @@ impl<S: StorageBackend> ResolutionService<S> {
             )
             .await
             .map_err(|e| TaskError::Failed(format!("failed to update candidate status: {e}")))?;
+
+            CandidateRepository::set_apply_changeset_conn(
+                tx.as_mut(),
+                candidate_id,
+                Some(&changeset_json),
+            )
+            .await
+            .map_err(|e| TaskError::Failed(format!("failed to store apply changeset: {e}")))?;
 
             for other in &peer_candidates {
                 if other.id != candidate_id && other.status == CandidateStatus::Pending {
@@ -1387,20 +1671,19 @@ impl<S: StorageBackend> ResolutionService<S> {
         Ok(book)
     }
 
-    /// Undo a previously applied candidate.
+    /// Undo a previously applied candidate using its stored changeset.
     ///
-    /// Removes identifiers that were added by the candidate's provider,
-    /// resets the candidate back to `Pending`, restores all other `Rejected`
-    /// candidates to `Pending`, and sets `metadata_status` to `NeedsReview`.
-    ///
-    /// Does **not** revert title/author/description changes (too complex
-    /// and potentially destructive if the user has since edited them).
+    /// Restores fields that were changed by the apply, guarded by provenance:
+    /// fields edited by the user after the apply are left untouched.
+    /// Removes identifiers added by the candidate's provider.
     #[allow(clippy::too_many_lines)]
     pub async fn undo_candidate(
         &self,
         book_id: Uuid,
         candidate_id: Uuid,
     ) -> Result<Book, TaskError> {
+        use archivis_core::models::ApplyChangeset;
+
         let candidate = CandidateRepository::get_by_id(&self.db_pool, candidate_id)
             .await
             .map_err(|e| TaskError::Failed(format!("failed to load candidate: {e}")))?
@@ -1419,33 +1702,110 @@ impl<S: StorageBackend> ResolutionService<S> {
             )));
         }
 
-        let peer_candidates = self
-            .list_candidate_peer_group(book_id, candidate.run_id)
-            .await?;
-        let mut next_candidates = peer_candidates.clone();
-        for other in &mut next_candidates {
-            if other.id == candidate_id || other.status == CandidateStatus::Rejected {
-                other.status = CandidateStatus::Pending;
-            }
-        }
+        let changeset: ApplyChangeset = candidate
+            .apply_changeset
+            .as_ref()
+            .map(|v| serde_json::from_value(v.clone()))
+            .transpose()
+            .map_err(|e| TaskError::Failed(format!("failed to deserialize changeset: {e}")))?
+            .ok_or_else(|| {
+                TaskError::Failed(
+                    "no changeset — this apply has been committed and cannot be undone".into(),
+                )
+            })?;
 
         let mut book = BookRepository::get_by_id(&self.db_pool, book_id)
             .await
             .map_err(|e| TaskError::Failed(format!("failed to load book: {e}")))?;
-        let relations = BookRepository::get_with_relations(&self.db_pool, book_id)
-            .await
-            .map_err(|e| TaskError::Failed(format!("failed to load book relations: {e}")))?;
-        let has_identifiers_after = relations.identifiers.iter().any(|identifier| {
-            !matches!(
-                &identifier.source,
-                MetadataSource::Provider(provider) if provider == &candidate.provider_name
-            )
-        });
-        book.metadata_status = manual_review_status(
-            !relations.authors.is_empty(),
-            has_identifiers_after,
-            &next_candidates,
-        );
+
+        // Provenance-guarded scalar field restore
+        let mut title_restored = false;
+        if let Some(ref entry) = changeset.title {
+            if provenance_matches_provider(
+                book.metadata_provenance.title.as_ref(),
+                &changeset.provider_name,
+            ) {
+                book.title = entry.old_value.clone();
+                book.metadata_provenance.title = entry.old_provenance.clone();
+                title_restored = true;
+            }
+        }
+        // `sort_title` follows title — only restore if title was actually restored
+        if title_restored {
+            if let Some(ref entry) = changeset.sort_title {
+                book.sort_title = entry.old_value.clone();
+            }
+        }
+        if let Some(ref entry) = changeset.subtitle {
+            if provenance_matches_provider(
+                book.metadata_provenance.subtitle.as_ref(),
+                &changeset.provider_name,
+            ) {
+                book.subtitle = entry.old_value.clone();
+                book.metadata_provenance.subtitle = entry.old_provenance.clone();
+            }
+        }
+        if let Some(ref entry) = changeset.description {
+            if provenance_matches_provider(
+                book.metadata_provenance.description.as_ref(),
+                &changeset.provider_name,
+            ) {
+                book.description = entry.old_value.clone();
+                book.metadata_provenance.description = entry.old_provenance.clone();
+            }
+        }
+        if let Some(ref entry) = changeset.language {
+            if provenance_matches_provider(
+                book.metadata_provenance.language.as_ref(),
+                &changeset.provider_name,
+            ) {
+                book.language = entry.old_value.clone();
+                book.metadata_provenance.language = entry.old_provenance.clone();
+            }
+        }
+        if let Some(ref entry) = changeset.publication_date {
+            if provenance_matches_provider(
+                book.metadata_provenance.publication_date.as_ref(),
+                &changeset.provider_name,
+            ) {
+                book.publication_date = entry.old_value;
+                book.metadata_provenance.publication_date = entry.old_provenance.clone();
+            }
+        }
+        if let Some(ref entry) = changeset.page_count {
+            if provenance_matches_provider(
+                book.metadata_provenance.page_count.as_ref(),
+                &changeset.provider_name,
+            ) {
+                book.page_count = entry.old_value;
+                book.metadata_provenance.page_count = entry.old_provenance.clone();
+            }
+        }
+        if let Some(ref entry) = changeset.cover_path {
+            if provenance_matches_provider(
+                book.metadata_provenance.cover.as_ref(),
+                &changeset.provider_name,
+            ) {
+                book.cover_path = entry.old_value.clone();
+                book.metadata_provenance.cover = entry.old_provenance.clone();
+            }
+        }
+
+        // Determine new status for the candidate after undo
+        let is_superseded_run = if let Some(run_id) = candidate.run_id {
+            ResolutionRunRepository::get_by_id(&self.db_pool, run_id)
+                .await
+                .map_err(|e| TaskError::Failed(format!("failed to load resolution run: {e}")))?
+                .is_some_and(|run| run.state == ResolutionRunState::Superseded)
+        } else {
+            false
+        };
+
+        let new_candidate_status = if is_superseded_run {
+            CandidateStatus::Superseded
+        } else {
+            CandidateStatus::Pending
+        };
 
         let tx_result = async {
             let mut tx = self
@@ -1454,10 +1814,97 @@ impl<S: StorageBackend> ResolutionService<S> {
                 .await
                 .map_err(|e| TaskError::Failed(format!("failed to open transaction: {e}")))?;
 
+            // Restore authors if provenance still matches
+            if let Some(ref entry) = changeset.authors {
+                if provenance_matches_provider(
+                    book.metadata_provenance.authors.as_ref(),
+                    &changeset.provider_name,
+                ) {
+                    BookRepository::clear_authors_conn(tx.as_mut(), book_id)
+                        .await
+                        .map_err(|e| {
+                            TaskError::Failed(format!("failed to clear authors for undo: {e}"))
+                        })?;
+
+                    #[allow(clippy::cast_possible_truncation)]
+                    for author_snapshot in &entry.old_value {
+                        // Re-use existing author or create
+                        let db_author = if let Some(existing) =
+                            AuthorRepository::find_by_name_conn(tx.as_mut(), &author_snapshot.name)
+                                .await
+                                .map_err(|e| {
+                                    TaskError::Failed(format!("author lookup failed: {e}"))
+                                })? {
+                            existing
+                        } else {
+                            let new_author =
+                                archivis_core::models::Author::new(&author_snapshot.name);
+                            AuthorRepository::create_conn(tx.as_mut(), &new_author)
+                                .await
+                                .map_err(|e| {
+                                    TaskError::Failed(format!("author create failed: {e}"))
+                                })?;
+                            new_author
+                        };
+
+                        BookRepository::add_author_conn(
+                            tx.as_mut(),
+                            book_id,
+                            db_author.id,
+                            &author_snapshot.role,
+                            author_snapshot.position as i32,
+                        )
+                        .await
+                        .map_err(|e| TaskError::Failed(format!("add author failed: {e}")))?;
+                    }
+                    book.metadata_provenance
+                        .authors
+                        .clone_from(&entry.old_provenance);
+                }
+            }
+
+            // Restore series if provenance still matches
+            if let Some(ref entry) = changeset.series {
+                if provenance_matches_provider(
+                    book.metadata_provenance.series.as_ref(),
+                    &changeset.provider_name,
+                ) {
+                    BookRepository::clear_series_conn(tx.as_mut(), book_id)
+                        .await
+                        .map_err(|e| {
+                            TaskError::Failed(format!("failed to clear series for undo: {e}"))
+                        })?;
+
+                    for series_snapshot in &entry.old_value {
+                        let series = SeriesRepository::find_or_create_conn(
+                            tx.as_mut(),
+                            &series_snapshot.name,
+                        )
+                        .await
+                        .map_err(|e| {
+                            TaskError::Failed(format!("series find_or_create failed: {e}"))
+                        })?;
+
+                        BookRepository::add_series_conn(
+                            tx.as_mut(),
+                            book_id,
+                            series.id,
+                            series_snapshot.position,
+                        )
+                        .await
+                        .map_err(|e| TaskError::Failed(format!("add series failed: {e}")))?;
+                    }
+                    book.metadata_provenance
+                        .series
+                        .clone_from(&entry.old_provenance);
+                }
+            }
+
+            // Remove provider identifiers (unchanged from before — additive/selective)
             let removed = IdentifierRepository::delete_by_provider_conn(
                 tx.as_mut(),
                 book_id,
-                &candidate.provider_name,
+                &changeset.provider_name,
             )
             .await
             .map_err(|e| {
@@ -1466,7 +1913,7 @@ impl<S: StorageBackend> ResolutionService<S> {
 
             debug!(
                 book_id = %book_id,
-                provider = %candidate.provider_name,
+                provider = %changeset.provider_name,
                 removed = removed,
                 "removed provider identifiers"
             );
@@ -1474,22 +1921,34 @@ impl<S: StorageBackend> ResolutionService<S> {
             CandidateRepository::update_status_conn(
                 tx.as_mut(),
                 candidate_id,
-                CandidateStatus::Pending,
+                new_candidate_status,
             )
             .await
             .map_err(|e| TaskError::Failed(format!("failed to reset candidate status: {e}")))?;
 
-            for other in &peer_candidates {
-                if other.id != candidate_id && other.status == CandidateStatus::Rejected {
-                    CandidateRepository::update_status_conn(
-                        tx.as_mut(),
-                        other.id,
-                        CandidateStatus::Pending,
-                    )
-                    .await
-                    .map_err(|e| {
-                        TaskError::Failed(format!("failed to restore candidate status: {e}"))
-                    })?;
+            // Clear the changeset
+            CandidateRepository::set_apply_changeset_conn(tx.as_mut(), candidate_id, None)
+                .await
+                .map_err(|e| TaskError::Failed(format!("failed to clear apply changeset: {e}")))?;
+
+            // If candidate goes back to Pending, reset peers from Rejected to Pending
+            if new_candidate_status == CandidateStatus::Pending {
+                let peer_candidates = self
+                    .list_candidate_peer_group(book_id, candidate.run_id)
+                    .await?;
+
+                for other in &peer_candidates {
+                    if other.id != candidate_id && other.status == CandidateStatus::Rejected {
+                        CandidateRepository::update_status_conn(
+                            tx.as_mut(),
+                            other.id,
+                            CandidateStatus::Pending,
+                        )
+                        .await
+                        .map_err(|e| {
+                            TaskError::Failed(format!("failed to restore candidate status: {e}"))
+                        })?;
+                    }
                 }
             }
 
@@ -1507,10 +1966,13 @@ impl<S: StorageBackend> ResolutionService<S> {
 
         tx_result?;
 
+        // Recompute status from current state
+        let book = persist_recomputed_status(&self.db_pool, book_id).await?;
+
         info!(
             book_id = %book_id,
             candidate_id = %candidate_id,
-            provider = %candidate.provider_name,
+            provider = %changeset.provider_name,
             "candidate application undone"
         );
 
@@ -2032,6 +2494,17 @@ fn is_protected(provenance: Option<&FieldProvenance>) -> bool {
     provenance.is_some_and(|field| field.protected)
 }
 
+/// Check whether the current provenance still matches the provider that applied the field.
+///
+/// Returns `true` when the field is still owned by the given provider,
+/// meaning it's safe to restore on undo. Returns `false` if the user
+/// edited the field (provenance is `User`) or another provider overwrote it.
+fn provenance_matches_provider(current: Option<&FieldProvenance>, provider_name: &str) -> bool {
+    current.is_some_and(
+        |fp| matches!(&fp.origin, MetadataSource::Provider(name) if name == provider_name),
+    )
+}
+
 fn candidate_authors_differ(current_authors: &[String], candidate: &ProviderMetadata) -> bool {
     let candidate_authors: Vec<String> = candidate
         .authors
@@ -2265,8 +2738,13 @@ fn merge_book_fields(
     let sanitize_opts = SanitizeOptions::default();
     let core_allowed = may_overwrite_core_with_log(ctx);
 
+    let manual = !ctx.is_auto_apply;
+
     // ── Core identity: title ──
-    if !exclude_fields.contains("title") && core_allowed && !is_protected(provenance.title.as_ref())
+    // Manual apply bypasses `is_protected` — the user explicitly chose this candidate.
+    if !exclude_fields.contains("title")
+        && core_allowed
+        && (manual || !is_protected(provenance.title.as_ref()))
     {
         if let Some(ref title) = provider_meta.title {
             if let Some(clean_title) = sanitize_text(title, &sanitize_opts) {
@@ -2275,42 +2753,48 @@ fn merge_book_fields(
         }
     }
 
-    // ── Enrichment fields (fill-if-empty) ──
+    // ── Enrichment fields ──
+    // Auto-apply: fill-if-empty + skip protected.
+    // Manual apply: overwrite existing + ignore protected (user chose the fields).
 
-    // Subtitle: fill if empty (sanitized)
+    // Subtitle (sanitized)
     if !exclude_fields.contains("subtitle")
-        && book.subtitle.is_none()
-        && !is_protected(provenance.subtitle.as_ref())
+        && (manual || (book.subtitle.is_none() && !is_protected(provenance.subtitle.as_ref())))
     {
         if let Some(ref subtitle) = provider_meta.subtitle {
             book.subtitle = sanitize_text(subtitle, &sanitize_opts);
         }
     }
 
-    // Description: fill if empty (sanitized)
+    // Description (sanitized)
     if !exclude_fields.contains("description")
-        && book.description.is_none()
-        && !is_protected(provenance.description.as_ref())
+        && (manual
+            || (book.description.is_none() && !is_protected(provenance.description.as_ref())))
     {
         if let Some(ref desc) = provider_meta.description {
             book.description = sanitize_text(desc, &sanitize_opts);
         }
     }
 
-    // Language: fill if empty
-    if book.language.is_none() && !is_protected(provenance.language.as_ref()) {
+    // Language
+    if !exclude_fields.contains("language")
+        && (manual || (book.language.is_none() && !is_protected(provenance.language.as_ref())))
+    {
         book.language.clone_from(&provider_meta.language);
     }
 
-    // Page count: fill if empty
-    if book.page_count.is_none() && !is_protected(provenance.page_count.as_ref()) {
+    // Page count
+    if !exclude_fields.contains("page_count")
+        && (manual || (book.page_count.is_none() && !is_protected(provenance.page_count.as_ref())))
+    {
         book.page_count = provider_meta.page_count;
     }
 
-    // Publication date: fill if empty
+    // Publication date
     if !exclude_fields.contains("publication_date")
-        && book.publication_date.is_none()
-        && !is_protected(provenance.publication_date.as_ref())
+        && (manual
+            || (book.publication_date.is_none()
+                && !is_protected(provenance.publication_date.as_ref())))
     {
         if let Some(ref date_str) = provider_meta.publication_date {
             if let Ok(date) = chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d") {
@@ -3100,7 +3584,7 @@ mod tests {
             vec![search_candidate("provider_first", "First Result")],
         )
         .await;
-        let first_outcome = first.resolve_book(book.id).await.unwrap();
+        let first_outcome = first.resolve_book(book.id, false).await.unwrap();
         assert!(!first_outcome.superseded);
 
         let second = make_service(
@@ -3111,7 +3595,7 @@ mod tests {
             vec![search_candidate("provider_second", "Second Result")],
         )
         .await;
-        let second_outcome = second.resolve_book(book.id).await.unwrap();
+        let second_outcome = second.resolve_book(book.id, false).await.unwrap();
         assert!(!second_outcome.superseded);
 
         let runs = ResolutionRunRepository::list_by_book(&pool, book.id)
@@ -3921,6 +4405,108 @@ mod tests {
         assert!(book.publication_date.is_some());
     }
 
+    #[test]
+    fn merge_book_fields_manual_overwrites_existing() {
+        // Manual apply should overwrite filled + protected fields.
+        let mut book = Book::new("Original Title");
+        book.subtitle = Some("Old Subtitle".to_string());
+        book.description = Some("Old description".to_string());
+        book.language = Some("de".to_string());
+        book.page_count = Some(100);
+        book.publication_date = chrono::NaiveDate::from_ymd_opt(2010, 6, 15);
+
+        let provider = make_provider_meta("New Title");
+
+        let ctx = FieldApplyContext {
+            is_auto_apply: false,
+            has_strong_id_proof: false,
+            has_title_contradiction: false,
+        };
+
+        // Mark all fields as protected.
+        let provenance = MetadataProvenance {
+            title: Some(FieldProvenance {
+                origin: MetadataSource::Embedded,
+                protected: true,
+            }),
+            subtitle: Some(FieldProvenance {
+                origin: MetadataSource::Embedded,
+                protected: true,
+            }),
+            description: Some(FieldProvenance {
+                origin: MetadataSource::Embedded,
+                protected: true,
+            }),
+            language: Some(FieldProvenance {
+                origin: MetadataSource::Embedded,
+                protected: true,
+            }),
+            page_count: Some(FieldProvenance {
+                origin: MetadataSource::Embedded,
+                protected: true,
+            }),
+            publication_date: Some(FieldProvenance {
+                origin: MetadataSource::Embedded,
+                protected: true,
+            }),
+            ..Default::default()
+        };
+
+        merge_book_fields(&mut book, &provider, &HashSet::new(), &ctx, &provenance);
+
+        // Manual apply must overwrite everything despite protection.
+        assert_eq!(book.title, "New Title");
+        assert_eq!(book.subtitle.as_deref(), Some("A Subtitle"));
+        assert_eq!(book.description.as_deref(), Some("A description"));
+        assert_eq!(book.language.as_deref(), Some("en"));
+        assert_eq!(book.page_count, Some(300));
+        assert_eq!(
+            book.publication_date,
+            chrono::NaiveDate::from_ymd_opt(2020, 1, 1)
+        );
+    }
+
+    #[test]
+    fn auto_apply_respects_protection_and_fill_if_empty() {
+        // Auto-apply should NOT overwrite filled or protected fields.
+        let mut book = Book::new("Original Title");
+        book.subtitle = Some("Old Subtitle".to_string());
+        book.description = Some("Old description".to_string());
+        book.language = Some("de".to_string());
+        book.page_count = Some(100);
+        book.publication_date = chrono::NaiveDate::from_ymd_opt(2010, 6, 15);
+
+        let provider = make_provider_meta("New Title");
+
+        let ctx = FieldApplyContext {
+            is_auto_apply: true,
+            has_strong_id_proof: true,
+            has_title_contradiction: false,
+        };
+
+        let provenance = MetadataProvenance {
+            title: Some(FieldProvenance {
+                origin: MetadataSource::Embedded,
+                protected: true,
+            }),
+            ..Default::default()
+        };
+
+        merge_book_fields(&mut book, &provider, &HashSet::new(), &ctx, &provenance);
+
+        // Protected title must NOT be overwritten even with proof.
+        assert_eq!(book.title, "Original Title");
+        // Fill-if-empty: fields already have values → not overwritten.
+        assert_eq!(book.subtitle.as_deref(), Some("Old Subtitle"));
+        assert_eq!(book.description.as_deref(), Some("Old description"));
+        assert_eq!(book.language.as_deref(), Some("de"));
+        assert_eq!(book.page_count, Some(100));
+        assert_eq!(
+            book.publication_date,
+            chrono::NaiveDate::from_ymd_opt(2010, 6, 15)
+        );
+    }
+
     // ── Contradiction blocks ALL core identity fields ──
 
     #[tokio::test]
@@ -4369,7 +4955,7 @@ mod tests {
             .await
             .unwrap();
 
-        // Protected authors: author must NOT be replaced.
+        // Manual apply bypasses protection — the user explicitly chose the candidate.
         let relations = BookRepository::get_with_relations(&pool, book.id)
             .await
             .unwrap();
@@ -4379,12 +4965,8 @@ mod tests {
             .map(|a| a.author.name.as_str())
             .collect();
         assert!(
-            names.contains(&"Frank Herbert"),
-            "protected author should be preserved; got: {names:?}"
-        );
-        assert!(
-            !names.contains(&"Brian Herbert"),
-            "provider author should not replace protected; got: {names:?}"
+            names.contains(&"Brian Herbert"),
+            "manual apply should overwrite protected authors; got: {names:?}"
         );
     }
 

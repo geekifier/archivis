@@ -214,6 +214,39 @@ pub async fn dismiss_duplicate(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// GET /api/books/{id}/duplicates -- list duplicate links for a specific book.
+#[utoipa::path(
+    get,
+    path = "/api/books/{id}/duplicates",
+    tag = "duplicates",
+    params(("id" = Uuid, Path, description = "Book ID")),
+    responses(
+        (status = 200, description = "Duplicate links for book", body = Vec<DuplicateLinkResponse>),
+        (status = 404, description = "Book not found"),
+        (status = 401, description = "Not authenticated"),
+    ),
+    security(("bearer" = []))
+)]
+pub async fn list_duplicates_for_book(
+    State(state): State<AppState>,
+    AuthUser(_user): AuthUser,
+    Path(book_id): Path<Uuid>,
+) -> Result<Json<Vec<DuplicateLinkResponse>>, ApiError> {
+    let pool = state.db_pool();
+
+    // Verify book exists
+    BookRepository::get_by_id(pool, book_id).await?;
+
+    let links = DuplicateRepository::find_for_book(pool, book_id).await?;
+
+    let mut items = Vec::with_capacity(links.len());
+    for link in &links {
+        items.push(enrich_link(pool, link).await?);
+    }
+
+    Ok(Json(items))
+}
+
 /// POST /api/books/{id}/duplicates -- manually flag a duplicate.
 #[utoipa::path(
     post,

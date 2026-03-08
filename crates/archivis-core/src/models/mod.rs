@@ -17,7 +17,10 @@ mod watched_directory;
 pub use author::Author;
 pub use book::{generate_sort_title, normalize_title, Book, FieldProvenance, MetadataProvenance};
 pub use book_file::BookFile;
-pub use candidate::{CandidateStatus, IdentificationCandidate};
+pub use candidate::{
+    ApplyChangeset, CandidateStatus, ChangesetAuthor, ChangesetEntry, ChangesetSeries,
+    IdentificationCandidate,
+};
 pub use duplicate::{DuplicateLink, DuplicateStatus};
 pub use enums::{
     BookFormat, IdentifierType, MetadataSource, MetadataStatus, ResolutionOutcome, ResolutionState,

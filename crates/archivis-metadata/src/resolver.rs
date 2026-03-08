@@ -492,26 +492,7 @@ impl MetadataResolver {
         }
 
         // Drop candidates with unsupported physical formats (audiobooks, etc.).
-        let pre_filter = candidates.len();
-        candidates.retain(|c| match c.metadata.physical_format.as_deref() {
-            Some(fmt) if is_unsupported_format(fmt) => {
-                debug!(
-                    provider = %c.provider_name,
-                    physical_format = fmt,
-                    title = ?c.metadata.title,
-                    "dropping candidate with unsupported format"
-                );
-                false
-            }
-            _ => true,
-        });
-        if candidates.len() < pre_filter {
-            debug!(
-                dropped = pre_filter - candidates.len(),
-                remaining = candidates.len(),
-                "filtered unsupported-format candidates"
-            );
-        }
+        filter_unsupported_candidates(&mut candidates);
 
         // If any identifier lookup produced results, return them
         // (dedup phases will handle overlaps).
@@ -522,7 +503,9 @@ impl MetadataResolver {
         // Title+author search fallback.
         if query.title.is_some() {
             debug!("no identifier results, falling back to title+author search");
-            query_providers_search(providers, query).await
+            let mut search_candidates = query_providers_search(providers, query).await;
+            filter_unsupported_candidates(&mut search_candidates);
+            search_candidates
         } else {
             debug!("no identifiers and no title in query, cannot search");
             Vec::new()
@@ -1288,12 +1271,38 @@ fn identifier_type_belongs_to_provider(id_type: IdentifierType, provider: &str) 
 
 /// Check whether a `physical_format` value indicates an unsupported media type
 /// (audiobook, sound recording, video recording, etc.).
-fn is_unsupported_format(format: &str) -> bool {
+pub(crate) fn is_unsupported_format(format: &str) -> bool {
     let lower = format.to_lowercase();
     lower.contains("audio")
         || lower.contains("sound recording")
         || lower.contains("videorecording")
         || lower.contains("mp3")
+        || lower.contains("listened")
+        || lower.contains("watched")
+}
+
+/// Drop candidates whose `physical_format` matches an unsupported media type.
+fn filter_unsupported_candidates(candidates: &mut Vec<ScoredCandidate>) {
+    let pre_filter = candidates.len();
+    candidates.retain(|c| match c.metadata.physical_format.as_deref() {
+        Some(fmt) if is_unsupported_format(fmt) => {
+            debug!(
+                provider = %c.provider_name,
+                physical_format = fmt,
+                title = ?c.metadata.title,
+                "dropping candidate with unsupported format"
+            );
+            false
+        }
+        _ => true,
+    });
+    if candidates.len() < pre_filter {
+        debug!(
+            dropped = pre_filter - candidates.len(),
+            remaining = candidates.len(),
+            "filtered unsupported-format candidates"
+        );
+    }
 }
 
 // ── Tests ───────────────────────────────────────────────────────────
@@ -4339,6 +4348,8 @@ mod tests {
             "Videorecording",
             "preloaded digital audio player",
             "10 Audio CDs",
+            "Listened",
+            "Watched",
         ];
         for fmt in audio_formats {
             assert!(is_unsupported_format(fmt), "expected unsupported: {fmt:?}");
@@ -4353,6 +4364,7 @@ mod tests {
             "E-book",
             "CD-ROM",
             "Unknown Binding",
+            "Read",
         ];
         for fmt in allowed_formats {
             assert!(!is_unsupported_format(fmt), "expected supported: {fmt:?}");
@@ -4400,6 +4412,75 @@ mod tests {
             candidates[0].metadata.physical_format.as_deref(),
             Some("Paperback"),
             "only paperback candidate should remain"
+        );
+    }
+
+    #[tokio::test]
+    async fn audiobook_identifier_hits_trigger_search_fallback() {
+        let registry = Arc::new(ProviderRegistry::new());
+        let resolver = MetadataResolver::new(registry, Arc::new(StubSettings::new(vec![])));
+
+        let mut audiobook = make_metadata(
+            "stub",
+            "Dune (Audio)",
+            &["Frank Herbert"],
+            Some("9780441172719"),
+            0.95,
+        );
+        audiobook.physical_format = Some("Audio CD".to_string());
+
+        let search_result = make_metadata("stub", "Dune", &["Frank Herbert"], None, 0.75);
+
+        let provider = Arc::new(
+            StubProvider::new("stub")
+                .with_isbn_results(vec![audiobook])
+                .with_search_results(vec![search_result]),
+        );
+
+        let query = MetadataQuery {
+            isbn: Some("9780441172719".to_string()),
+            title: Some("Dune".to_string()),
+            ..Default::default()
+        };
+
+        let candidates = resolver
+            .gather_candidates(&query, &[provider as Arc<dyn MetadataProvider>])
+            .await;
+
+        assert_eq!(
+            candidates.len(),
+            1,
+            "audiobook filtered, search fallback should produce one result"
+        );
+        assert_eq!(
+            candidates[0].metadata.title.as_deref(),
+            Some("Dune"),
+            "search fallback candidate should be returned"
+        );
+    }
+
+    #[tokio::test]
+    async fn search_fallback_filters_unsupported_format() {
+        let registry = Arc::new(ProviderRegistry::new());
+        let resolver = MetadataResolver::new(registry, Arc::new(StubSettings::new(vec![])));
+
+        let mut listened = make_metadata("stub", "Dune (Listened)", &["Frank Herbert"], None, 0.75);
+        listened.physical_format = Some("Listened".to_string());
+
+        let provider = Arc::new(StubProvider::new("stub").with_search_results(vec![listened]));
+
+        let query = MetadataQuery {
+            title: Some("Dune".to_string()),
+            ..Default::default()
+        };
+
+        let candidates = resolver
+            .gather_candidates(&query, &[provider as Arc<dyn MetadataProvider>])
+            .await;
+
+        assert!(
+            candidates.is_empty(),
+            "search fallback should filter unsupported formats"
         );
     }
 }

@@ -500,14 +500,21 @@ export interface CandidateSeriesInfo {
   position?: number;
 }
 
+/** An author entry in a candidate response, preserving the contributor role. */
+export interface CandidateAuthor {
+  name: string;
+  role?: string;
+}
+
 /** A metadata resolution candidate returned by a provider. */
 export interface CandidateResponse {
   id: string;
+  run_id?: string;
   provider_name: string;
   score: number;
   title?: string;
   subtitle?: string;
-  authors: string[];
+  authors: CandidateAuthor[];
   description?: string;
   publisher?: string;
   publication_date?: string;

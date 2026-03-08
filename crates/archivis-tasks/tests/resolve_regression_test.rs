@@ -200,7 +200,7 @@ async fn asin_book_not_auto_applied_via_fuzzy_search() {
     IdentifierRepository::create(&pool, &asin).await.unwrap();
 
     // Run identification.
-    let outcome = service.resolve_book(book.id).await.unwrap();
+    let outcome = service.resolve_book(book.id, false).await.unwrap();
 
     assert!(
         !outcome.resolver_result.candidates.is_empty(),
@@ -276,7 +276,7 @@ async fn fuzzy_only_single_candidate_remains_needs_review() {
         .await
         .unwrap();
 
-    let outcome = service.resolve_book(book.id).await.unwrap();
+    let outcome = service.resolve_book(book.id, false).await.unwrap();
 
     assert!(
         !outcome.resolver_result.candidates.is_empty(),
@@ -353,7 +353,7 @@ async fn strong_isbn_match_auto_applies_correctly() {
     );
     IdentifierRepository::create(&pool, &isbn).await.unwrap();
 
-    let outcome = service.resolve_book(book.id).await.unwrap();
+    let outcome = service.resolve_book(book.id, false).await.unwrap();
 
     assert!(
         !outcome.resolver_result.candidates.is_empty(),
@@ -539,7 +539,7 @@ async fn strong_match_enriches_existing_book() {
     );
     IdentifierRepository::create(&pool, &isbn).await.unwrap();
 
-    let outcome = service.resolve_book(book.id).await.unwrap();
+    let outcome = service.resolve_book(book.id, false).await.unwrap();
 
     assert!(
         outcome.auto_applied,
@@ -629,7 +629,7 @@ async fn protected_core_conflict_becomes_disputed() {
     );
     IdentifierRepository::create(&pool, &isbn).await.unwrap();
 
-    let outcome = service.resolve_book(book.id).await.unwrap();
+    let outcome = service.resolve_book(book.id, false).await.unwrap();
 
     assert!(
         !outcome.auto_applied,
@@ -720,7 +720,7 @@ async fn lady_of_the_lake_article_and_translator_regression() {
     );
     IdentifierRepository::create(&pool, &isbn).await.unwrap();
 
-    let outcome = service.resolve_book(book.id).await.unwrap();
+    let outcome = service.resolve_book(book.id, false).await.unwrap();
 
     assert!(
         outcome.auto_applied,

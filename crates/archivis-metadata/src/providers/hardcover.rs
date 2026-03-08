@@ -35,6 +35,7 @@ query LookupISBN($isbn: String!) {
     reading_format { format }
     language { language }
     publisher { name }
+    image { url }
     cached_image
     cached_contributors
     book {
@@ -42,12 +43,14 @@ query LookupISBN($isbn: String!) {
       title
       description
       rating
+      image { url }
       book_series {
         position
         featured
         series { name }
       }
       contributions {
+        contribution
         author { name }
       }
       cached_tags
@@ -71,6 +74,7 @@ query LookupISBN($isbn: String!) {
     reading_format { format }
     language { language }
     publisher { name }
+    image { url }
     cached_image
     cached_contributors
     book {
@@ -78,12 +82,14 @@ query LookupISBN($isbn: String!) {
       title
       description
       rating
+      image { url }
       book_series {
         position
         featured
         series { name }
       }
       contributions {
+        contribution
         author { name }
       }
       cached_tags
@@ -107,6 +113,7 @@ query LookupASIN($asin: String!) {
     reading_format { format }
     language { language }
     publisher { name }
+    image { url }
     cached_image
     cached_contributors
     book {
@@ -114,12 +121,14 @@ query LookupASIN($asin: String!) {
       title
       description
       rating
+      image { url }
       book_series {
         position
         featured
         series { name }
       }
       contributions {
+        contribution
         author { name }
       }
       cached_tags
@@ -151,6 +160,7 @@ query GetBooks($ids: [Int!]!) {
     description
     rating
     contributions {
+      contribution
       author { name }
     }
     book_series {
@@ -158,13 +168,29 @@ query GetBooks($ids: [Int!]!) {
       featured
       series { name }
     }
-    default_cover_edition {
+    image { url }
+    default_physical_edition {
       isbn_13
       isbn_10
       pages
       release_date
+      edition_format
+      reading_format { format }
       publisher { name }
       language { language }
+      image { url }
+      cached_image
+    }
+    default_ebook_edition {
+      isbn_13
+      isbn_10
+      pages
+      release_date
+      edition_format
+      reading_format { format }
+      publisher { name }
+      language { language }
+      image { url }
       cached_image
     }
     cached_tags
@@ -358,7 +384,13 @@ impl HardcoverProvider {
             .and_then(|b| parse_cached_tags(b.cached_tags.as_ref()))
             .unwrap_or_default();
 
-        let cover_url = parse_cached_image(edition.cached_image.as_ref())
+        // Prefer high-res `image.url` over `cached_image` thumbnail.
+        let cover_url = edition
+            .image
+            .as_ref()
+            .and_then(|i| i.url.clone())
+            .or_else(|| parse_cached_image(edition.cached_image.as_ref()))
+            .or_else(|| book.and_then(|b| b.image.as_ref().and_then(|i| i.url.clone())))
             .or_else(|| book.and_then(|b| parse_cached_image(b.cached_image.as_ref())));
 
         let language = edition
@@ -427,30 +459,72 @@ impl HardcoverProvider {
 
         let subjects = parse_cached_tags(book.cached_tags.as_ref()).unwrap_or_default();
 
-        // Extract data from default_cover_edition.
-        let edition = book.default_cover_edition.as_ref();
+        // Prefer ebook edition (Archivis imports digital files), fall back to physical.
+        let edition = book
+            .default_ebook_edition
+            .as_ref()
+            .or(book.default_physical_edition.as_ref());
 
         let publisher = edition.and_then(|e| e.publisher.as_ref().map(|p| p.name.clone()));
         let page_count = edition.and_then(|e| e.pages);
         let publication_date = edition.and_then(|e| e.release_date.clone());
-        let cover_url = edition.and_then(|e| parse_cached_image(e.cached_image.as_ref()));
         let language = edition
             .and_then(|e| e.language.as_ref())
             .and_then(|l| normalize_language(&l.language));
 
-        let mut identifiers = Vec::new();
+        // Cover URL: prefer high-res `image.url` over `cached_image` thumbnail.
+        let cover_url = edition
+            .and_then(|e| {
+                e.image
+                    .as_ref()
+                    .and_then(|i| i.url.clone())
+                    .or_else(|| parse_cached_image(e.cached_image.as_ref()))
+            })
+            .or_else(|| {
+                let fallback = book
+                    .default_physical_edition
+                    .as_ref()
+                    .or(book.default_ebook_edition.as_ref());
+                fallback.and_then(|e| {
+                    e.image
+                        .as_ref()
+                        .and_then(|i| i.url.clone())
+                        .or_else(|| parse_cached_image(e.cached_image.as_ref()))
+                })
+            })
+            .or_else(|| book.image.as_ref().and_then(|i| i.url.clone()));
 
-        if let Some(e) = edition {
-            if let Some(ref isbn13) = e.isbn_13 {
-                if !isbn13.is_empty() {
+        // `physical_format`: use `edition_format` (e.g. "paperback") which is meaningful.
+        // `reading_format` ("Read"/"Listened") is a modality label, not a physical format.
+        let physical_format = edition.and_then(|e| e.edition_format.clone());
+
+        // Collect ISBNs from both editions to avoid losing portable identifiers.
+        let mut identifiers = Vec::new();
+        for ed in [
+            book.default_ebook_edition.as_ref(),
+            book.default_physical_edition.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if let Some(ref isbn13) = ed.isbn_13 {
+                if !isbn13.is_empty()
+                    && !identifiers
+                        .iter()
+                        .any(|i: &ProviderIdentifier| i.value == *isbn13)
+                {
                     identifiers.push(ProviderIdentifier {
                         identifier_type: IdentifierType::Isbn13,
                         value: isbn13.clone(),
                     });
                 }
             }
-            if let Some(ref isbn10) = e.isbn_10 {
-                if !isbn10.is_empty() {
+            if let Some(ref isbn10) = ed.isbn_10 {
+                if !isbn10.is_empty()
+                    && !identifiers
+                        .iter()
+                        .any(|i: &ProviderIdentifier| i.value == *isbn10)
+                {
                     identifiers.push(ProviderIdentifier {
                         identifier_type: IdentifierType::Isbn10,
                         value: isbn10.clone(),
@@ -485,7 +559,7 @@ impl HardcoverProvider {
             page_count,
             cover_url,
             rating,
-            physical_format: None, // Book/work-level results have no edition format.
+            physical_format,
             confidence,
         }
     }
@@ -728,10 +802,17 @@ struct HcEdition {
     reading_format: Option<HcReadingFormat>,
     language: Option<HcLanguage>,
     publisher: Option<HcPublisher>,
+    image: Option<HcImage>,
     cached_image: Option<serde_json::Value>,
     #[allow(dead_code)]
     cached_contributors: Option<serde_json::Value>,
     book: Option<HcBookInEdition>,
+}
+
+/// High-resolution image from Hardcover's `image` relationship.
+#[derive(Debug, Deserialize)]
+struct HcImage {
+    url: Option<String>,
 }
 
 /// Structured reading format from Hardcover (e.g. `"Audiobook"`, `"Physical"`).
@@ -751,6 +832,7 @@ struct HcBookInEdition {
     book_series: Option<Vec<HcBookSeries>>,
     contributions: Option<Vec<HcContribution>>,
     cached_tags: Option<serde_json::Value>,
+    image: Option<HcImage>,
     #[allow(dead_code)]
     cached_image: Option<serde_json::Value>,
 }
@@ -786,19 +868,25 @@ struct HcBook {
     rating: Option<f64>,
     contributions: Option<Vec<HcContribution>>,
     book_series: Option<Vec<HcBookSeries>>,
-    default_cover_edition: Option<HcDefaultEdition>,
+    default_physical_edition: Option<HcDefaultEdition>,
+    default_ebook_edition: Option<HcDefaultEdition>,
+    image: Option<HcImage>,
     cached_tags: Option<serde_json::Value>,
 }
 
-/// Default cover edition in a book response.
+/// Default edition in a book response.
 #[derive(Debug, Deserialize)]
 struct HcDefaultEdition {
     isbn_13: Option<String>,
     isbn_10: Option<String>,
     pages: Option<i32>,
     release_date: Option<String>,
+    edition_format: Option<String>,
+    #[allow(dead_code)]
+    reading_format: Option<HcReadingFormat>,
     publisher: Option<HcPublisher>,
     language: Option<HcLanguage>,
+    image: Option<HcImage>,
     cached_image: Option<serde_json::Value>,
 }
 
@@ -819,6 +907,7 @@ struct HcSeries {
 /// Author contribution.
 #[derive(Debug, Deserialize)]
 struct HcContribution {
+    contribution: Option<String>,
     author: Option<HcAuthor>,
 }
 
@@ -856,7 +945,7 @@ fn extract_authors_from_contributions(
                 .filter_map(|c| {
                     c.author.as_ref().map(|a| ProviderAuthor {
                         name: a.name.clone(),
-                        role: Some("author".to_string()),
+                        role: Some(c.contribution.as_deref().unwrap_or("Author").to_lowercase()),
                     })
                 })
                 .collect()
@@ -1417,7 +1506,7 @@ mod tests {
                         "series": { "name": "Dune" }
                     }],
                     "contributions": [
-                        { "author": { "name": "Frank Herbert" } }
+                        { "contribution": "Author", "author": { "name": "Frank Herbert" } }
                     ],
                     "cached_tags": "[{\"tag\": \"Science Fiction\"}, {\"tag\": \"Space Opera\"}]"
                 }
@@ -1474,7 +1563,7 @@ mod tests {
                         "series": { "name": "Dune" }
                     }],
                     "contributions": [
-                        { "author": { "name": "Frank Herbert" } }
+                        { "contribution": "Author", "author": { "name": "Frank Herbert" } }
                     ],
                     "cached_tags": "[{\"tag\": \"Science Fiction\"}, {\"tag\": \"Space Opera\"}]"
                 }
@@ -1587,6 +1676,64 @@ mod tests {
         assert_eq!(metadata.identifiers[0].value, "9781234567890");
     }
 
+    // ── Contribution roles ────────────────────────────────────────────
+
+    #[test]
+    fn extract_authors_preserves_translator_role() {
+        let json = r#"{
+            "editions": [{
+                "id": 11111,
+                "isbn_13": "9780316273770",
+                "isbn_10": null,
+                "asin": null,
+                "title": "The Lady of the Lake",
+                "pages": 530,
+                "release_date": "2017-03-14",
+                "edition_format": "paperback",
+                "reading_format": null,
+                "language": { "language": "English" },
+                "publisher": { "name": "Orbit" },
+                "cached_image": null,
+                "cached_contributors": null,
+                "book": {
+                    "id": 22222,
+                    "title": "The Lady of the Lake",
+                    "description": "Witcher saga.",
+                    "rating": 4.1,
+                    "book_series": [],
+                    "contributions": [
+                        { "contribution": "Author", "author": { "name": "Andrzej Sapkowski" } },
+                        { "contribution": "Translator", "author": { "name": "David French" } }
+                    ],
+                    "cached_tags": null
+                }
+            }]
+        }"#;
+
+        let response: EditionsResponse = serde_json::from_str(json).unwrap();
+        let edition = &response.editions[0];
+        let metadata = HardcoverProvider::build_metadata_from_edition(edition, "9780316273770");
+
+        assert_eq!(metadata.authors.len(), 2);
+        assert_eq!(metadata.authors[0].name, "Andrzej Sapkowski");
+        assert_eq!(metadata.authors[0].role, Some("author".to_string()));
+        assert_eq!(metadata.authors[1].name, "David French");
+        assert_eq!(metadata.authors[1].role, Some("translator".to_string()));
+    }
+
+    #[test]
+    fn extract_authors_defaults_to_author_when_contribution_null() {
+        let contribs = vec![HcContribution {
+            contribution: None,
+            author: Some(HcAuthor {
+                name: "Unknown Role".to_string(),
+            }),
+        }];
+        let authors = extract_authors_from_contributions(Some(&contribs));
+        assert_eq!(authors.len(), 1);
+        assert_eq!(authors[0].role, Some("author".to_string()));
+    }
+
     // ── Search response parsing ─────────────────────────────────────
 
     #[test]
@@ -1663,22 +1810,25 @@ mod tests {
                 "description": "A science fiction classic.",
                 "rating": 4.25,
                 "contributions": [
-                    { "author": { "name": "Frank Herbert" } }
+                    { "contribution": "Author", "author": { "name": "Frank Herbert" } }
                 ],
                 "book_series": [{
                     "position": 1.0,
                     "featured": true,
                     "series": { "name": "Dune" }
                 }],
-                "default_cover_edition": {
+                "default_physical_edition": {
                     "isbn_13": "9780441172719",
                     "isbn_10": "0441172717",
                     "pages": 412,
                     "release_date": "1965-08-01",
+                    "edition_format": "hardcover",
+                    "reading_format": { "format": "Read" },
                     "publisher": { "name": "Chilton Books" },
                     "language": { "language": "English" },
                     "cached_image": {"url": "https://cdn.hardcover.app/covers/dune.jpg"}
                 },
+                "default_ebook_edition": null,
                 "cached_tags": [{"tag": "Science Fiction"}]
             }]
         }"#;
@@ -1714,6 +1864,11 @@ mod tests {
         assert_eq!(metadata.subjects, vec!["Science Fiction"]);
         assert_eq!(metadata.series.as_ref().unwrap().name, "Dune");
         assert!((metadata.rating.unwrap() - 4.25).abs() < f32::EPSILON);
+        assert_eq!(
+            metadata.physical_format.as_deref(),
+            Some("hardcover"),
+            "`edition_format` from physical edition should populate `physical_format`"
+        );
         // Exact title match -> 0.8 confidence.
         assert!((metadata.confidence - 0.8).abs() < f32::EPSILON);
     }
@@ -1728,7 +1883,8 @@ mod tests {
                 "rating": null,
                 "contributions": [],
                 "book_series": [],
-                "default_cover_edition": null,
+                "default_physical_edition": null,
+                "default_ebook_edition": null,
                 "cached_tags": null
             }]
         }"#;
@@ -1903,6 +2059,166 @@ mod tests {
             metadata.physical_format.as_deref(),
             Some("Audiobook"),
             "`reading_format.format` should be preferred over `edition_format`"
+        );
+    }
+
+    // ── build_metadata_from_book edition selection tests ─────────────
+
+    fn make_hc_book_with_editions(
+        ebook: Option<HcDefaultEdition>,
+        physical: Option<HcDefaultEdition>,
+    ) -> HcBook {
+        HcBook {
+            id: Some(1),
+            title: Some("Test Book".to_string()),
+            description: None,
+            rating: None,
+            contributions: None,
+            book_series: None,
+            default_ebook_edition: ebook,
+            default_physical_edition: physical,
+            image: None,
+            cached_tags: None,
+        }
+    }
+
+    fn make_default_edition(overrides: impl FnOnce(&mut HcDefaultEdition)) -> HcDefaultEdition {
+        let mut ed = HcDefaultEdition {
+            isbn_13: None,
+            isbn_10: None,
+            pages: None,
+            release_date: None,
+            edition_format: None,
+            reading_format: None,
+            publisher: None,
+            language: None,
+            image: None,
+            cached_image: None,
+        };
+        overrides(&mut ed);
+        ed
+    }
+
+    #[test]
+    fn build_metadata_from_book_prefers_ebook_edition() {
+        let ebook = make_default_edition(|e| {
+            e.publisher = Some(HcPublisher {
+                name: "Ebook Publisher".to_string(),
+            });
+            e.pages = Some(300);
+        });
+        let physical = make_default_edition(|e| {
+            e.publisher = Some(HcPublisher {
+                name: "Physical Publisher".to_string(),
+            });
+            e.pages = Some(400);
+        });
+        let book = make_hc_book_with_editions(Some(ebook), Some(physical));
+        let query = MetadataQuery {
+            title: Some("Test Book".to_string()),
+            ..Default::default()
+        };
+
+        let metadata = HardcoverProvider::build_metadata_from_book(&book, &query);
+
+        assert_eq!(metadata.publisher.as_deref(), Some("Ebook Publisher"));
+        assert_eq!(metadata.page_count, Some(300));
+    }
+
+    #[test]
+    fn build_metadata_from_book_falls_back_to_physical() {
+        let physical = make_default_edition(|e| {
+            e.publisher = Some(HcPublisher {
+                name: "Physical Publisher".to_string(),
+            });
+            e.pages = Some(400);
+        });
+        let book = make_hc_book_with_editions(None, Some(physical));
+        let query = MetadataQuery {
+            title: Some("Test Book".to_string()),
+            ..Default::default()
+        };
+
+        let metadata = HardcoverProvider::build_metadata_from_book(&book, &query);
+
+        assert_eq!(metadata.publisher.as_deref(), Some("Physical Publisher"));
+        assert_eq!(metadata.page_count, Some(400));
+    }
+
+    #[test]
+    fn build_metadata_from_book_collects_isbns_from_both() {
+        let ebook = make_default_edition(|e| {
+            e.isbn_13 = Some("9780441172719".to_string());
+        });
+        let physical = make_default_edition(|e| {
+            e.isbn_10 = Some("0441172717".to_string());
+        });
+        let book = make_hc_book_with_editions(Some(ebook), Some(physical));
+        let query = MetadataQuery {
+            title: Some("Test Book".to_string()),
+            ..Default::default()
+        };
+
+        let metadata = HardcoverProvider::build_metadata_from_book(&book, &query);
+
+        assert!(
+            metadata
+                .identifiers
+                .iter()
+                .any(|i| i.identifier_type == IdentifierType::Isbn13 && i.value == "9780441172719"),
+            "ISBN-13 from ebook edition should be collected"
+        );
+        assert!(
+            metadata
+                .identifiers
+                .iter()
+                .any(|i| i.identifier_type == IdentifierType::Isbn10 && i.value == "0441172717"),
+            "ISBN-10 from physical edition should be collected"
+        );
+    }
+
+    #[test]
+    fn build_metadata_from_book_cover_falls_back() {
+        let ebook = make_default_edition(|_| {
+            // no cached_image
+        });
+        let physical = make_default_edition(|e| {
+            e.cached_image = Some(serde_json::json!(
+                "https://cdn.hardcover.app/covers/phys.jpg"
+            ));
+        });
+        let book = make_hc_book_with_editions(Some(ebook), Some(physical));
+        let query = MetadataQuery {
+            title: Some("Test Book".to_string()),
+            ..Default::default()
+        };
+
+        let metadata = HardcoverProvider::build_metadata_from_book(&book, &query);
+
+        assert_eq!(
+            metadata.cover_url.as_deref(),
+            Some("https://cdn.hardcover.app/covers/phys.jpg"),
+            "cover should fall back to physical edition"
+        );
+    }
+
+    #[test]
+    fn build_metadata_from_book_populates_physical_format() {
+        let ebook = make_default_edition(|e| {
+            e.edition_format = Some("ebook".to_string());
+        });
+        let book = make_hc_book_with_editions(Some(ebook), None);
+        let query = MetadataQuery {
+            title: Some("Test Book".to_string()),
+            ..Default::default()
+        };
+
+        let metadata = HardcoverProvider::build_metadata_from_book(&book, &query);
+
+        assert_eq!(
+            metadata.physical_format.as_deref(),
+            Some("ebook"),
+            "`edition_format` should populate `physical_format`"
         );
     }
 }

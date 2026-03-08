@@ -9,15 +9,24 @@ pub struct SeriesInfo {
     pub position: Option<f32>,
 }
 
+/// An author entry in a candidate response, preserving the contributor role.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct CandidateAuthor {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+}
+
 /// A metadata resolution candidate returned by a provider.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct CandidateResponse {
     pub id: Uuid,
+    pub run_id: Option<Uuid>,
     pub provider_name: String,
     pub score: f32,
     pub title: Option<String>,
     pub subtitle: Option<String>,
-    pub authors: Vec<String>,
+    pub authors: Vec<CandidateAuthor>,
     pub description: Option<String>,
     pub publisher: Option<String>,
     pub publication_date: Option<String>,

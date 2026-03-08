@@ -28,11 +28,18 @@ impl CandidateRepository {
         let disputes_json = serde_json::to_string(&candidate.disputes)
             .map_err(|e| DbError::Query(format!("failed to serialize disputes: {e}")))?;
 
+        let changeset_json = candidate
+            .apply_changeset
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()
+            .map_err(|e| DbError::Query(format!("failed to serialize apply_changeset: {e}")))?;
+
         sqlx::query(
             "INSERT INTO identification_candidates (
                  id, book_id, run_id, provider_name, score, metadata, match_reasons,
-                 disputes, tier, status, created_at
-             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                 disputes, tier, status, created_at, apply_changeset
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(candidate.id.to_string())
         .bind(candidate.book_id.to_string())
@@ -45,6 +52,7 @@ impl CandidateRepository {
         .bind(&candidate.tier)
         .bind(candidate.status.to_string())
         .bind(candidate.created_at.to_rfc3339())
+        .bind(changeset_json)
         .execute(pool)
         .await
         .map_err(|e| DbError::Query(e.to_string()))?;
@@ -71,7 +79,7 @@ impl CandidateRepository {
     ) -> Result<Vec<IdentificationCandidate>, DbError> {
         let rows = sqlx::query_as::<_, CandidateRow>(
             "SELECT id, book_id, run_id, provider_name, score, metadata, match_reasons,
-                    disputes, tier, status, created_at
+                    disputes, tier, status, created_at, apply_changeset
              FROM identification_candidates
              WHERE book_id = ?
              ORDER BY created_at DESC, score DESC",
@@ -91,7 +99,7 @@ impl CandidateRepository {
     ) -> Result<Vec<IdentificationCandidate>, DbError> {
         let rows = sqlx::query_as::<_, CandidateRow>(
             "SELECT id, book_id, run_id, provider_name, score, metadata, match_reasons,
-                    disputes, tier, status, created_at
+                    disputes, tier, status, created_at, apply_changeset
              FROM identification_candidates
              WHERE run_id = ?
              ORDER BY score DESC, created_at ASC",
@@ -104,18 +112,22 @@ impl CandidateRepository {
         rows.into_iter().map(CandidateRow::into_candidate).collect()
     }
 
-    /// List the latest reviewable run's candidates for a book.
+    /// List the latest reviewable run's candidates for a book, plus any
+    /// applied candidates from older runs (so they remain undoable).
     pub async fn list_current_reviewable_by_book(
         pool: &SqlitePool,
         book_id: Uuid,
     ) -> Result<Vec<IdentificationCandidate>, DbError> {
         if let Some(run_id) = Self::latest_reviewable_run_id(pool, book_id).await? {
-            return Self::list_current_reviewable_by_run(pool, run_id).await;
+            let mut candidates = Self::list_current_reviewable_by_run(pool, run_id).await?;
+            let applied = Self::list_applied_from_other_runs(pool, book_id, run_id).await?;
+            candidates.extend(applied);
+            return Ok(candidates);
         }
 
         let rows = sqlx::query_as::<_, CandidateRow>(
             "SELECT id, book_id, run_id, provider_name, score, metadata, match_reasons,
-                    disputes, tier, status, created_at
+                    disputes, tier, status, created_at, apply_changeset
              FROM identification_candidates
              WHERE book_id = ?
                AND run_id IS NULL
@@ -123,6 +135,57 @@ impl CandidateRepository {
              ORDER BY score DESC, created_at ASC",
         )
         .bind(book_id.to_string())
+        .fetch_all(pool)
+        .await
+        .map_err(|e| DbError::Query(e.to_string()))?;
+
+        let mut candidates: Vec<IdentificationCandidate> = rows
+            .into_iter()
+            .map(CandidateRow::into_candidate)
+            .collect::<Result<_, _>>()?;
+
+        // Also include applied candidates from any run
+        let applied_rows = sqlx::query_as::<_, CandidateRow>(
+            "SELECT id, book_id, run_id, provider_name, score, metadata, match_reasons,
+                    disputes, tier, status, created_at, apply_changeset
+             FROM identification_candidates
+             WHERE book_id = ?
+               AND run_id IS NOT NULL
+               AND status = 'applied'
+             ORDER BY created_at ASC",
+        )
+        .bind(book_id.to_string())
+        .fetch_all(pool)
+        .await
+        .map_err(|e| DbError::Query(e.to_string()))?;
+
+        for row in applied_rows {
+            let candidate = row.into_candidate()?;
+            if !candidates.iter().any(|c| c.id == candidate.id) {
+                candidates.push(candidate);
+            }
+        }
+
+        Ok(candidates)
+    }
+
+    /// List applied candidates from runs other than the given one.
+    async fn list_applied_from_other_runs(
+        pool: &SqlitePool,
+        book_id: Uuid,
+        exclude_run_id: Uuid,
+    ) -> Result<Vec<IdentificationCandidate>, DbError> {
+        let rows = sqlx::query_as::<_, CandidateRow>(
+            "SELECT id, book_id, run_id, provider_name, score, metadata, match_reasons,
+                    disputes, tier, status, created_at, apply_changeset
+             FROM identification_candidates
+             WHERE book_id = ?
+               AND status = 'applied'
+               AND (run_id IS NULL OR run_id != ?)
+             ORDER BY created_at ASC",
+        )
+        .bind(book_id.to_string())
+        .bind(exclude_run_id.to_string())
         .fetch_all(pool)
         .await
         .map_err(|e| DbError::Query(e.to_string()))?;
@@ -137,7 +200,7 @@ impl CandidateRepository {
     ) -> Result<Vec<IdentificationCandidate>, DbError> {
         let rows = sqlx::query_as::<_, CandidateRow>(
             "SELECT id, book_id, run_id, provider_name, score, metadata, match_reasons,
-                    disputes, tier, status, created_at
+                    disputes, tier, status, created_at, apply_changeset
              FROM identification_candidates
              WHERE book_id = ?
                AND run_id IS NULL
@@ -158,7 +221,7 @@ impl CandidateRepository {
     ) -> Result<Option<IdentificationCandidate>, DbError> {
         let row = sqlx::query_as::<_, CandidateRow>(
             "SELECT id, book_id, run_id, provider_name, score, metadata, match_reasons,
-                    disputes, tier, status, created_at
+                    disputes, tier, status, created_at, apply_changeset
              FROM identification_candidates
              WHERE id = ?",
         )
@@ -280,12 +343,15 @@ impl CandidateRepository {
     }
 
     /// Mark all candidates for other runs on the same book as superseded.
+    ///
+    /// Applied candidates are preserved so the user can still undo them.
     pub async fn mark_other_runs_superseded(
         pool: &SqlitePool,
         book_id: Uuid,
         keep_run_id: Uuid,
     ) -> Result<u64, DbError> {
         let superseded = CandidateStatus::Superseded.to_string();
+        let applied = CandidateStatus::Applied.to_string();
         let mut affected = 0;
 
         let result = sqlx::query(
@@ -293,11 +359,13 @@ impl CandidateRepository {
              SET status = ?
              WHERE book_id = ?
                AND status != ?
+               AND status != ?
                AND (run_id IS NULL OR run_id != ?)",
         )
         .bind(&superseded)
         .bind(book_id.to_string())
         .bind(&superseded)
+        .bind(&applied)
         .bind(keep_run_id.to_string())
         .execute(pool)
         .await
@@ -305,6 +373,83 @@ impl CandidateRepository {
         affected += result.rows_affected();
 
         Ok(affected)
+    }
+
+    /// Set (or clear) the `apply_changeset` JSON on a candidate.
+    pub async fn set_apply_changeset_conn(
+        conn: &mut SqliteConnection,
+        id: Uuid,
+        changeset_json: Option<&str>,
+    ) -> Result<(), DbError> {
+        let id_str = id.to_string();
+        let result = sqlx::query(
+            "UPDATE identification_candidates
+             SET apply_changeset = ?
+             WHERE id = ?",
+        )
+        .bind(changeset_json)
+        .bind(id_str.clone())
+        .execute(conn)
+        .await
+        .map_err(|e| DbError::Query(e.to_string()))?;
+
+        if result.rows_affected() == 0 {
+            return Err(DbError::NotFound {
+                entity: "identification_candidate",
+                id: id_str,
+            });
+        }
+
+        Ok(())
+    }
+
+    /// Find the single Applied candidate for a book (if any).
+    pub async fn find_applied_for_book(
+        pool: &SqlitePool,
+        book_id: Uuid,
+    ) -> Result<Option<IdentificationCandidate>, DbError> {
+        let row = sqlx::query_as::<_, CandidateRow>(
+            "SELECT id, book_id, run_id, provider_name, score, metadata, match_reasons,
+                    disputes, tier, status, created_at, apply_changeset
+             FROM identification_candidates
+             WHERE book_id = ?
+               AND status = 'applied'
+             ORDER BY created_at DESC
+             LIMIT 1",
+        )
+        .bind(book_id.to_string())
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| DbError::Query(e.to_string()))?;
+
+        row.map(CandidateRow::into_candidate).transpose()
+    }
+
+    /// Commit a previously applied candidate: drop its changeset and mark
+    /// it superseded. Used when applying a new candidate replaces an old one.
+    pub async fn commit_applied_conn(conn: &mut SqliteConnection, id: Uuid) -> Result<(), DbError> {
+        let id_str = id.to_string();
+        let superseded = CandidateStatus::Superseded.to_string();
+
+        let result = sqlx::query(
+            "UPDATE identification_candidates
+             SET status = ?, apply_changeset = NULL
+             WHERE id = ?",
+        )
+        .bind(superseded)
+        .bind(id_str.clone())
+        .execute(conn)
+        .await
+        .map_err(|e| DbError::Query(e.to_string()))?;
+
+        if result.rows_affected() == 0 {
+            return Err(DbError::NotFound {
+                entity: "identification_candidate",
+                id: id_str,
+            });
+        }
+
+        Ok(())
     }
 
     /// Compatibility shim for older destructive pruning call sites.
@@ -358,7 +503,7 @@ impl CandidateRepository {
     ) -> Result<Vec<IdentificationCandidate>, DbError> {
         let rows = sqlx::query_as::<_, CandidateRow>(
             "SELECT id, book_id, run_id, provider_name, score, metadata, match_reasons,
-                    disputes, tier, status, created_at
+                    disputes, tier, status, created_at, apply_changeset
              FROM identification_candidates
              WHERE run_id = ?
                AND status != 'superseded'
@@ -542,6 +687,7 @@ struct CandidateRow {
     tier: Option<String>,
     status: String,
     created_at: String,
+    apply_changeset: Option<String>,
 }
 
 impl CandidateRow {
@@ -576,6 +722,12 @@ impl CandidateRow {
             })
             .map_err(|e| DbError::Query(format!("invalid created_at: {e}")))?;
 
+        let apply_changeset: Option<serde_json::Value> = self
+            .apply_changeset
+            .map(|s| serde_json::from_str(&s))
+            .transpose()
+            .map_err(|e| DbError::Query(format!("invalid apply_changeset JSON: {e}")))?;
+
         #[allow(clippy::cast_possible_truncation)]
         Ok(IdentificationCandidate {
             id,
@@ -589,6 +741,7 @@ impl CandidateRow {
             tier: self.tier,
             status,
             created_at,
+            apply_changeset,
         })
     }
 }

@@ -217,7 +217,11 @@
       refreshingMetadata = false;
       // Reload book and candidates
       fetchBook();
-      loadCandidates();
+      loadCandidates().then(() => {
+        if (candidates.length > 0) {
+          candidatesExpanded = true;
+        }
+      });
       navCounts.invalidate();
     });
 
@@ -347,6 +351,7 @@
     candidates = candidates.map((c) =>
       c.id === candidateId ? { ...c, status: 'rejected' as const } : c
     );
+    fetchBook();
   }
 
   function handleCandidateUndone(updated: BookDetail) {
@@ -485,20 +490,22 @@
     }
 
     // Show the meaningful outcome when available
+    // For `ambiguous`, only show "Review suggested" if there are actually pending candidates
     switch (detail.resolution_outcome) {
       case 'confirmed':
         return 'Metadata confirmed';
       case 'enriched':
         return 'Metadata enriched';
       case 'ambiguous':
-        return 'Review suggested';
+        if (pendingCandidates.length > 0) return 'Review suggested';
+        break;
       case 'unmatched':
         return 'No provider match';
       default:
         break;
     }
 
-    // No outcome yet — fall back to state
+    // No outcome yet or resolved ambiguity — fall back to state
     switch (detail.resolution_state) {
       case 'pending':
         return 'Refresh pending';
@@ -527,14 +534,17 @@
       case 'enriched':
         return 'bg-cyan-100 text-cyan-800 dark:bg-cyan-900/30 dark:text-cyan-400';
       case 'ambiguous':
-        return 'bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-400';
+        if (pendingCandidates.length > 0) {
+          return 'bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-400';
+        }
+        break;
       case 'unmatched':
         return 'bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300';
       default:
         break;
     }
 
-    // No outcome yet — fall back to state
+    // No outcome yet or resolved ambiguity — fall back to state
     switch (detail.resolution_state) {
       case 'pending':
         return 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400';
@@ -571,7 +581,10 @@
       case 'enriched':
         return 'The latest refresh added better supporting metadata.';
       case 'ambiguous':
-        return 'The latest refresh found possible matches, but they need review.';
+        if (pendingCandidates.length > 0) {
+          return 'The latest refresh found possible matches, but they need review.';
+        }
+        return 'Use Refresh Metadata whenever identifiers or core book details change.';
       case 'unmatched':
         return 'The latest refresh finished without a usable provider match.';
       default:
@@ -1124,6 +1137,7 @@
                 <CandidateReview
                   {book}
                   {candidates}
+                  {coverVersion}
                   onapply={handleCandidateApplied}
                   onreject={handleCandidateRejected}
                   onundo={handleCandidateUndone}
