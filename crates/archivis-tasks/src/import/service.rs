@@ -7,7 +7,7 @@ use archivis_core::models::{
 };
 use archivis_db::{
     AuthorRepository, BookFileRepository, BookRepository, DbPool, DuplicateRepository,
-    IdentifierRepository, SeriesRepository, SettingRepository, TagRepository,
+    IdentifierRepository, PublisherRepository, SeriesRepository, SettingRepository, TagRepository,
 };
 use archivis_formats::sanitize::sanitize_text;
 use archivis_formats::{ExtractedMetadata, ParsedFilename};
@@ -292,6 +292,12 @@ impl<S: StorageBackend> ImportService<S> {
             book.description = clean_description;
             book.language.clone_from(&embedded.language);
             book.page_count = embedded.page_count;
+            book.publication_year = embedded.publication_year;
+            if let Some(ref publisher_name) = embedded.publisher {
+                let publisher =
+                    PublisherRepository::find_or_create(&self.db_pool, publisher_name).await?;
+                book.publisher_id = Some(publisher.id);
+            }
             book.metadata_status = score.status;
             book.ingest_quality_score = score.confidence;
             book.cover_path = cover_path;
@@ -648,8 +654,13 @@ fn initial_metadata_provenance(
             .map(|_| protected_field(embedded.source.clone())),
         authors: authors_source(embedded, parsed).map(protected_field),
         series: series_source(embedded, parsed).map(protected_field),
-        publisher: None,
-        publication_date: None,
+        publisher: embedded
+            .publisher
+            .as_ref()
+            .map(|_| protected_field(embedded.source.clone())),
+        publication_year: embedded
+            .publication_year
+            .map(|_| protected_field(embedded.source.clone())),
         language: book
             .language
             .as_ref()

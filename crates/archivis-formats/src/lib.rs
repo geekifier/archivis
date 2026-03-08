@@ -12,6 +12,16 @@ pub mod similarity;
 
 use archivis_core::models::{IdentifierType, MetadataSource};
 
+/// Parse a year from a date-like string (e.g. "2023-01-15", "2023", "D:20230601").
+pub(crate) fn parse_year_from_date_str(s: &str) -> Option<i32> {
+    let s = s.trim();
+    if s.len() >= 4 && s[..4].chars().all(|c| c.is_ascii_digit()) {
+        s[..4].parse::<i32>().ok()
+    } else {
+        None
+    }
+}
+
 /// Extracted metadata from an ebook file.
 ///
 /// Shared across all format extractors. Fields are optional because
@@ -24,7 +34,7 @@ pub struct ExtractedMetadata {
     pub description: Option<String>,
     pub language: Option<String>,
     pub publisher: Option<String>,
-    pub publication_date: Option<String>,
+    pub publication_year: Option<i32>,
     pub identifiers: Vec<ExtractedIdentifier>,
     /// Tags or categories found in the file metadata.
     pub subjects: Vec<String>,
@@ -46,7 +56,7 @@ impl Default for ExtractedMetadata {
             description: None,
             language: None,
             publisher: None,
-            publication_date: None,
+            publication_year: None,
             identifiers: Vec::new(),
             subjects: Vec::new(),
             series: None,

@@ -29,7 +29,7 @@ pub struct CandidateResponse {
     pub authors: Vec<CandidateAuthor>,
     pub description: Option<String>,
     pub publisher: Option<String>,
-    pub publication_date: Option<String>,
+    pub publication_year: Option<i32>,
     pub isbn: Option<String>,
     pub series: Option<SeriesInfo>,
     pub cover_url: Option<String>,

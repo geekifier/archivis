@@ -14,7 +14,7 @@ CREATE TABLE books (
     sort_title TEXT NOT NULL,
     description TEXT,
     language TEXT,
-    publication_date TEXT,  -- ISO 8601 date (YYYY-MM-DD)
+    publication_year INTEGER,
     publisher_id TEXT REFERENCES publishers(id) ON DELETE SET NULL,
     added_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),

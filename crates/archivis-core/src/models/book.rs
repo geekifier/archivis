@@ -1,4 +1,4 @@
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -19,7 +19,7 @@ pub struct MetadataProvenance {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub publisher: Option<FieldProvenance>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub publication_date: Option<FieldProvenance>,
+    pub publication_year: Option<FieldProvenance>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub language: Option<FieldProvenance>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -44,7 +44,7 @@ pub struct Book {
     pub sort_title: String,
     pub description: Option<String>,
     pub language: Option<String>,
-    pub publication_date: Option<NaiveDate>,
+    pub publication_year: Option<i32>,
     pub publisher_id: Option<Uuid>,
     pub added_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -91,7 +91,7 @@ impl Book {
             sort_title,
             description: None,
             language: None,
-            publication_date: None,
+            publication_year: None,
             publisher_id: None,
             added_at: now,
             updated_at: now,

@@ -60,6 +60,9 @@ const TITLE_SIMILARITY_MAX_BONUS: f32 = 0.10;
 /// Maximum bonus for author similarity.
 const AUTHOR_MATCH_MAX_BONUS: f32 = 0.05;
 
+/// Maximum bonus for publisher similarity.
+const PUBLISHER_MATCH_BONUS: f32 = 0.05;
+
 /// Bonus when multiple providers return the same book.
 const CROSS_PROVIDER_BONUS: f32 = 0.1;
 
@@ -100,6 +103,7 @@ enum MatchSignal {
     AsinMatch,
     TitleMatch,
     AuthorMatch,
+    PublisherMatch,
     CrossProvider,
     Contradiction,
 }
@@ -226,6 +230,7 @@ impl ScoredCandidate {
 pub struct ExistingBookMetadata {
     pub title: Option<String>,
     pub authors: Vec<String>,
+    pub publisher: Option<String>,
     pub identifiers: Vec<ProviderIdentifier>,
     /// Identifiers from trusted sources (user, embedded) of trusted types
     /// (isbn13, isbn10, asin). Used as proof for auto-apply decisions.
@@ -238,6 +243,7 @@ impl Default for ExistingBookMetadata {
         Self {
             title: None,
             authors: Vec::new(),
+            publisher: None,
             identifiers: Vec::new(),
             trusted_identifiers: Vec::new(),
             metadata_source: MetadataSource::Embedded,
@@ -701,6 +707,19 @@ fn score_candidate(
                 }
             }
         }
+
+        // ── Publisher match bonus ──
+        if let (Some(existing_pub), Some(candidate_pub)) =
+            (&existing.publisher, &candidate.metadata.publisher)
+        {
+            let pub_sim = similarity::similarity(existing_pub, candidate_pub);
+            let bonus = pub_sim * PUBLISHER_MATCH_BONUS;
+            score += bonus;
+            if pub_sim > 0.5 {
+                reasons.push(format!("Publisher match ({:.0}%)", pub_sim * 100.0));
+                signals.insert(MatchSignal::PublisherMatch);
+            }
+        }
     }
 
     // Clamp to 0.0-1.0.
@@ -1040,8 +1059,8 @@ fn fill_metadata_gaps(target: &mut ProviderMetadata, source: &ProviderMetadata) 
     if target.publisher.is_none() {
         target.publisher.clone_from(&source.publisher);
     }
-    if target.publication_date.is_none() {
-        target.publication_date.clone_from(&source.publication_date);
+    if target.publication_year.is_none() {
+        target.publication_year = source.publication_year;
     }
     if target.series.is_none() {
         target.series.clone_from(&source.series);
@@ -1346,7 +1365,7 @@ mod tests {
             description: None,
             language: None,
             publisher: None,
-            publication_date: None,
+            publication_year: None,
             identifiers,
             subjects: Vec::new(),
             series: None,
@@ -1827,7 +1846,7 @@ mod tests {
             description: None,
             language: Some("en".to_string()),
             publisher: None,
-            publication_date: None,
+            publication_year: None,
             identifiers: vec![ProviderIdentifier {
                 identifier_type: IdentifierType::Isbn13,
                 value: "9780441172719".to_string(),
@@ -1849,7 +1868,7 @@ mod tests {
             description: Some("A sci-fi classic".to_string()),
             language: Some("fr".to_string()), // Different — should NOT overwrite.
             publisher: Some("Chilton Books".to_string()),
-            publication_date: Some("1965".to_string()),
+            publication_year: Some(1965),
             identifiers: vec![
                 ProviderIdentifier {
                     identifier_type: IdentifierType::Isbn13,
@@ -1877,7 +1896,7 @@ mod tests {
         // Filled from source.
         assert_eq!(target.description.as_deref(), Some("A sci-fi classic"));
         assert_eq!(target.publisher.as_deref(), Some("Chilton Books"));
-        assert_eq!(target.publication_date.as_deref(), Some("1965"));
+        assert_eq!(target.publication_year, Some(1965));
         assert_eq!(target.series.as_ref().unwrap().name, "Dune");
         assert_eq!(target.page_count, Some(412));
         assert_eq!(
@@ -4330,6 +4349,72 @@ mod tests {
                 .any(|r| r.contains("Author match (100%)")),
             "author score should be 100%% when translator is excluded; reasons: {:?}",
             candidate.match_reasons
+        );
+    }
+
+    #[test]
+    fn score_candidate_publisher_match_boosts_score() {
+        // Use low base confidence so the publisher bonus doesn't get clamped
+        let meta = make_metadata("ol", "Dune", &["Frank Herbert"], None, 0.50);
+
+        let query = MetadataQuery {
+            title: Some("Dune".into()),
+            ..Default::default()
+        };
+
+        let existing = ExistingBookMetadata {
+            title: Some("Dune".into()),
+            authors: vec!["Frank Herbert".into()],
+            publisher: Some("Ace Books".into()),
+            ..Default::default()
+        };
+
+        let mut with_pub = ScoredCandidate {
+            metadata: {
+                let mut m = meta.clone();
+                m.publisher = Some("Ace Books".into());
+                m
+            },
+            score: 0.50,
+            provider_name: "open_library".into(),
+            match_reasons: Vec::new(),
+            signals: HashSet::new(),
+            tier: CandidateMatchTier::WeakMatch,
+        };
+
+        let mut without_pub = ScoredCandidate {
+            metadata: {
+                let mut m = meta;
+                m.publisher = None;
+                m
+            },
+            score: 0.50,
+            provider_name: "open_library".into(),
+            match_reasons: Vec::new(),
+            signals: HashSet::new(),
+            tier: CandidateMatchTier::WeakMatch,
+        };
+
+        score_candidate(&mut with_pub, &query, Some(&existing));
+        score_candidate(&mut without_pub, &query, Some(&existing));
+
+        assert!(
+            with_pub.score > without_pub.score,
+            "publisher match should boost score: {:.4} vs {:.4}",
+            with_pub.score,
+            without_pub.score,
+        );
+        assert!(
+            with_pub
+                .match_reasons
+                .iter()
+                .any(|r| r.contains("Publisher match")),
+            "expected Publisher match reason, got: {:?}",
+            with_pub.match_reasons
+        );
+        assert!(
+            with_pub.signals.contains(&MatchSignal::PublisherMatch),
+            "expected PublisherMatch signal"
         );
     }
 

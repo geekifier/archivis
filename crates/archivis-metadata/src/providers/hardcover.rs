@@ -12,8 +12,10 @@ use crate::client::MetadataHttpClient;
 use crate::errors::ProviderError;
 use crate::provider::MetadataProvider;
 use crate::provider_names;
+use crate::similarity::title_for_search;
 use crate::types::{
-    MetadataQuery, ProviderAuthor, ProviderIdentifier, ProviderMetadata, ProviderSeries,
+    parse_year_from_str, MetadataQuery, ProviderAuthor, ProviderIdentifier, ProviderMetadata,
+    ProviderSeries,
 };
 
 const PROVIDER_NAME: &str = provider_names::HARDCOVER;
@@ -375,7 +377,10 @@ impl HardcoverProvider {
         let series = extract_series(book.and_then(|b| b.book_series.as_ref()));
         let publisher = edition.publisher.as_ref().map(|p| p.name.clone());
         let page_count = edition.pages;
-        let publication_date = edition.release_date.clone();
+        let publication_year = edition
+            .release_date
+            .as_deref()
+            .and_then(parse_year_from_str);
 
         #[allow(clippy::cast_possible_truncation)]
         let rating = book.and_then(|b| b.rating).map(|r| r as f32);
@@ -412,7 +417,7 @@ impl HardcoverProvider {
             description,
             language,
             publisher,
-            publication_date,
+            publication_year,
             identifiers: Vec::new(),
             subjects,
             series,
@@ -467,7 +472,9 @@ impl HardcoverProvider {
 
         let publisher = edition.and_then(|e| e.publisher.as_ref().map(|p| p.name.clone()));
         let page_count = edition.and_then(|e| e.pages);
-        let publication_date = edition.and_then(|e| e.release_date.clone());
+        let publication_year = edition
+            .and_then(|e| e.release_date.as_deref())
+            .and_then(parse_year_from_str);
         let language = edition
             .and_then(|e| e.language.as_ref())
             .and_then(|l| normalize_language(&l.language));
@@ -552,7 +559,7 @@ impl HardcoverProvider {
             description,
             language,
             publisher,
-            publication_date,
+            publication_year,
             identifiers,
             subjects,
             series,
@@ -1211,7 +1218,7 @@ fn normalize_language(name: &str) -> Option<String> {
 fn build_search_string(query: &MetadataQuery) -> String {
     let mut parts = Vec::new();
     if let Some(ref title) = query.title {
-        parts.push(title.clone());
+        parts.push(title_for_search(title).to_string());
     }
     if let Some(ref author) = query.author {
         parts.push(author.clone());
@@ -1242,14 +1249,20 @@ fn compute_search_confidence(
             } else if r.contains(&q) || q.contains(&r) {
                 0.7
             } else {
-                // Simple word overlap ratio.
-                let r_words: Vec<&str> = r.split_whitespace().collect();
-                let q_words: Vec<&str> = q.split_whitespace().collect();
-                let common = r_words.iter().filter(|w| q_words.contains(w)).count();
-                let total = r_words.len().max(q_words.len()).max(1);
-                #[allow(clippy::cast_precision_loss)]
-                let ratio = (common as f32) / (total as f32);
-                0.5 + (ratio * 0.3)
+                // Try main-title-only comparison (handles embedded subtitles).
+                let q_main = normalize_for_comparison(title_for_search(query_t));
+                if q_main != q && (r == q_main || r.contains(&q_main) || q_main.contains(&r)) {
+                    0.7
+                } else {
+                    // Simple word overlap ratio.
+                    let r_words: Vec<&str> = r.split_whitespace().collect();
+                    let q_words: Vec<&str> = q.split_whitespace().collect();
+                    let common = r_words.iter().filter(|w| q_words.contains(w)).count();
+                    let total = r_words.len().max(q_words.len()).max(1);
+                    #[allow(clippy::cast_precision_loss)]
+                    let ratio = (common as f32) / (total as f32);
+                    0.5 + (ratio * 0.3)
+                }
             }
         }
         _ => 0.5,
@@ -1581,7 +1594,7 @@ mod tests {
         assert!(metadata.description.as_deref().unwrap().contains("Arrakis"));
         assert_eq!(metadata.language.as_deref(), Some("en"));
         assert_eq!(metadata.publisher.as_deref(), Some("Chilton Books"));
-        assert_eq!(metadata.publication_date.as_deref(), Some("1965-08-01"));
+        assert_eq!(metadata.publication_year, Some(1965));
         assert_eq!(metadata.page_count, Some(412));
         assert_eq!(
             metadata.cover_url.as_deref(),
@@ -1659,7 +1672,7 @@ mod tests {
         assert!(metadata.description.is_none());
         assert!(metadata.language.is_none());
         assert!(metadata.publisher.is_none());
-        assert!(metadata.publication_date.is_none());
+        assert!(metadata.publication_year.is_none());
         assert!(metadata.page_count.is_none());
         assert!(metadata.cover_url.is_none());
         assert!(metadata.subjects.is_empty());
@@ -1855,7 +1868,7 @@ mod tests {
         );
         assert_eq!(metadata.language.as_deref(), Some("en"));
         assert_eq!(metadata.publisher.as_deref(), Some("Chilton Books"));
-        assert_eq!(metadata.publication_date.as_deref(), Some("1965-08-01"));
+        assert_eq!(metadata.publication_year, Some(1965));
         assert_eq!(metadata.page_count, Some(412));
         assert_eq!(
             metadata.cover_url.as_deref(),
@@ -1923,6 +1936,19 @@ mod tests {
         assert_eq!(build_search_string(&query), "");
     }
 
+    #[test]
+    fn build_search_string_strips_subtitle() {
+        let query = MetadataQuery {
+            title: Some("Thinking, Fast and Slow: A Summary".to_string()),
+            author: Some("Daniel Kahneman".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            build_search_string(&query),
+            "Thinking, Fast and Slow Daniel Kahneman"
+        );
+    }
+
     // ── Confidence computation ──────────────────────────────────────
 
     #[test]
@@ -1954,6 +1980,23 @@ mod tests {
         let confidence = compute_search_confidence(Some("Foundation"), Some("Dune"), &query);
         assert!(confidence >= 0.5);
         assert!(confidence <= 0.8);
+    }
+
+    #[test]
+    fn confidence_subtitle_in_query_matches_main_title_result() {
+        let query = MetadataQuery {
+            title: Some("Thinking, Fast and Slow: A Summary of Key Ideas".to_string()),
+            ..Default::default()
+        };
+        let confidence = compute_search_confidence(
+            Some("Thinking, Fast and Slow"),
+            Some("Thinking, Fast and Slow: A Summary of Key Ideas"),
+            &query,
+        );
+        assert!(
+            (confidence - 0.7).abs() < f32::EPSILON,
+            "expected 0.7 for main-title match, got {confidence}"
+        );
     }
 
     // ── Normalization ───────────────────────────────────────────────

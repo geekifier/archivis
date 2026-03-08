@@ -1,7 +1,7 @@
 use std::fmt;
 use std::str::FromStr;
 
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -119,11 +119,14 @@ pub struct ApplyChangeset {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub language: Option<ChangesetEntry<Option<String>>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub publication_date: Option<ChangesetEntry<Option<NaiveDate>>>,
+    pub publication_year: Option<ChangesetEntry<Option<i32>>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub page_count: Option<ChangesetEntry<Option<i32>>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cover_path: Option<ChangesetEntry<Option<String>>>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub publisher_id: Option<ChangesetEntry<Option<Uuid>>>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub authors: Option<ChangesetEntry<Vec<ChangesetAuthor>>>,
@@ -139,9 +142,10 @@ impl ApplyChangeset {
             && self.subtitle.is_none()
             && self.description.is_none()
             && self.language.is_none()
-            && self.publication_date.is_none()
+            && self.publication_year.is_none()
             && self.page_count.is_none()
             && self.cover_path.is_none()
+            && self.publisher_id.is_none()
             && self.authors.is_none()
             && self.series.is_none()
     }

@@ -1,4 +1,4 @@
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Deserializer, Serialize};
 use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
@@ -68,8 +68,7 @@ pub struct UpdateBookRequest {
     pub subtitle: Option<String>,
     pub description: Option<String>,
     pub language: Option<String>,
-    #[schema(value_type = Option<String>, example = "2024-01-15")]
-    pub publication_date: Option<NaiveDate>,
+    pub publication_year: Option<i32>,
     #[validate(range(min = 0.0, max = 5.0))]
     pub rating: Option<f32>,
     pub page_count: Option<i32>,
@@ -86,7 +85,7 @@ pub struct UpdateBookRequest {
 pub struct FieldProtectionRequest {
     /// Fields to protect or unprotect.
     /// Supported values: `title`, `subtitle`, `description`, `authors`, `series`,
-    /// `publisher`, `publication_date`, `language`, `page_count`, `cover`.
+    /// `publisher`, `publication_year`, `language`, `page_count`, `cover`.
     pub fields: Vec<String>,
 }
 
@@ -254,8 +253,7 @@ pub struct BookSummary {
     pub sort_title: String,
     pub description: Option<String>,
     pub language: Option<String>,
-    #[schema(value_type = Option<String>)]
-    pub publication_date: Option<NaiveDate>,
+    pub publication_year: Option<i32>,
     pub added_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub rating: Option<f32>,
@@ -292,8 +290,7 @@ pub struct BookDetail {
     pub sort_title: String,
     pub description: Option<String>,
     pub language: Option<String>,
-    #[schema(value_type = Option<String>)]
-    pub publication_date: Option<NaiveDate>,
+    pub publication_year: Option<i32>,
     pub publisher_id: Option<Uuid>,
     pub publisher_name: Option<String>,
     pub added_at: DateTime<Utc>,
@@ -385,7 +382,7 @@ pub struct MetadataProvenanceResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub publisher: Option<FieldProvenanceResponse>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub publication_date: Option<FieldProvenanceResponse>,
+    pub publication_year: Option<FieldProvenanceResponse>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub language: Option<FieldProvenanceResponse>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -415,7 +412,7 @@ impl From<BookWithRelations> for BookDetail {
             sort_title: bwr.book.sort_title,
             description: bwr.book.description,
             language: bwr.book.language,
-            publication_date: bwr.book.publication_date,
+            publication_year: bwr.book.publication_year,
             publisher_id: bwr.book.publisher_id,
             publisher_name: bwr.publisher_name,
             added_at: bwr.book.added_at,
@@ -451,7 +448,7 @@ impl From<Book> for BookSummary {
             sort_title: book.sort_title,
             description: book.description,
             language: book.language,
-            publication_date: book.publication_date,
+            publication_year: book.publication_year,
             added_at: book.added_at,
             updated_at: book.updated_at,
             rating: book.rating,
@@ -547,7 +544,7 @@ impl From<MetadataProvenance> for MetadataProvenanceResponse {
             authors: provenance.authors.map(Into::into),
             series: provenance.series.map(Into::into),
             publisher: provenance.publisher.map(Into::into),
-            publication_date: provenance.publication_date.map(Into::into),
+            publication_year: provenance.publication_year.map(Into::into),
             language: provenance.language.map(Into::into),
             page_count: provenance.page_count.map(Into::into),
             cover: provenance.cover.map(Into::into),

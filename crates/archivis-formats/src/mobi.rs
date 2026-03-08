@@ -35,7 +35,10 @@ pub fn extract_mobi_metadata(data: &[u8]) -> Result<ExtractedMetadata, FormatErr
         description: meta.description.clone(),
         language: meta.language.clone(),
         publisher: meta.publisher.clone(),
-        publication_date: meta.publication_date.clone(),
+        publication_year: meta
+            .publication_date
+            .as_deref()
+            .and_then(crate::parse_year_from_date_str),
         subjects: meta.subjects.clone(),
         source: MetadataSource::Embedded,
         ..ExtractedMetadata::default()

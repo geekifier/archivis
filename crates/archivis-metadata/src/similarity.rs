@@ -51,6 +51,24 @@ pub fn normalize_title(title: &str) -> String {
     words.join(" ")
 }
 
+/// Extract the main title for use in search queries, stripping any
+/// embedded subtitle after common separators (`: `, ` - `, ` — `).
+///
+/// Only strips when the portion before the separator has at least 2 words,
+/// to avoid false splits on short franchise prefixes (e.g. keeps
+/// `"It: A Novel"` intact because `"It"` is only 1 word).
+pub fn title_for_search(title: &str) -> &str {
+    for sep in [": ", " - ", " \u{2014} "] {
+        if let Some(pos) = title.find(sep) {
+            let main = &title[..pos];
+            if main.split_whitespace().count() >= 2 {
+                return main;
+            }
+        }
+    }
+    title
+}
+
 /// Jaro-Winkler similarity between two strings (0.0-1.0).
 ///
 /// Good for short strings like book titles and author names. Returns 1.0
@@ -311,6 +329,58 @@ mod tests {
         // "The" alone should remain (it's the entire title).
         assert_eq!(normalize_title("The"), "the");
         assert_eq!(normalize_title("A"), "a");
+    }
+
+    // ── title_for_search ──
+
+    #[test]
+    fn title_for_search_strips_colon_subtitle() {
+        assert_eq!(
+            title_for_search("Thinking, Fast and Slow: A Summary"),
+            "Thinking, Fast and Slow"
+        );
+    }
+
+    #[test]
+    fn title_for_search_strips_dash_subtitle() {
+        assert_eq!(
+            title_for_search("Good Strategy Bad Strategy - The Difference"),
+            "Good Strategy Bad Strategy"
+        );
+    }
+
+    #[test]
+    fn title_for_search_strips_emdash_subtitle() {
+        assert_eq!(
+            title_for_search("Good Strategy Bad Strategy \u{2014} The Difference"),
+            "Good Strategy Bad Strategy"
+        );
+    }
+
+    #[test]
+    fn title_for_search_keeps_single_word_before_dash() {
+        // "Sapiens" is only 1 word before ` - `, so the full title is kept.
+        assert_eq!(
+            title_for_search("Sapiens - A Brief History of Humankind"),
+            "Sapiens - A Brief History of Humankind"
+        );
+    }
+
+    #[test]
+    fn title_for_search_keeps_short_prefix() {
+        // "It" is only 1 word before `: `, so the full title is kept.
+        assert_eq!(title_for_search("It: A Novel"), "It: A Novel");
+    }
+
+    #[test]
+    fn title_for_search_no_separator() {
+        assert_eq!(title_for_search("Dune"), "Dune");
+    }
+
+    #[test]
+    fn title_for_search_colon_without_space() {
+        // A bare colon without trailing space is not a subtitle separator.
+        assert_eq!(title_for_search("Title:Subtitle"), "Title:Subtitle");
     }
 
     // ── similarity (Jaro-Winkler) ──

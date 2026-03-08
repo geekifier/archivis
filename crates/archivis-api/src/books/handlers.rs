@@ -46,7 +46,7 @@ const PROTECTABLE_FIELDS: &[&str] = &[
     "authors",
     "series",
     "publisher",
-    "publication_date",
+    "publication_year",
     "language",
     "page_count",
     "cover",
@@ -92,7 +92,7 @@ fn provenance_for_field_mut<'a>(
         "authors" => Ok(&mut book.metadata_provenance.authors),
         "series" => Ok(&mut book.metadata_provenance.series),
         "publisher" => Ok(&mut book.metadata_provenance.publisher),
-        "publication_date" => Ok(&mut book.metadata_provenance.publication_date),
+        "publication_year" => Ok(&mut book.metadata_provenance.publication_year),
         "language" => Ok(&mut book.metadata_provenance.language),
         "page_count" => Ok(&mut book.metadata_provenance.page_count),
         "cover" => Ok(&mut book.metadata_provenance.cover),
@@ -341,11 +341,11 @@ pub async fn update_book(
             book_changed = true;
         }
     }
-    if let Some(pub_date) = body.publication_date {
-        let new_publication_date = Some(pub_date);
-        if new_publication_date != book.publication_date {
-            book.publication_date = new_publication_date;
-            book.metadata_provenance.publication_date = Some(user_field_provenance());
+    if let Some(pub_year) = body.publication_year {
+        let new_publication_year = Some(pub_year);
+        if new_publication_year != book.publication_year {
+            book.publication_year = new_publication_year;
+            book.metadata_provenance.publication_year = Some(user_field_provenance());
             book_changed = true;
         }
     }
@@ -1627,7 +1627,7 @@ mod tests {
                 subtitle: None,
                 description: None,
                 language: None,
-                publication_date: None,
+                publication_year: None,
                 rating: None,
                 page_count: None,
                 publisher_id: None,

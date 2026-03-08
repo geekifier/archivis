@@ -166,7 +166,7 @@ async fn asin_book_not_auto_applied_via_fuzzy_search() {
             description: Some("A Lady Darby Mystery novel.".into()),
             language: None,
             publisher: None,
-            publication_date: None,
+            publication_year: None,
             identifiers: vec![], // No ISBN!
             subjects: vec![],
             series: None,
@@ -253,7 +253,7 @@ async fn fuzzy_only_single_candidate_remains_needs_review() {
             description: None,
             language: None,
             publisher: None,
-            publication_date: None,
+            publication_year: None,
             identifiers: vec![], // No ISBN
             subjects: vec![],
             series: None,
@@ -317,7 +317,7 @@ async fn strong_isbn_match_auto_applies_correctly() {
             description: Some("A sci-fi classic.".into()),
             language: None,
             publisher: None,
-            publication_date: None,
+            publication_year: None,
             identifiers: vec![ProviderIdentifier {
                 identifier_type: IdentifierType::Isbn13,
                 value: "9780441172719".into(),
@@ -427,7 +427,7 @@ async fn stale_author_replaced_under_strong_isbn_proof() {
         description: None,
         language: None,
         publisher: None,
-        publication_date: None,
+        publication_year: None,
         identifiers: vec![ProviderIdentifier {
             identifier_type: IdentifierType::Isbn13,
             value: "9780425253465".into(),
@@ -503,7 +503,7 @@ async fn strong_match_enriches_existing_book() {
             description: Some("Arrakis awaits.".into()),
             language: Some("en".into()),
             publisher: Some("Ace".into()),
-            publication_date: Some("1965-08-01".into()),
+            publication_year: Some(1965),
             identifiers: vec![ProviderIdentifier {
                 identifier_type: IdentifierType::Isbn13,
                 value: "9780441172719".into(),
@@ -589,7 +589,7 @@ async fn protected_core_conflict_becomes_disputed() {
             description: Some("Arrakis awaits.".into()),
             language: None,
             publisher: None,
-            publication_date: None,
+            publication_year: None,
             identifiers: vec![ProviderIdentifier {
                 identifier_type: IdentifierType::Isbn13,
                 value: "9780441172719".into(),
@@ -684,7 +684,7 @@ async fn lady_of_the_lake_article_and_translator_regression() {
             description: None,
             language: None,
             publisher: Some("Orbit".into()),
-            publication_date: Some("2017-03-14".into()),
+            publication_year: Some(2017),
             identifiers: vec![ProviderIdentifier {
                 identifier_type: IdentifierType::Isbn13,
                 value: "9780316273770".into(),
@@ -737,8 +737,8 @@ async fn lady_of_the_lake_article_and_translator_regression() {
 
     // Enrichments applied.
     assert!(
-        updated.publication_date.is_some(),
-        "publication_date should be enriched"
+        updated.publication_year.is_some(),
+        "publication_year should be enriched"
     );
 
     // Status should be Identified, not NeedsReview.

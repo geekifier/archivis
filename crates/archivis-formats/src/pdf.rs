@@ -80,7 +80,7 @@ fn extract_info_dict(doc: &Document, meta: &mut ExtractedMetadata) {
     }
 
     if let Some(date) = pdf_dict_string(info, b"CreationDate") {
-        meta.publication_date = parse_pdf_date(&date);
+        meta.publication_year = parse_pdf_year(&date);
     }
 }
 
@@ -177,12 +177,9 @@ fn parse_xmp(xml: &str, meta: &mut ExtractedMetadata) {
         meta.publisher = Some(publisher);
     }
 
-    // dc:date → publication_date
+    // dc:date → publication_year
     if let Some(date) = xmp_bag_first(xml, "dc:date") {
-        let trimmed = date.trim().to_owned();
-        if !trimmed.is_empty() {
-            meta.publication_date = Some(trimmed);
-        }
+        meta.publication_year = crate::parse_year_from_date_str(&date);
     }
 
     // dc:identifier — look for ISBNs
@@ -329,31 +326,18 @@ fn split_list(raw: &str) -> Vec<String> {
 // PDF date parsing
 // ---------------------------------------------------------------------------
 
-/// Parse a PDF date string (`D:YYYYMMDDHHmmSSOHH'mm'`) into a simple
-/// date string (`YYYY-MM-DD`). Returns `None` on failure.
-fn parse_pdf_date(raw: &str) -> Option<String> {
+/// Parse a PDF date string (`D:YYYYMMDDHHmmSSOHH'mm'`) into a year.
+/// Returns `None` on failure.
+fn parse_pdf_year(raw: &str) -> Option<i32> {
     // Strip optional `D:` prefix.
     let s = raw.strip_prefix("D:").unwrap_or(raw);
 
-    // We need at least 4 characters (the year).
     if s.len() < 4 || !s[..4].chars().all(|c| c.is_ascii_digit()) {
         tracing::warn!(raw, "PDF date too short or non-numeric year");
         return None;
     }
 
-    let year = &s[..4];
-    let month = s
-        .get(4..6)
-        .filter(|m| m.chars().all(|c| c.is_ascii_digit()));
-    let day = s
-        .get(6..8)
-        .filter(|d| d.chars().all(|c| c.is_ascii_digit()));
-
-    match (month, day) {
-        (Some(m), Some(d)) => Some(format!("{year}-{m}-{d}")),
-        (Some(m), None) => Some(format!("{year}-{m}")),
-        _ => Some(year.to_owned()),
-    }
+    s[..4].parse::<i32>().ok()
 }
 
 // ---------------------------------------------------------------------------
@@ -539,26 +523,23 @@ mod tests {
     }
 
     #[test]
-    fn parse_pdf_date_full() {
-        assert_eq!(
-            parse_pdf_date("D:20231215120000+05'30'"),
-            Some("2023-12-15".into()),
-        );
+    fn parse_pdf_year_full() {
+        assert_eq!(parse_pdf_year("D:20231215120000+05'30'"), Some(2023));
     }
 
     #[test]
-    fn parse_pdf_date_year_only() {
-        assert_eq!(parse_pdf_date("D:2020"), Some("2020".into()));
+    fn parse_pdf_year_year_only() {
+        assert_eq!(parse_pdf_year("D:2020"), Some(2020));
     }
 
     #[test]
-    fn parse_pdf_date_no_prefix() {
-        assert_eq!(parse_pdf_date("20180315"), Some("2018-03-15".into()));
+    fn parse_pdf_year_no_prefix() {
+        assert_eq!(parse_pdf_year("20180315"), Some(2018));
     }
 
     #[test]
-    fn parse_pdf_date_invalid() {
-        assert_eq!(parse_pdf_date("abc"), None);
+    fn parse_pdf_year_invalid() {
+        assert_eq!(parse_pdf_year("abc"), None);
     }
 
     #[test]
@@ -569,7 +550,7 @@ mod tests {
         )]);
         let meta = extract_pdf_metadata(&data).unwrap();
 
-        assert_eq!(meta.publication_date.as_deref(), Some("2022-06-01"));
+        assert_eq!(meta.publication_year, Some(2022));
     }
 
     #[test]
@@ -699,7 +680,7 @@ mod tests {
         assert_eq!(meta.subjects, vec!["Science", "Fiction"]);
         assert_eq!(meta.language.as_deref(), Some("en"));
         assert_eq!(meta.publisher.as_deref(), Some("Great Publisher"));
-        assert_eq!(meta.publication_date.as_deref(), Some("2023-07-01"));
+        assert_eq!(meta.publication_year, Some(2023));
         // ISBN from dc:identifier and prism:isbn (deduplicated).
         assert!(meta.identifiers.iter().any(|id| {
             id.identifier_type == IdentifierType::Isbn13 && id.value == "9780136019701"

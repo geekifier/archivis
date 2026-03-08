@@ -93,7 +93,7 @@ const PLACEHOLDER_ISBNS: &[&str] = &[
 /// against filename-derived metadata.
 ///
 /// The `profile` controls how much weight is given to metadata richness
-/// (description, language, publisher, subjects, publication date) beyond the
+/// (description, language, publisher, subjects, publication year) beyond the
 /// core signals (ISBN, title, author, cross-validation).
 pub fn score_metadata(
     embedded: &ExtractedMetadata,
@@ -151,7 +151,7 @@ pub fn score_metadata(
 /// Compute a richness bonus based on how many optional metadata fields are populated.
 ///
 /// Checked fields: description, language, publisher, subjects (at least 1),
-/// and publication date. The bonus scales linearly with the number of fields
+/// and publication year. The bonus scales linearly with the number of fields
 /// present, up to the profile's maximum.
 fn richness_bonus(embedded: &ExtractedMetadata, profile: ScoringProfile) -> f32 {
     let max_bonus = match profile {
@@ -178,11 +178,7 @@ fn richness_bonus(embedded: &ExtractedMetadata, profile: ScoringProfile) -> f32 
     if !embedded.subjects.is_empty() {
         count += 1;
     }
-    if embedded
-        .publication_date
-        .as_deref()
-        .is_some_and(|d| !d.is_empty())
-    {
+    if embedded.publication_year.is_some() {
         count += 1;
     }
 
@@ -611,7 +607,7 @@ mod tests {
             language: Some("en".into()),
             publisher: Some("Global Grey".into()),
             subjects: vec!["Fiction".into(), "Romance".into()],
-            publication_date: Some("1813-01-28".into()),
+            publication_year: Some(1813),
             source: MetadataSource::Embedded,
             ..ExtractedMetadata::default()
         }
@@ -687,7 +683,7 @@ mod tests {
             authors: vec!["Some Writer".into()],
             description: Some("A description".into()),
             language: Some("en".into()),
-            // No publisher, no subjects, no publication_date → 2/5
+            // No publisher, no subjects, no publication_year → 2/5
             source: MetadataSource::Embedded,
             ..ExtractedMetadata::default()
         };

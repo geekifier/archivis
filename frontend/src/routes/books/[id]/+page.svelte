@@ -600,20 +600,6 @@
     });
   }
 
-  function formatPubDate(date: string): string {
-    // publication_date is "YYYY-MM-DD"
-    const parts = date.split('-');
-    if (parts.length === 3) {
-      const d = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
-      return d.toLocaleDateString(undefined, {
-        year: 'numeric',
-        month: 'long',
-        day: 'numeric'
-      });
-    }
-    return date;
-  }
-
   function formatRating(rating: number): string {
     return `${rating.toFixed(1)} / 5`;
   }
@@ -1202,10 +1188,10 @@
                   <dd class="font-medium">{book.publisher_name}</dd>
                 </div>
               {/if}
-              {#if book.publication_date}
+              {#if book.publication_year != null}
                 <div>
                   <dt class="text-muted-foreground">Published</dt>
-                  <dd class="font-medium">{formatPubDate(book.publication_date)}</dd>
+                  <dd class="font-medium">{book.publication_year}</dd>
                 </div>
               {/if}
               {#if book.language}

@@ -20,15 +20,15 @@
 </script>
 
 <script lang="ts">
-  import { api, ApiError } from '$lib/api/index.js';
   import type { BookDetail, IdentifierEntry } from '$lib/api/index.js';
+  import { api, ApiError } from '$lib/api/index.js';
   import { Button } from '$lib/components/ui/button/index.js';
   import { Input } from '$lib/components/ui/input/index.js';
   import * as Select from '$lib/components/ui/select/index.js';
-  import { validateIsbn } from '$lib/utils/isbn.js';
-  import type { IsbnValidation } from '$lib/utils/isbn.js';
   import { formatIdentifierType, formatMetadataSource } from '$lib/utils.js';
-  import { scoreColor, formatScore } from './candidate-utils.js';
+  import type { IsbnValidation } from '$lib/utils/isbn.js';
+  import { validateIsbn } from '$lib/utils/isbn.js';
+  import { formatScore, scoreColor } from './candidate-utils.js';
 
   const identifierTypeOptions: { value: string; label: string }[] = [
     { value: 'isbn13', label: 'ISBN-13' },
@@ -176,10 +176,6 @@
 </script>
 
 <div class="space-y-4">
-  <div class="flex items-center justify-between">
-    <h3 class="text-sm font-semibold text-muted-foreground">Identifiers</h3>
-  </div>
-
   <!-- Existing identifiers list -->
   {#if book.identifiers.length > 0}
     <div class="overflow-x-auto">

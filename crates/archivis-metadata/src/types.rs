@@ -13,7 +13,7 @@ pub struct ProviderMetadata {
     pub description: Option<String>,
     pub language: Option<String>,
     pub publisher: Option<String>,
-    pub publication_date: Option<String>,
+    pub publication_year: Option<i32>,
     /// External identifiers (ISBNs, OLIDs, etc.).
     pub identifiers: Vec<ProviderIdentifier>,
     /// Genres/tags/subjects.
@@ -51,6 +51,25 @@ pub struct ProviderSeries {
     pub position: Option<f32>,
 }
 
+/// Extract a publication year from a date-like string.
+///
+/// Handles bare years (`"1965"`), ISO dates (`"2023-01-15"`), and
+/// free-form strings such as `"June 1965"` by finding the first run of
+/// four consecutive ASCII digits.
+pub fn parse_year_from_str(s: &str) -> Option<i32> {
+    let s = s.trim();
+    // Try parsing as a bare number first.
+    if let Ok(year) = s.parse::<i32>() {
+        return Some(year);
+    }
+    // Extract first 4 consecutive digits.
+    s.as_bytes()
+        .windows(4)
+        .find(|w| w.iter().all(u8::is_ascii_digit))
+        .and_then(|w| std::str::from_utf8(w).ok())
+        .and_then(|w| w.parse::<i32>().ok())
+}
+
 /// A search query for looking up book metadata.
 #[derive(Debug, Clone, Default)]
 pub struct MetadataQuery {
@@ -78,7 +97,7 @@ mod tests {
             description: Some("A science fiction classic.".to_string()),
             language: Some("en".to_string()),
             publisher: Some("Chilton Books".to_string()),
-            publication_date: Some("1965".to_string()),
+            publication_year: Some(1965),
             identifiers: vec![ProviderIdentifier {
                 identifier_type: IdentifierType::Isbn13,
                 value: "9780441172719".to_string(),
@@ -121,7 +140,7 @@ mod tests {
             description: None,
             language: None,
             publisher: None,
-            publication_date: None,
+            publication_year: None,
             identifiers: vec![],
             subjects: vec![],
             series: None,

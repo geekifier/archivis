@@ -23,11 +23,12 @@ const VALID_EXCLUDE_FIELDS: &[&str] = &[
     "title",
     "subtitle",
     "description",
-    "publication_date",
+    "publication_year",
     "authors",
     "identifiers",
     "series",
     "cover",
+    "publisher",
 ];
 
 fn parse_exclude_fields(body: Option<ApplyCandidateBody>) -> Result<HashSet<String>, ApiError> {
@@ -420,7 +421,7 @@ fn candidate_to_response(candidate: IdentificationCandidate) -> CandidateRespons
         authors,
         description,
         publisher,
-        publication_date,
+        publication_year,
         isbn,
         series,
         cover_url,
@@ -439,7 +440,7 @@ fn candidate_to_response(candidate: IdentificationCandidate) -> CandidateRespons
                     .collect(),
                 meta.description.clone(),
                 meta.publisher.clone(),
-                meta.publication_date.clone(),
+                meta.publication_year,
                 meta.identifiers
                     .iter()
                     .find(|id| {
@@ -466,7 +467,7 @@ fn candidate_to_response(candidate: IdentificationCandidate) -> CandidateRespons
         authors,
         description,
         publisher,
-        publication_date,
+        publication_year,
         isbn,
         series,
         cover_url,

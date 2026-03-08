@@ -314,8 +314,8 @@ impl<S: StorageBackend> MergeService<S> {
             if secondary.book.publisher_id.is_some() {
                 book.publisher_id = secondary.book.publisher_id;
             }
-            if secondary.book.publication_date.is_some() {
-                book.publication_date = secondary.book.publication_date;
+            if secondary.book.publication_year.is_some() {
+                book.publication_year = secondary.book.publication_year;
             }
             if secondary.book.page_count.is_some() {
                 book.page_count = secondary.book.page_count;
@@ -334,8 +334,8 @@ impl<S: StorageBackend> MergeService<S> {
             if book.publisher_id.is_none() {
                 book.publisher_id = secondary.book.publisher_id;
             }
-            if book.publication_date.is_none() {
-                book.publication_date = secondary.book.publication_date;
+            if book.publication_year.is_none() {
+                book.publication_year = secondary.book.publication_year;
             }
             if book.page_count.is_none() {
                 book.page_count = secondary.book.page_count;

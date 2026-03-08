@@ -57,8 +57,8 @@
 
   function formatFieldLabel(field: string): string {
     switch (field) {
-      case 'publication_date':
-        return 'publication date';
+      case 'publication_year':
+        return 'publication year';
       case 'page_count':
         return 'page count';
       default:
@@ -72,10 +72,12 @@
       if (!untrack(() => fieldSelections[candidate.id])) {
         const sel: Record<string, boolean> = {};
         if (candidate.title != null) sel.title = true;
+        if (candidate.subtitle != null) sel.subtitle = true;
         if (candidate.authors.length > 0) sel.authors = true;
-        if (candidate.publication_date != null) sel.publication_date = true;
+        if (candidate.publication_year != null) sel.publication_year = true;
         if (candidate.isbn != null) sel.identifiers = true;
         if (candidate.series != null) sel.series = true;
+        if (candidate.publisher != null) sel.publisher = true;
         if (candidate.description != null) sel.description = true;
         if (candidate.cover_url != null) sel.cover = true;
         fieldSelections[candidate.id] = sel;
@@ -313,9 +315,29 @@
                     </td>
                   </tr>
                 {/if}
+                <!-- Subtitle -->
+                {#if candidate.subtitle != null}
+                  {@const subtitleMatch = !hasChange(candidate.subtitle ?? null, book.subtitle ?? null)}
+                  <tr class={subtitleMatch ? 'opacity-40' : candidate.subtitle != null && !isFieldIncluded(candidate.id, 'subtitle') ? 'opacity-40' : ''}>
+                    <td class="py-1.5 pr-1">
+                      {#if candidate.subtitle != null && !subtitleMatch}
+                        <input
+                          type="checkbox"
+                          checked={isFieldIncluded(candidate.id, 'subtitle')}
+                          onchange={() => toggleField(candidate.id, 'subtitle')}
+                          class="h-3.5 w-3.5 rounded border-border"
+                        />
+                      {/if}
+                    </td>
+                    <td class="py-1.5 pr-3 text-xs font-medium text-muted-foreground">Subtitle</td>
+                    <td class="py-1.5 pr-3 text-xs">{book.subtitle ?? '--'}</td>
+                    <td class="py-1.5 text-xs {subtitleMatch ? 'text-muted-foreground' : 'font-medium text-primary'}">
+                      {candidate.subtitle ?? '--'}
+                    </td>
+                  </tr>
+                {/if}
                 <!-- Authors (split by role) -->
                 {#if candidate.authors.length > 0}
-                  {@const allAuthorsMatch = candidate.authors.map((a) => a.name).join(', ') === book.authors.map((a) => a.name).join(', ')}
                   {@const candidateAuthors = candidate.authors.filter((a) => isAuthorRole(a.role))}
                   {@const bookAuthors = book.authors.filter((a) => isAuthorRole(a.role))}
                   {@const candidateAuthorNames = candidateAuthors.map((a) => a.name).join(', ')}
@@ -323,9 +345,9 @@
                   {@const authorRowMatch = candidateAuthorNames === bookAuthorNames}
                   {@const authorsIncluded = isFieldIncluded(candidate.id, 'authors')}
                   <!-- Author-role row -->
-                  <tr class={allAuthorsMatch ? 'opacity-40' : !authorsIncluded ? 'opacity-40' : ''}>
+                  <tr class={authorRowMatch ? 'opacity-40' : !authorsIncluded ? 'opacity-40' : ''}>
                     <td class="py-1.5 pr-1">
-                      {#if !allAuthorsMatch}
+                      {#if !authorRowMatch}
                         <input
                           type="checkbox"
                           checked={authorsIncluded}
@@ -351,8 +373,17 @@
                     {@const candidateNames = candidate.authors.filter((a) => a.role === role).map((a) => a.name).join(', ')}
                     {@const bookNames = book.authors.filter((a) => a.role === role).map((a) => a.name).join(', ')}
                     {@const contribMatch = candidateNames === bookNames}
-                    <tr class={allAuthorsMatch ? 'opacity-40' : !authorsIncluded ? 'opacity-40' : ''}>
-                      <td class="py-1.5 pr-1"></td>
+                    <tr class={contribMatch ? 'opacity-40' : !authorsIncluded ? 'opacity-40' : ''}>
+                      <td class="py-1.5 pr-1">
+                        {#if !contribMatch}
+                          <input
+                            type="checkbox"
+                            checked={authorsIncluded}
+                            onchange={() => toggleField(candidate.id, 'authors')}
+                            class="h-3.5 w-3.5 rounded border-border"
+                          />
+                        {/if}
+                      </td>
                       <td class="py-1.5 pr-3 text-xs font-medium text-muted-foreground">{titleCase(role)}</td>
                       <td class="py-1.5 pr-3 text-xs">{bookNames || '--'}</td>
                       <td class="py-1.5 text-xs {contribMatch ? 'text-muted-foreground' : 'font-medium text-primary'}">
@@ -361,11 +392,20 @@
                     </tr>
                   {/each}
                 {/if}
-                <!-- Publisher (no checkbox — backend doesn't apply publisher) -->
+                <!-- Publisher -->
                 {#if candidate.publisher || book.publisher_name}
                   {@const publisherMatch = !hasChange(candidate.publisher, book.publisher_name)}
-                  <tr class={publisherMatch ? 'opacity-40' : ''}>
-                    <td class="py-1.5 pr-1"></td>
+                  <tr class={publisherMatch ? 'opacity-40' : candidate.publisher && !isFieldIncluded(candidate.id, 'publisher') ? 'opacity-40' : ''}>
+                    <td class="py-1.5 pr-1">
+                      {#if candidate.publisher && !publisherMatch}
+                        <input
+                          type="checkbox"
+                          checked={isFieldIncluded(candidate.id, 'publisher')}
+                          onchange={() => toggleField(candidate.id, 'publisher')}
+                          class="h-3.5 w-3.5 rounded border-border"
+                        />
+                      {/if}
+                    </td>
                     <td class="py-1.5 pr-3 text-xs font-medium text-muted-foreground">Publisher</td>
                     <td class="py-1.5 pr-3 text-xs">{book.publisher_name ?? '--'}</td>
                     <td class="py-1.5 text-xs {publisherMatch ? 'text-muted-foreground' : 'font-medium text-primary'}">
@@ -374,23 +414,23 @@
                   </tr>
                 {/if}
                 <!-- Publication Date -->
-                {#if candidate.publication_date || book.publication_date}
-                  {@const pubDateMatch = !hasChange(candidate.publication_date, book.publication_date)}
-                  <tr class={pubDateMatch ? 'opacity-40' : candidate.publication_date != null && !isFieldIncluded(candidate.id, 'publication_date') ? 'opacity-40' : ''}>
+                {#if candidate.publication_year != null || book.publication_year != null}
+                  {@const pubYearMatch = candidate.publication_year === book.publication_year}
+                  <tr class={pubYearMatch ? 'opacity-40' : candidate.publication_year != null && !isFieldIncluded(candidate.id, 'publication_year') ? 'opacity-40' : ''}>
                     <td class="py-1.5 pr-1">
-                      {#if candidate.publication_date != null && !pubDateMatch}
+                      {#if candidate.publication_year != null && !pubYearMatch}
                         <input
                           type="checkbox"
-                          checked={isFieldIncluded(candidate.id, 'publication_date')}
-                          onchange={() => toggleField(candidate.id, 'publication_date')}
+                          checked={isFieldIncluded(candidate.id, 'publication_year')}
+                          onchange={() => toggleField(candidate.id, 'publication_year')}
                           class="h-3.5 w-3.5 rounded border-border"
                         />
                       {/if}
                     </td>
                     <td class="py-1.5 pr-3 text-xs font-medium text-muted-foreground">Published</td>
-                    <td class="py-1.5 pr-3 text-xs">{book.publication_date ?? '--'}</td>
-                    <td class="py-1.5 text-xs {pubDateMatch ? 'text-muted-foreground' : 'font-medium text-primary'}">
-                      {candidate.publication_date ?? '--'}
+                    <td class="py-1.5 pr-3 text-xs">{book.publication_year ?? '--'}</td>
+                    <td class="py-1.5 text-xs {pubYearMatch ? 'text-muted-foreground' : 'font-medium text-primary'}">
+                      {candidate.publication_year ?? '--'}
                     </td>
                   </tr>
                 {/if}

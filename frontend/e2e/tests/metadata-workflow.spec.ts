@@ -26,7 +26,7 @@ function seedCandidateReviewState(bookId: string, title: string, status: TargetS
     description: null,
     language: null,
     publisher: null,
-    publication_date: null,
+    publication_year: null,
     identifiers: [],
     subjects: [],
     series: null,

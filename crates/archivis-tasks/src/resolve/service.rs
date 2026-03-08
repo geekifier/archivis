@@ -5,13 +5,13 @@ use std::sync::Arc;
 use archivis_core::errors::TaskError;
 use archivis_core::isbn::{normalize_asin, normalize_isbn, to_isbn13};
 use archivis_core::models::{
-    Book, CandidateStatus, FieldProvenance, IdentificationCandidate, Identifier, IdentifierType,
-    MetadataProvenance, MetadataSource, MetadataStatus, ResolutionOutcome as BookResolutionOutcome,
-    ResolutionRunState,
+    ApplyChangeset, Book, CandidateStatus, ChangesetAuthor, ChangesetEntry, ChangesetSeries,
+    FieldProvenance, IdentificationCandidate, Identifier, IdentifierType, MetadataProvenance,
+    MetadataSource, MetadataStatus, ResolutionOutcome as BookResolutionOutcome, ResolutionRunState,
 };
 use archivis_db::{
     AuthorRepository, BookFileRepository, BookRepository, CandidateRepository, DbPool,
-    IdentifierRepository, ResolutionRunRepository, SeriesRepository,
+    IdentifierRepository, PublisherRepository, ResolutionRunRepository, SeriesRepository,
 };
 use archivis_formats::{
     sanitize::{sanitize_text, SanitizeOptions},
@@ -47,7 +47,7 @@ use crate::resolve::state::{
 /// requires strong ID proof; both auto and manual apply block overwrites
 /// when a title contradiction is detected without strong ID proof.
 ///
-/// **Enrichment** (subtitle, description, `publication_date`, identifiers,
+/// **Enrichment** (subtitle, description, `publication_year`, identifiers,
 /// cover): freely overwritten when the candidate's source outranks the
 /// current value's source.
 #[derive(Clone, Debug)]
@@ -302,9 +302,19 @@ impl<S: StorageBackend> ResolutionService<S> {
         .map_err(|e| TaskError::Failed(format!("failed to create resolution run: {e}")))?;
 
         // 3. Build ExistingBookMetadata for cross-validation
+        let publisher_name = if let Some(pid) = book.publisher_id {
+            PublisherRepository::get_by_id(&self.db_pool, pid)
+                .await
+                .ok()
+                .map(|p| p.name)
+        } else {
+            None
+        };
+
         let existing = ExistingBookMetadata {
             title: Some(book.title.clone()),
             authors: authors.clone(),
+            publisher: publisher_name,
             identifiers: identifiers
                 .iter()
                 .map(|id| ProviderIdentifier {
@@ -851,10 +861,6 @@ impl<S: StorageBackend> ResolutionService<S> {
         provider_meta: &ProviderMetadata,
         plan: &ReconciliationPlan,
     ) -> Result<Book, TaskError> {
-        use archivis_core::models::{
-            ApplyChangeset, ChangesetAuthor, ChangesetEntry, ChangesetSeries,
-        };
-
         if !plan.should_apply_candidate {
             return persist_recomputed_status(&self.db_pool, book_id).await;
         }
@@ -971,10 +977,9 @@ impl<S: StorageBackend> ResolutionService<S> {
             book.metadata_provenance.page_count = Some(provider_provenance.clone());
         }
 
-        if plan.should_apply(MetadataField::PublicationDate) {
-            book.publication_date =
-                parse_provider_publication_date(provider_meta.publication_date.as_deref());
-            book.metadata_provenance.publication_date = Some(provider_provenance.clone());
+        if plan.should_apply(MetadataField::PublicationYear) {
+            book.publication_year = provider_meta.publication_year;
+            book.metadata_provenance.publication_year = Some(provider_provenance.clone());
         }
 
         // Stage cover before the transaction (same pattern as manual-apply path)
@@ -1049,10 +1054,10 @@ impl<S: StorageBackend> ResolutionService<S> {
                 old_provenance: before_provenance.language.clone(),
             });
         }
-        if book.publication_date != before_book.publication_date {
-            changeset.publication_date = Some(ChangesetEntry {
-                old_value: before_book.publication_date,
-                old_provenance: before_provenance.publication_date.clone(),
+        if book.publication_year != before_book.publication_year {
+            changeset.publication_year = Some(ChangesetEntry {
+                old_value: before_book.publication_year,
+                old_provenance: before_provenance.publication_year.clone(),
             });
         }
         if book.page_count != before_book.page_count {
@@ -1194,7 +1199,7 @@ impl<S: StorageBackend> ResolutionService<S> {
     ///
     /// When `exclude_fields` is non-empty, the named fields are skipped.
     /// Valid field names: `title`, `subtitle`, `description`,
-    /// `publication_date`, `authors`, `identifiers`, `series`, `cover`.
+    /// `publication_year`, `authors`, `identifiers`, `series`, `cover`.
     pub async fn apply_candidate(
         &self,
         book_id: Uuid,
@@ -1298,10 +1303,6 @@ impl<S: StorageBackend> ResolutionService<S> {
         cover_policy: CoverApplyPolicy,
         is_auto_apply: bool,
     ) -> Result<Book, TaskError> {
-        use archivis_core::models::{
-            ApplyChangeset, ChangesetAuthor, ChangesetEntry, ChangesetSeries,
-        };
-
         let candidate = CandidateRepository::get_by_id(&self.db_pool, candidate_id)
             .await
             .map_err(|e| TaskError::Failed(format!("failed to load candidate: {e}")))?
@@ -1401,25 +1402,20 @@ impl<S: StorageBackend> ResolutionService<S> {
             && apply_ctx.may_overwrite_core()
             && provider_meta.series.is_some();
 
+        let should_update_publisher = !exclude_fields.contains("publisher")
+            && (!is_auto_apply
+                || (book.publisher_id.is_none()
+                    && !is_protected(provenance_snapshot.publisher.as_ref())))
+            && provider_meta.publisher.is_some();
+
         // Set provenance for changed scalar fields
         let provider_prov = provider_field_provenance(&provider_meta.provider_name);
         if book.title != before_book.title {
             book.metadata_provenance.title = Some(provider_prov.clone());
         }
-        if book.subtitle != before_book.subtitle {
-            book.metadata_provenance.subtitle = Some(provider_prov.clone());
-        }
-        if book.description != before_book.description {
-            book.metadata_provenance.description = Some(provider_prov.clone());
-        }
-        if book.language != before_book.language {
-            book.metadata_provenance.language = Some(provider_prov.clone());
-        }
-        if book.page_count != before_book.page_count {
-            book.metadata_provenance.page_count = Some(provider_prov.clone());
-        }
-        if book.publication_date != before_book.publication_date {
-            book.metadata_provenance.publication_date = Some(provider_prov.clone());
+        set_scalar_provenance(&before_book, &mut book, &provider_prov);
+        if should_update_publisher {
+            book.metadata_provenance.publisher = Some(provider_prov.clone());
         }
         if should_update_authors {
             book.metadata_provenance.authors = Some(provider_prov.clone());
@@ -1467,10 +1463,8 @@ impl<S: StorageBackend> ResolutionService<S> {
         }
 
         // Build changeset from actual mutations
-        let mut changeset = ApplyChangeset {
-            provider_name: provider_meta.provider_name.clone(),
-            ..Default::default()
-        };
+        let mut changeset = build_scalar_changeset(&before_book, &book, &provenance_snapshot);
+        changeset.provider_name = provider_meta.provider_name.clone();
         if book.title != before_book.title {
             changeset.title = Some(ChangesetEntry {
                 old_value: before_book.title.clone(),
@@ -1481,40 +1475,10 @@ impl<S: StorageBackend> ResolutionService<S> {
                 old_provenance: None,
             });
         }
-        if book.subtitle != before_book.subtitle {
-            changeset.subtitle = Some(ChangesetEntry {
-                old_value: before_book.subtitle.clone(),
-                old_provenance: provenance_snapshot.subtitle.clone(),
-            });
-        }
-        if book.description != before_book.description {
-            changeset.description = Some(ChangesetEntry {
-                old_value: before_book.description.clone(),
-                old_provenance: provenance_snapshot.description.clone(),
-            });
-        }
-        if book.language != before_book.language {
-            changeset.language = Some(ChangesetEntry {
-                old_value: before_book.language.clone(),
-                old_provenance: provenance_snapshot.language.clone(),
-            });
-        }
-        if book.publication_date != before_book.publication_date {
-            changeset.publication_date = Some(ChangesetEntry {
-                old_value: before_book.publication_date,
-                old_provenance: provenance_snapshot.publication_date.clone(),
-            });
-        }
-        if book.page_count != before_book.page_count {
-            changeset.page_count = Some(ChangesetEntry {
-                old_value: before_book.page_count,
-                old_provenance: provenance_snapshot.page_count.clone(),
-            });
-        }
-        if book.cover_path != before_book.cover_path {
-            changeset.cover_path = Some(ChangesetEntry {
-                old_value: before_book.cover_path.clone(),
-                old_provenance: provenance_snapshot.cover.clone(),
+        if should_update_publisher {
+            changeset.publisher_id = Some(ChangesetEntry {
+                old_value: before_book.publisher_id,
+                old_provenance: provenance_snapshot.publisher.clone(),
             });
         }
         if should_update_authors {
@@ -1608,6 +1572,28 @@ impl<S: StorageBackend> ResolutionService<S> {
                 .await?;
             }
 
+            if should_update_publisher {
+                if let Some(ref publisher_name) = provider_meta.publisher {
+                    let publisher = if let Some(existing) =
+                        PublisherRepository::find_by_name_conn(tx.as_mut(), publisher_name)
+                            .await
+                            .map_err(|e| {
+                                TaskError::Failed(format!("publisher lookup failed: {e}"))
+                            })? {
+                        existing
+                    } else {
+                        let new_pub = archivis_core::models::Publisher::new(publisher_name);
+                        PublisherRepository::create_conn(tx.as_mut(), &new_pub)
+                            .await
+                            .map_err(|e| {
+                                TaskError::Failed(format!("publisher create failed: {e}"))
+                            })?;
+                        new_pub
+                    };
+                    book.publisher_id = Some(publisher.id);
+                }
+            }
+
             CandidateRepository::update_status_conn(
                 tx.as_mut(),
                 candidate_id,
@@ -1682,8 +1668,6 @@ impl<S: StorageBackend> ResolutionService<S> {
         book_id: Uuid,
         candidate_id: Uuid,
     ) -> Result<Book, TaskError> {
-        use archivis_core::models::ApplyChangeset;
-
         let candidate = CandidateRepository::get_by_id(&self.db_pool, candidate_id)
             .await
             .map_err(|e| TaskError::Failed(format!("failed to load candidate: {e}")))?
@@ -1736,58 +1720,14 @@ impl<S: StorageBackend> ResolutionService<S> {
                 book.sort_title = entry.old_value.clone();
             }
         }
-        if let Some(ref entry) = changeset.subtitle {
+        undo_scalar_fields(&mut book, &changeset, &changeset.provider_name);
+        if let Some(ref entry) = changeset.publisher_id {
             if provenance_matches_provider(
-                book.metadata_provenance.subtitle.as_ref(),
+                book.metadata_provenance.publisher.as_ref(),
                 &changeset.provider_name,
             ) {
-                book.subtitle = entry.old_value.clone();
-                book.metadata_provenance.subtitle = entry.old_provenance.clone();
-            }
-        }
-        if let Some(ref entry) = changeset.description {
-            if provenance_matches_provider(
-                book.metadata_provenance.description.as_ref(),
-                &changeset.provider_name,
-            ) {
-                book.description = entry.old_value.clone();
-                book.metadata_provenance.description = entry.old_provenance.clone();
-            }
-        }
-        if let Some(ref entry) = changeset.language {
-            if provenance_matches_provider(
-                book.metadata_provenance.language.as_ref(),
-                &changeset.provider_name,
-            ) {
-                book.language = entry.old_value.clone();
-                book.metadata_provenance.language = entry.old_provenance.clone();
-            }
-        }
-        if let Some(ref entry) = changeset.publication_date {
-            if provenance_matches_provider(
-                book.metadata_provenance.publication_date.as_ref(),
-                &changeset.provider_name,
-            ) {
-                book.publication_date = entry.old_value;
-                book.metadata_provenance.publication_date = entry.old_provenance.clone();
-            }
-        }
-        if let Some(ref entry) = changeset.page_count {
-            if provenance_matches_provider(
-                book.metadata_provenance.page_count.as_ref(),
-                &changeset.provider_name,
-            ) {
-                book.page_count = entry.old_value;
-                book.metadata_provenance.page_count = entry.old_provenance.clone();
-            }
-        }
-        if let Some(ref entry) = changeset.cover_path {
-            if provenance_matches_provider(
-                book.metadata_provenance.cover.as_ref(),
-                &changeset.provider_name,
-            ) {
-                book.cover_path = entry.old_value.clone();
-                book.metadata_provenance.cover = entry.old_provenance.clone();
+                book.publisher_id = entry.old_value;
+                book.metadata_provenance.publisher = entry.old_provenance.clone();
             }
         }
 
@@ -2399,11 +2339,11 @@ fn build_reconciliation_input(
             should_apply_if_unlocked: book.description.is_none() && candidate.description.is_some(),
             protected: is_protected(book.metadata_provenance.description.as_ref()),
         },
-        publication_date: EnrichmentFieldInput {
-            proposed: candidate.publication_date.is_some(),
-            should_apply_if_unlocked: book.publication_date.is_none()
-                && parse_provider_publication_date(candidate.publication_date.as_deref()).is_some(),
-            protected: is_protected(book.metadata_provenance.publication_date.as_ref()),
+        publication_year: EnrichmentFieldInput {
+            proposed: candidate.publication_year.is_some(),
+            should_apply_if_unlocked: book.publication_year.is_none()
+                && candidate.publication_year.is_some(),
+            protected: is_protected(book.metadata_provenance.publication_year.as_ref()),
         },
         language: EnrichmentFieldInput {
             proposed: candidate.language.is_some(),
@@ -2465,21 +2405,6 @@ fn provider_field_provenance(provider_name: &str) -> FieldProvenance {
         origin: MetadataSource::Provider(provider_name.to_string()),
         protected: false,
     }
-}
-
-fn parse_provider_publication_date(date_str: Option<&str>) -> Option<chrono::NaiveDate> {
-    let date_str = date_str?;
-
-    if let Ok(date) = chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d") {
-        return Some(date);
-    }
-
-    if date_str.len() >= 4 {
-        let year = date_str[..4].parse::<i32>().ok()?;
-        return chrono::NaiveDate::from_ymd_opt(year, 1, 1);
-    }
-
-    None
 }
 
 fn normalized_text(value: &str) -> String {
@@ -2713,6 +2638,81 @@ fn may_overwrite_core_with_log(ctx: &FieldApplyContext) -> bool {
 
 /// Merge provider metadata fields into a book.
 ///
+/// Generates three helper functions for the scalar fields covered by the
+/// changeset: `build_scalar_changeset`, `set_scalar_provenance`, and
+/// `undo_scalar_fields`.
+///
+/// Excluded from this macro (special logic):
+/// - `title` / `sort_title` — coupled (`sort_title` only restored if title was)
+/// - `publisher_id` — relational (needs DB find-or-create inside tx)
+/// - `authors`, `series` — junction-table operations
+/// - `identifiers` — additive merge
+macro_rules! scalar_field_ops {
+    ( $( $field:ident { book: $book_field:ident, prov: $prov_field:ident } ),+ $(,)? ) => {
+        /// Build changeset entries for scalar fields that differ between
+        /// `before` and `after`.
+        #[allow(clippy::clone_on_copy)]
+        fn build_scalar_changeset(
+            before: &Book,
+            after: &Book,
+            prov: &MetadataProvenance,
+        ) -> ApplyChangeset {
+            let mut cs = ApplyChangeset::default();
+            $(
+                if after.$book_field != before.$book_field {
+                    cs.$book_field = Some(ChangesetEntry {
+                        old_value: before.$book_field.clone(),
+                        old_provenance: prov.$prov_field.clone(),
+                    });
+                }
+            )+
+            cs
+        }
+
+        /// Set provenance for scalar fields that changed.
+        fn set_scalar_provenance(
+            before: &Book,
+            book: &mut Book,
+            provider_prov: &FieldProvenance,
+        ) {
+            $(
+                if book.$book_field != before.$book_field {
+                    book.metadata_provenance.$prov_field = Some(provider_prov.clone());
+                }
+            )+
+        }
+
+        /// Undo scalar fields from changeset, guarded by provenance.
+        #[allow(clippy::clone_on_copy)]
+        fn undo_scalar_fields(
+            book: &mut Book,
+            changeset: &ApplyChangeset,
+            provider_name: &str,
+        ) {
+            $(
+                if let Some(ref entry) = changeset.$book_field {
+                    if provenance_matches_provider(
+                        book.metadata_provenance.$prov_field.as_ref(),
+                        provider_name,
+                    ) {
+                        book.$book_field = entry.old_value.clone();
+                        book.metadata_provenance.$prov_field = entry.old_provenance.clone();
+                    }
+                }
+            )+
+        }
+    };
+}
+
+scalar_field_ops! {
+    subtitle         { book: subtitle,         prov: subtitle },
+    description      { book: description,      prov: description },
+    language         { book: language,         prov: language },
+    page_count       { book: page_count,       prov: page_count },
+    publication_year { book: publication_year, prov: publication_year },
+    cover_path       { book: cover_path,       prov: cover },
+}
+
 /// Fields are split into two categories:
 ///
 /// **Core identity** (title):
@@ -2722,7 +2722,7 @@ fn may_overwrite_core_with_log(ctx: &FieldApplyContext) -> bool {
 ///   current title and the candidate lacks strong ID proof.
 ///
 /// **Enrichment** (subtitle, description, language, `page_count`,
-///   `publication_date`):
+///   `publication_year`):
 ///   Fill-if-empty, always safe to apply.
 ///
 /// Fields listed in `exclude_fields` are skipped entirely.
@@ -2790,22 +2790,13 @@ fn merge_book_fields(
         book.page_count = provider_meta.page_count;
     }
 
-    // Publication date
-    if !exclude_fields.contains("publication_date")
+    // Publication year
+    if !exclude_fields.contains("publication_year")
         && (manual
-            || (book.publication_date.is_none()
-                && !is_protected(provenance.publication_date.as_ref())))
+            || (book.publication_year.is_none()
+                && !is_protected(provenance.publication_year.as_ref())))
     {
-        if let Some(ref date_str) = provider_meta.publication_date {
-            if let Ok(date) = chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d") {
-                book.publication_date = Some(date);
-            } else if date_str.len() >= 4 {
-                // Try parsing just the year
-                if let Ok(year) = date_str[..4].parse::<i32>() {
-                    book.publication_date = chrono::NaiveDate::from_ymd_opt(year, 1, 1);
-                }
-            }
-        }
+        book.publication_year = provider_meta.publication_year;
     }
 }
 
@@ -3517,7 +3508,7 @@ mod tests {
             description: None,
             language: None,
             publisher: None,
-            publication_date: None,
+            publication_year: None,
             identifiers: vec![],
             subjects: vec![],
             series: None,
@@ -3542,7 +3533,7 @@ mod tests {
             description: None,
             language: None,
             publisher: None,
-            publication_date: None,
+            publication_year: None,
             identifiers: vec![
                 ProviderIdentifier {
                     identifier_type: IdentifierType::Isbn13,
@@ -3974,7 +3965,7 @@ mod tests {
             description: None,
             language: None,
             publisher: None,
-            publication_date: None,
+            publication_year: None,
             identifiers: vec![],
             subjects: vec![],
             series: None,
@@ -4004,7 +3995,7 @@ mod tests {
             description: None,
             language: None,
             publisher: None,
-            publication_date: None,
+            publication_year: None,
             identifiers: vec![],
             subjects: vec![],
             series: None,
@@ -4037,7 +4028,7 @@ mod tests {
             description: None,
             language: None,
             publisher: None,
-            publication_date: None,
+            publication_year: None,
             identifiers: vec![],
             subjects: vec![],
             series: None,
@@ -4067,7 +4058,7 @@ mod tests {
             description: None,
             language: None,
             publisher: None,
-            publication_date: None,
+            publication_year: None,
             identifiers: vec![],
             subjects: vec![],
             series: None,
@@ -4203,7 +4194,7 @@ mod tests {
             description: Some("A description".to_string()),
             language: Some("en".to_string()),
             publisher: None,
-            publication_date: Some("2020-01-01".to_string()),
+            publication_year: Some(2020),
             identifiers: vec![],
             subjects: Vec::new(),
             series: None,
@@ -4402,7 +4393,7 @@ mod tests {
         assert_eq!(book.description.as_deref(), Some("A description"));
         assert_eq!(book.language.as_deref(), Some("en"));
         assert_eq!(book.page_count, Some(300));
-        assert!(book.publication_date.is_some());
+        assert!(book.publication_year.is_some());
     }
 
     #[test]
@@ -4413,7 +4404,7 @@ mod tests {
         book.description = Some("Old description".to_string());
         book.language = Some("de".to_string());
         book.page_count = Some(100);
-        book.publication_date = chrono::NaiveDate::from_ymd_opt(2010, 6, 15);
+        book.publication_year = Some(2010);
 
         let provider = make_provider_meta("New Title");
 
@@ -4445,7 +4436,7 @@ mod tests {
                 origin: MetadataSource::Embedded,
                 protected: true,
             }),
-            publication_date: Some(FieldProvenance {
+            publication_year: Some(FieldProvenance {
                 origin: MetadataSource::Embedded,
                 protected: true,
             }),
@@ -4460,10 +4451,7 @@ mod tests {
         assert_eq!(book.description.as_deref(), Some("A description"));
         assert_eq!(book.language.as_deref(), Some("en"));
         assert_eq!(book.page_count, Some(300));
-        assert_eq!(
-            book.publication_date,
-            chrono::NaiveDate::from_ymd_opt(2020, 1, 1)
-        );
+        assert_eq!(book.publication_year, Some(2020));
     }
 
     #[test]
@@ -4474,7 +4462,7 @@ mod tests {
         book.description = Some("Old description".to_string());
         book.language = Some("de".to_string());
         book.page_count = Some(100);
-        book.publication_date = chrono::NaiveDate::from_ymd_opt(2010, 6, 15);
+        book.publication_year = Some(2010);
 
         let provider = make_provider_meta("New Title");
 
@@ -4501,10 +4489,7 @@ mod tests {
         assert_eq!(book.description.as_deref(), Some("Old description"));
         assert_eq!(book.language.as_deref(), Some("de"));
         assert_eq!(book.page_count, Some(100));
-        assert_eq!(
-            book.publication_date,
-            chrono::NaiveDate::from_ymd_opt(2010, 6, 15)
-        );
+        assert_eq!(book.publication_year, Some(2010));
     }
 
     // ── Contradiction blocks ALL core identity fields ──
@@ -4548,7 +4533,7 @@ mod tests {
             description: Some("Desert planet saga".into()),
             language: None,
             publisher: None,
-            publication_date: None,
+            publication_year: None,
             identifiers: vec![],
             subjects: vec![],
             series: None,
@@ -4631,7 +4616,7 @@ mod tests {
             description: None,
             language: None,
             publisher: None,
-            publication_date: None,
+            publication_year: None,
             identifiers: vec![],
             subjects: vec![],
             series: Some(archivis_metadata::types::ProviderSeries {
@@ -4715,7 +4700,7 @@ mod tests {
             description: None,
             language: None,
             publisher: None,
-            publication_date: None,
+            publication_year: None,
             identifiers: vec![ProviderIdentifier {
                 identifier_type: IdentifierType::Isbn13,
                 value: "9780441172719".into(),
@@ -4823,7 +4808,7 @@ mod tests {
             description: None,
             language: None,
             publisher: None,
-            publication_date: None,
+            publication_year: None,
             identifiers: vec![ProviderIdentifier {
                 identifier_type: IdentifierType::Isbn13,
                 value: "9780441172719".into(),
@@ -4924,7 +4909,7 @@ mod tests {
             description: None,
             language: None,
             publisher: None,
-            publication_date: None,
+            publication_year: None,
             identifiers: vec![ProviderIdentifier {
                 identifier_type: IdentifierType::Isbn13,
                 value: "9780441172719".into(),
@@ -5008,7 +4993,7 @@ mod tests {
             description: Some("A description".into()),
             language: None,
             publisher: None,
-            publication_date: None,
+            publication_year: None,
             identifiers: vec![],
             subjects: vec![],
             series: None,
@@ -5120,7 +5105,7 @@ mod tests {
             description: Some("Updated description".into()),
             language: None,
             publisher: None,
-            publication_date: None,
+            publication_year: None,
             identifiers: vec![],
             subjects: vec![],
             series: None,

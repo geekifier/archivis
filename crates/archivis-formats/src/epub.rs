@@ -269,7 +269,7 @@ fn handle_opf_text(
             parse_identifier(&text, state.current_opf_scheme.as_deref(), meta);
         }
         DcElement::Publisher => meta.publisher = Some(text),
-        DcElement::Date => meta.publication_date = Some(text),
+        DcElement::Date => meta.publication_year = crate::parse_year_from_date_str(&text),
         DcElement::Description => meta.description = Some(text),
         DcElement::Subject => meta.subjects.push(text),
         DcElement::Source => {
@@ -785,7 +785,7 @@ mod tests {
         assert_eq!(meta.authors, vec!["Steve Klabnik"]);
         assert_eq!(meta.language.as_deref(), Some("en"));
         assert_eq!(meta.publisher.as_deref(), Some("No Starch Press"));
-        assert_eq!(meta.publication_date.as_deref(), Some("2019-08-06"));
+        assert_eq!(meta.publication_year, Some(2019));
         assert_eq!(
             meta.description.as_deref(),
             Some("A comprehensive guide to Rust")

@@ -1,6 +1,6 @@
 use archivis_core::errors::DbError;
 use archivis_core::models::Publisher;
-use sqlx::SqlitePool;
+use sqlx::{SqliteConnection, SqlitePool};
 use uuid::Uuid;
 
 use super::types::{PaginatedResult, PaginationParams, SortOrder};
@@ -162,6 +162,17 @@ impl PublisherRepository {
         Ok(())
     }
 
+    /// Find a publisher by name (case-insensitive exact match), or create it if it doesn't exist.
+    pub async fn find_or_create(pool: &SqlitePool, name: &str) -> Result<Publisher, DbError> {
+        if let Some(existing) = Self::find_by_name(pool, name).await? {
+            return Ok(existing);
+        }
+
+        let publisher = Publisher::new(name);
+        Self::create(pool, &publisher).await?;
+        Ok(publisher)
+    }
+
     pub async fn find_by_name(pool: &SqlitePool, name: &str) -> Result<Option<Publisher>, DbError> {
         let row = sqlx::query_as!(
             PublisherRow,
@@ -173,6 +184,39 @@ impl PublisherRepository {
         .map_err(|e| DbError::Query(e.to_string()))?;
 
         row.map(PublisherRow::into_publisher).transpose()
+    }
+
+    pub async fn find_by_name_conn(
+        conn: &mut SqliteConnection,
+        name: &str,
+    ) -> Result<Option<Publisher>, DbError> {
+        let row = sqlx::query_as!(
+            PublisherRow,
+            "SELECT id, name FROM publishers WHERE name = ? COLLATE NOCASE",
+            name,
+        )
+        .fetch_optional(&mut *conn)
+        .await
+        .map_err(|e| DbError::Query(e.to_string()))?;
+
+        row.map(PublisherRow::into_publisher).transpose()
+    }
+
+    pub async fn create_conn(
+        conn: &mut SqliteConnection,
+        publisher: &Publisher,
+    ) -> Result<(), DbError> {
+        let id = publisher.id.to_string();
+        sqlx::query!(
+            "INSERT INTO publishers (id, name) VALUES (?, ?)",
+            id,
+            publisher.name,
+        )
+        .execute(conn)
+        .await
+        .map_err(|e| DbError::Query(e.to_string()))?;
+
+        Ok(())
     }
 
     /// Count books referencing this publisher.

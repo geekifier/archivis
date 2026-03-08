@@ -108,15 +108,6 @@
     return isDifferent(valA, valB) ? 'border-l-2 border-l-amber-400 pl-2' : '';
   }
 
-  function formatDate(iso: string | null | undefined): string {
-    if (!iso) return '--';
-    return new Date(iso).toLocaleDateString(undefined, {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric'
-    });
-  }
-
   function formatResolutionLabel(book: BookDetail): string {
     const raw = book.resolution_outcome ?? book.resolution_state;
     return raw
@@ -359,9 +350,9 @@
         <dd>{book.publisher_name ?? '--'}</dd>
       </div>
 
-      <div class={diffClass(book.publication_date, otherBook.publication_date)}>
+      <div class={diffClass(String(book.publication_year ?? ''), String(otherBook.publication_year ?? ''))}>
         <dt class="text-xs font-medium text-muted-foreground">Published</dt>
-        <dd>{formatDate(book.publication_date)}</dd>
+        <dd>{book.publication_year ?? '--'}</dd>
       </div>
 
       <div class={diffClass(book.language, otherBook.language)}>

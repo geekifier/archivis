@@ -13,8 +13,10 @@ use crate::client::MetadataHttpClient;
 use crate::errors::ProviderError;
 use crate::provider::MetadataProvider;
 use crate::provider_names;
+use crate::similarity::title_for_search;
 use crate::types::{
-    MetadataQuery, ProviderAuthor, ProviderIdentifier, ProviderMetadata, ProviderSeries,
+    parse_year_from_str, MetadataQuery, ProviderAuthor, ProviderIdentifier, ProviderMetadata,
+    ProviderSeries,
 };
 
 const PROVIDER_NAME: &str = provider_names::OPEN_LIBRARY;
@@ -223,7 +225,10 @@ impl OpenLibraryProvider {
 
         let publisher = edition.publishers.as_ref().and_then(|p| p.first().cloned());
 
-        let publication_date = edition.publish_date.clone();
+        let publication_year = edition
+            .publish_date
+            .as_deref()
+            .and_then(parse_year_from_str);
 
         let page_count = edition.number_of_pages;
 
@@ -291,6 +296,13 @@ impl OpenLibraryProvider {
 
         let mut all_authors = authors.to_vec();
         if let Some(contributors) = &edition.contributors {
+            // Remove author-role entries that match a contributor name —
+            // the contributor entry has the more specific/correct role.
+            all_authors.retain(|a| {
+                !contributors
+                    .iter()
+                    .any(|c| name_matches_contributor(&a.name, &c.name))
+            });
             for contrib in contributors {
                 all_authors.push(ProviderAuthor {
                     name: contrib.name.clone(),
@@ -307,7 +319,7 @@ impl OpenLibraryProvider {
             description,
             language,
             publisher,
-            publication_date,
+            publication_year,
             identifiers,
             subjects,
             series,
@@ -399,7 +411,7 @@ impl OpenLibraryProvider {
                     });
                 }
 
-                let publication_date = doc.first_publish_year.map(|y| y.to_string());
+                let publication_year = doc.first_publish_year;
 
                 // Compute confidence based on title match quality.
                 let confidence = compute_search_confidence(
@@ -412,12 +424,12 @@ impl OpenLibraryProvider {
                 ProviderMetadata {
                     provider_name: PROVIDER_NAME.to_string(),
                     title,
-                    subtitle: None, // Search results don't include subtitles.
+                    subtitle: doc.subtitle.clone(),
                     authors,
                     description: None, // Search results don't include descriptions.
                     language: None,    // Search results don't include language reliably.
                     publisher,
-                    publication_date,
+                    publication_year,
                     identifiers,
                     subjects,
                     series: None, // Search results don't include series.
@@ -593,6 +605,7 @@ struct OlSearchResponse {
 struct OlSearchDoc {
     key: Option<String>,
     title: Option<String>,
+    subtitle: Option<String>,
     author_name: Option<Vec<String>>,
     first_publish_year: Option<i32>,
     isbn: Option<Vec<String>>,
@@ -792,7 +805,7 @@ fn build_search_url(query: &MetadataQuery) -> String {
         }
     } else {
         if let Some(ref title) = query.title {
-            serializer.append_pair("title", title);
+            serializer.append_pair("title", title_for_search(title));
         }
         if let Some(ref author) = query.author {
             serializer.append_pair("author", author);
@@ -801,7 +814,7 @@ fn build_search_url(query: &MetadataQuery) -> String {
 
     serializer.append_pair(
         "fields",
-        "key,title,author_name,first_publish_year,isbn,cover_i,publisher,number_of_pages_median,subject,format",
+        "key,title,subtitle,author_name,first_publish_year,isbn,cover_i,publisher,number_of_pages_median,subject,format",
     );
     serializer.append_pair("limit", "5");
 
@@ -841,14 +854,20 @@ fn compute_search_confidence(
             } else if r.contains(&q) || q.contains(&r) {
                 0.7
             } else {
-                // Simple word overlap ratio.
-                let r_words: Vec<&str> = r.split_whitespace().collect();
-                let q_words: Vec<&str> = q.split_whitespace().collect();
-                let common = r_words.iter().filter(|w| q_words.contains(w)).count();
-                let total = r_words.len().max(q_words.len()).max(1);
-                #[allow(clippy::cast_precision_loss)]
-                let ratio = (common as f32) / (total as f32);
-                0.5 + (ratio * 0.3)
+                // Try main-title-only comparison (handles embedded subtitles).
+                let q_main = normalize_for_comparison(title_for_search(query));
+                if q_main != q && (r == q_main || r.contains(&q_main) || q_main.contains(&r)) {
+                    0.7
+                } else {
+                    // Simple word overlap ratio.
+                    let r_words: Vec<&str> = r.split_whitespace().collect();
+                    let q_words: Vec<&str> = q.split_whitespace().collect();
+                    let common = r_words.iter().filter(|w| q_words.contains(w)).count();
+                    let total = r_words.len().max(q_words.len()).max(1);
+                    #[allow(clippy::cast_precision_loss)]
+                    let ratio = (common as f32) / (total as f32);
+                    0.5 + (ratio * 0.3)
+                }
             }
         }
         _ => 0.5,
@@ -877,6 +896,33 @@ fn normalize_for_comparison(s: &str) -> String {
     let start = usize::from(collapsed.first().is_some_and(|w| articles.contains(w)));
 
     collapsed[start..].join(" ")
+}
+
+/// Check if two names refer to the same person, handling middle-name/initial
+/// variants like "David A. French" vs "David French".
+fn name_matches_contributor(author_name: &str, contributor_name: &str) -> bool {
+    let a = normalize_for_comparison(author_name);
+    let b = normalize_for_comparison(contributor_name);
+
+    if a == b {
+        return true;
+    }
+
+    // Same last name + same first-name initial covers middle-name variants
+    let pa: Vec<&str> = a.split_whitespace().collect();
+    let pb: Vec<&str> = b.split_whitespace().collect();
+
+    if pa.len() >= 2 && pb.len() >= 2 {
+        let last_match = pa.last() == pb.last();
+        let first_a = pa[0];
+        let first_b = pb[0];
+        let first_match = first_a == first_b
+            || first_a.starts_with(&first_b[..first_b.len().min(1)])
+            || first_b.starts_with(&first_a[..first_a.len().min(1)]);
+        last_match && first_match
+    } else {
+        false
+    }
 }
 
 #[cfg(test)]
@@ -967,6 +1013,7 @@ mod tests {
         assert!(url.contains("title=Dune"));
         assert!(url.contains("author=Frank+Herbert"));
         assert!(url.contains("limit=5"));
+        assert!(url.contains("subtitle"), "fields should include subtitle");
     }
 
     #[test]
@@ -978,6 +1025,7 @@ mod tests {
         let url = build_search_url(&query);
         assert!(url.contains("isbn=9780441172719"));
         assert!(!url.contains("title="));
+        assert!(url.contains("subtitle"), "fields should include subtitle");
     }
 
     // ── Normalization ────────────────────────────────────────────────
@@ -1039,6 +1087,52 @@ mod tests {
         // Should be in the 0.5-0.8 range, low end.
         assert!(confidence >= 0.5);
         assert!(confidence <= 0.8);
+    }
+
+    #[test]
+    fn search_url_strips_subtitle_from_title() {
+        let query = MetadataQuery {
+            title: Some("Thinking, Fast and Slow: A Summary".to_string()),
+            author: Some("Daniel Kahneman".to_string()),
+            ..Default::default()
+        };
+        let url = build_search_url(&query);
+        assert!(
+            url.contains("title=Thinking"),
+            "URL should contain stripped title, got: {url}"
+        );
+        assert!(
+            !url.contains("Summary"),
+            "URL should not contain subtitle portion, got: {url}"
+        );
+    }
+
+    #[test]
+    fn confidence_subtitle_in_query_matches_main_title_result() {
+        // Query has "Title: Subtitle" but result only has "Title".
+        let confidence = compute_search_confidence(
+            Some("Thinking, Fast and Slow"),
+            Some("Thinking, Fast and Slow: A Summary of Key Ideas"),
+            None,
+            &[],
+        );
+        assert!(
+            (confidence - 0.7).abs() < f32::EPSILON,
+            "expected 0.7 for main-title match, got {confidence}"
+        );
+    }
+
+    #[test]
+    fn confidence_no_false_subtitle_split_short_prefix() {
+        // "It: A Novel" — "It" is too short (1 word) to split, so
+        // `title_for_search` returns the full title. The contains check
+        // on the full normalized strings should still work though.
+        let confidence = compute_search_confidence(Some("It"), Some("It: A Novel"), None, &[]);
+        // "it" is contained in "it a novel" → 0.7 via normal contains check.
+        assert!(
+            (confidence - 0.7).abs() < f32::EPSILON,
+            "expected 0.7, got {confidence}"
+        );
     }
 
     // ── Edition JSON parsing ─────────────────────────────────────────
@@ -1106,6 +1200,10 @@ mod tests {
 
     #[test]
     fn build_metadata_includes_contributors_with_role() {
+        // Mirrors OL edition OL34074249M: both Sapkowski and "David A. French"
+        // appear as resolved authors, while "David French" is a contributor.
+        // The author-role entry for French should be deduplicated in favour of
+        // the contributor entry which carries the correct role.
         let edition = OlEdition {
             key: None,
             title: Some("The Lady of the Lake".into()),
@@ -1122,16 +1220,22 @@ mod tests {
             works: None,
             description: None,
             contributors: Some(vec![OlContributor {
-                name: "David A. French".into(),
+                name: "David French".into(),
                 role: "Translator".into(),
             }]),
             physical_format: None,
         };
 
-        let resolved_authors = vec![ProviderAuthor {
-            name: "Andrzej Sapkowski".into(),
-            role: Some("author".into()),
-        }];
+        let resolved_authors = vec![
+            ProviderAuthor {
+                name: "Andrzej Sapkowski".into(),
+                role: Some("author".into()),
+            },
+            ProviderAuthor {
+                name: "David A. French".into(),
+                role: Some("author".into()),
+            },
+        ];
 
         let metadata = OpenLibraryProvider::build_metadata_from_edition(
             &edition,
@@ -1140,11 +1244,66 @@ mod tests {
             "9780316273770",
         );
 
+        // "David A. French" (author) is removed; "David French" (translator) remains
         assert_eq!(metadata.authors.len(), 2);
         assert_eq!(metadata.authors[0].name, "Andrzej Sapkowski");
         assert_eq!(metadata.authors[0].role.as_deref(), Some("author"));
-        assert_eq!(metadata.authors[1].name, "David A. French");
+        assert_eq!(metadata.authors[1].name, "David French");
         assert_eq!(metadata.authors[1].role.as_deref(), Some("translator"));
+    }
+
+    #[test]
+    fn build_metadata_deduplicates_author_against_contributor() {
+        let edition = OlEdition {
+            key: None,
+            title: Some("Test Book".into()),
+            subtitle: None,
+            authors: None,
+            publishers: None,
+            publish_date: None,
+            isbn_13: Some(vec!["9781234567890".into()]),
+            isbn_10: None,
+            number_of_pages: None,
+            covers: None,
+            languages: None,
+            series: None,
+            works: None,
+            description: None,
+            contributors: Some(vec![OlContributor {
+                name: "David French".into(),
+                role: "Translator".into(),
+            }]),
+            physical_format: None,
+        };
+
+        let resolved_authors = vec![ProviderAuthor {
+            name: "David A. French".into(),
+            role: Some("author".into()),
+        }];
+
+        let metadata = OpenLibraryProvider::build_metadata_from_edition(
+            &edition,
+            None,
+            &resolved_authors,
+            "9781234567890",
+        );
+
+        assert_eq!(metadata.authors.len(), 1);
+        assert_eq!(metadata.authors[0].name, "David French");
+        assert_eq!(metadata.authors[0].role.as_deref(), Some("translator"));
+    }
+
+    #[test]
+    fn name_matches_contributor_variants() {
+        // Middle-name variant
+        assert!(name_matches_contributor("David A. French", "David French"));
+        // Different people
+        assert!(!name_matches_contributor(
+            "Andrzej Sapkowski",
+            "David French"
+        ));
+        // Exact match
+        assert!(name_matches_contributor("David French", "David French"));
     }
 
     // ── Work JSON parsing ────────────────────────────────────────────
@@ -1295,7 +1454,7 @@ mod tests {
         );
         assert_eq!(metadata.language.as_deref(), Some("en"));
         assert_eq!(metadata.publisher.as_deref(), Some("Chilton Books"));
-        assert_eq!(metadata.publication_date.as_deref(), Some("1965"));
+        assert_eq!(metadata.publication_year, Some(1965));
         assert_eq!(metadata.page_count, Some(412));
         assert_eq!(
             metadata.cover_url.as_deref(),
@@ -1707,6 +1866,7 @@ mod tests {
                 OlSearchDoc {
                     key: Some("/works/OL1".to_string()),
                     title: Some("Dune (Audiobook)".to_string()),
+                    subtitle: None,
                     author_name: None,
                     first_publish_year: None,
                     isbn: None,
@@ -1719,6 +1879,7 @@ mod tests {
                 OlSearchDoc {
                     key: Some("/works/OL2".to_string()),
                     title: Some("Dune".to_string()),
+                    subtitle: None,
                     author_name: None,
                     first_publish_year: None,
                     isbn: None,

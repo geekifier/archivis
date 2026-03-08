@@ -57,7 +57,7 @@ export type MetadataField =
   | 'authors'
   | 'series'
   | 'publisher'
-  | 'publication_date'
+  | 'publication_year'
   | 'language'
   | 'page_count'
   | 'cover';
@@ -110,7 +110,7 @@ export interface BookSummary {
   sort_title: string;
   description: string | null;
   language: string | null;
-  publication_date: string | null;
+  publication_year: number | null;
   added_at: string;
   updated_at: string;
   rating: number | null;
@@ -147,7 +147,7 @@ export interface MetadataProvenance {
   authors?: FieldProvenance;
   series?: FieldProvenance;
   publisher?: FieldProvenance;
-  publication_date?: FieldProvenance;
+  publication_year?: FieldProvenance;
   language?: FieldProvenance;
   page_count?: FieldProvenance;
   cover?: FieldProvenance;
@@ -169,7 +169,7 @@ export interface BookDetail {
   sort_title: string;
   description: string | null;
   language: string | null;
-  publication_date: string | null;
+  publication_year: number | null;
   publisher_id: string | null;
   publisher_name: string | null;
   added_at: string;
@@ -232,7 +232,7 @@ export interface UpdateBookRequest {
   subtitle?: string;
   description?: string;
   language?: string;
-  publication_date?: string; // "YYYY-MM-DD"
+  publication_year?: number;
   rating?: number; // 0.0-5.0
   page_count?: number;
   /** Set to a UUID to assign a publisher, or null to clear. Omit to leave unchanged. */
@@ -517,7 +517,7 @@ export interface CandidateResponse {
   authors: CandidateAuthor[];
   description?: string;
   publisher?: string;
-  publication_date?: string;
+  publication_year?: number;
   isbn?: string;
   series?: CandidateSeriesInfo;
   cover_url?: string;

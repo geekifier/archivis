@@ -64,7 +64,7 @@
       subtitle: b.subtitle ?? '',
       description: b.description ?? '',
       language: b.language ?? '',
-      publicationDate: b.publication_date ?? '',
+      publicationYear: b.publication_year != null ? String(b.publication_year) : '',
       rating: b.rating != null ? String(b.rating) : '',
       pageCount: b.page_count != null ? String(b.page_count) : '',
       authors: b.authors.map((a): AuthorEntry => ({ ...a })),
@@ -83,7 +83,7 @@
   let subtitle = $state(snapshot.subtitle);
   let description = $state(snapshot.description);
   let language = $state(snapshot.language);
-  let publicationDate = $state(snapshot.publicationDate);
+  let publicationYear = $state(snapshot.publicationYear);
   let rating = $state(snapshot.rating);
   let pageCount = $state(snapshot.pageCount);
   let editAuthors = $state<AuthorEntry[]>(snapshot.authors);
@@ -311,9 +311,9 @@
     if (descVal !== book.description) updateData.description = description || undefined;
     const langVal = language || null;
     if (langVal !== book.language) updateData.language = language || undefined;
-    const pubVal = publicationDate || null;
-    if (pubVal !== book.publication_date)
-      updateData.publication_date = publicationDate || undefined;
+    const pubVal = publicationYear === '' ? null : Number(publicationYear);
+    if (pubVal !== book.publication_year)
+      updateData.publication_year = pubVal ?? undefined;
     const ratingVal = rating === '' ? null : Number(rating);
     if (ratingVal !== book.rating) updateData.rating = ratingVal ?? undefined;
     const pageVal = pageCount === '' ? null : Number(pageCount);
@@ -835,15 +835,15 @@
     </div>
     <div class="space-y-1.5">
       <div class="flex items-center gap-1">
-        <Label for="edit-pub-date">Publication Date</Label>
+        <Label for="edit-pub-year">Publication Year</Label>
         <FieldProtectionToggle
-          field="publication_date"
-          protected={isFieldProtected('publication_date')}
-          disabled={protectionPending === 'publication_date'}
+          field="publication_year"
+          protected={isFieldProtected('publication_year')}
+          disabled={protectionPending === 'publication_year'}
           ontoggle={handleProtectionToggle}
         />
       </div>
-      <Input id="edit-pub-date" type="date" bind:value={publicationDate} />
+      <Input id="edit-pub-year" type="number" min="1000" max="2100" bind:value={publicationYear} placeholder="e.g. 2024" />
     </div>
   </div>
 </div>

@@ -58,7 +58,7 @@ fn provider_meta_with_cover(cover_url: &str) -> ProviderMetadata {
         description: Some("A test book".into()),
         language: None,
         publisher: None,
-        publication_date: None,
+        publication_year: None,
         identifiers: vec![],
         subjects: vec![],
         series: None,
