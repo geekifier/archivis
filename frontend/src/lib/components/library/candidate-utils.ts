@@ -1,3 +1,24 @@
+import { ApiError } from '$lib/api/index.js';
+
+/** Field names that can be included/excluded in a candidate apply. */
+export type CandidateFieldName =
+  | 'title'
+  | 'subtitle'
+  | 'authors'
+  | 'publisher'
+  | 'publication_year'
+  | 'identifiers'
+  | 'series'
+  | 'description'
+  | 'cover';
+
+/** Extract a user-facing message from an unknown error. */
+export function extractErrorMessage(err: unknown, fallback = 'An error occurred'): string {
+  if (err instanceof ApiError) return err.userMessage;
+  if (err instanceof Error) return err.message;
+  return fallback;
+}
+
 /** Return a Tailwind background class for the confidence score bar. */
 export function scoreColor(score: number): string {
   if (score >= 0.8) return 'bg-green-500';
@@ -59,7 +80,7 @@ export function tierLabel(tier: string | undefined): string {
 
 /** Collect field names the user has deselected (unchecked). */
 export function getExcludedFields(
-  fieldSelections: Record<string, Record<string, boolean>>,
+  fieldSelections: Record<string, Partial<Record<CandidateFieldName, boolean>>>,
   candidateId: string
 ): string[] {
   const sel = fieldSelections[candidateId];

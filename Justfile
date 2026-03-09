@@ -120,6 +120,7 @@ dev-clean:
     set -euo pipefail
     trap 'kill 0' EXIT
     export ARCHIVIS_DATA_DIR=".local/clean"
+    ./scripts/dev-boot.sh kill
     ./scripts/dev-boot.sh wipe
     cargo run --package archivis-server -- --data-dir .local/clean &
     cd frontend && npm run dev &
@@ -144,6 +145,7 @@ dev-clean-backend:
     set -euo pipefail
     trap 'kill 0' EXIT
     export ARCHIVIS_DATA_DIR=".local/clean"
+    ./scripts/dev-boot.sh kill
     ./scripts/dev-boot.sh wipe
     cargo run --package archivis-server -- --data-dir .local/clean &
     ./scripts/dev-boot.sh setup
@@ -155,6 +157,7 @@ dev-clean-seed:
     set -euo pipefail
     trap 'kill 0' EXIT
     export ARCHIVIS_DATA_DIR=".local/clean"
+    ./scripts/dev-boot.sh kill
     ./scripts/dev-boot.sh wipe
     cargo run --package archivis-server -- --data-dir .local/clean &
     cd frontend && npm run dev &

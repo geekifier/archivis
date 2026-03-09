@@ -1,8 +1,10 @@
 <script lang="ts">
   import { untrack } from 'svelte';
-  import { api, ApiError } from '$lib/api/index.js';
+  import { api } from '$lib/api/index.js';
   import type { BookDetail, CandidateResponse } from '$lib/api/index.js';
   import { Button } from '$lib/components/ui/button/index.js';
+  import * as AlertDialog from '$lib/components/ui/alert-dialog/index.js';
+  import * as Dialog from '$lib/components/ui/dialog/index.js';
   import {
     scoreColor,
     formatScore,
@@ -10,7 +12,9 @@
     hasChange,
     getExcludedFields,
     tierColorClass,
-    tierLabel
+    tierLabel,
+    extractErrorMessage,
+    type CandidateFieldName
   } from './candidate-utils.js';
 
   interface Props {
@@ -35,7 +39,7 @@
   let confirmApplyId = $state<string | null>(null);
 
   /** Per-candidate field selections: candidateId -> fieldName -> included. */
-  let fieldSelections = $state<Record<string, Record<string, boolean>>>({});
+  let fieldSelections = $state<Record<string, Partial<Record<CandidateFieldName, boolean>>>>({});
 
   const pendingCandidates = $derived(candidates.filter((c) => c.status === 'pending'));
   const rejectedCandidates = $derived(candidates.filter((c) => c.status === 'rejected'));
@@ -54,7 +58,7 @@
   $effect(() => {
     for (const candidate of pendingCandidates) {
       if (!untrack(() => fieldSelections[candidate.id])) {
-        const sel: Record<string, boolean> = {};
+        const sel: Partial<Record<CandidateFieldName, boolean>> = {};
         if (candidate.title != null) sel.title = true;
         if (candidate.subtitle != null) sel.subtitle = true;
         if (candidate.authors.length > 0) sel.authors = true;
@@ -69,11 +73,11 @@
     }
   });
 
-  function isFieldIncluded(candidateId: string, field: string): boolean {
+  function isFieldIncluded(candidateId: string, field: CandidateFieldName): boolean {
     return fieldSelections[candidateId]?.[field] ?? true;
   }
 
-  function toggleField(candidateId: string, field: string) {
+  function toggleField(candidateId: string, field: CandidateFieldName) {
     if (!fieldSelections[candidateId]) return;
     fieldSelections[candidateId][field] = !fieldSelections[candidateId][field];
   }
@@ -98,13 +102,9 @@
         excluded.length > 0 ? excluded : undefined
       );
       onapply(updated);
+      delete fieldSelections[candidateId];
     } catch (err) {
-      actionError =
-        err instanceof ApiError
-          ? err.userMessage
-          : err instanceof Error
-            ? err.message
-            : 'Failed to apply candidate';
+      actionError = extractErrorMessage(err, 'Failed to apply candidate');
     } finally {
       applyingId = null;
     }
@@ -116,13 +116,9 @@
     try {
       await api.resolution.rejectCandidate(book.id, candidateId);
       onreject(candidateId);
+      delete fieldSelections[candidateId];
     } catch (err) {
-      actionError =
-        err instanceof ApiError
-          ? err.userMessage
-          : err instanceof Error
-            ? err.message
-            : 'Failed to reject candidate';
+      actionError = extractErrorMessage(err, 'Failed to reject candidate');
     } finally {
       rejectingId = null;
     }
@@ -135,12 +131,7 @@
       const updated = await api.resolution.undoCandidate(book.id, candidateId);
       onundo(updated);
     } catch (err) {
-      actionError =
-        err instanceof ApiError
-          ? err.userMessage
-          : err instanceof Error
-            ? err.message
-            : 'Failed to undo candidate';
+      actionError = extractErrorMessage(err, 'Failed to undo candidate');
     } finally {
       undoingId = null;
     }
@@ -274,12 +265,13 @@
                 <!-- Title -->
                 {#if candidate.title != null}
                   {@const titleMatch = !hasChange(candidate.title, book.title)}
-                  <tr class={titleMatch ? 'opacity-40' : !isFieldIncluded(candidate.id, 'title') ? 'opacity-40' : ''}>
+                  {@const titleIncluded = isFieldIncluded(candidate.id, 'title')}
+                  <tr class={titleMatch ? 'opacity-40' : !titleIncluded ? 'opacity-40' : ''}>
                     <td class="py-1.5 pr-1">
                       {#if !titleMatch}
                         <input
                           type="checkbox"
-                          checked={isFieldIncluded(candidate.id, 'title')}
+                          checked={titleIncluded}
                           onchange={() => toggleField(candidate.id, 'title')}
                           class="h-3.5 w-3.5 rounded border-border"
                         />
@@ -295,12 +287,13 @@
                 <!-- Subtitle -->
                 {#if candidate.subtitle != null}
                   {@const subtitleMatch = !hasChange(candidate.subtitle ?? null, book.subtitle ?? null)}
-                  <tr class={subtitleMatch ? 'opacity-40' : candidate.subtitle != null && !isFieldIncluded(candidate.id, 'subtitle') ? 'opacity-40' : ''}>
+                  {@const subtitleIncluded = isFieldIncluded(candidate.id, 'subtitle')}
+                  <tr class={subtitleMatch ? 'opacity-40' : candidate.subtitle != null && !subtitleIncluded ? 'opacity-40' : ''}>
                     <td class="py-1.5 pr-1">
                       {#if candidate.subtitle != null && !subtitleMatch}
                         <input
                           type="checkbox"
-                          checked={isFieldIncluded(candidate.id, 'subtitle')}
+                          checked={subtitleIncluded}
                           onchange={() => toggleField(candidate.id, 'subtitle')}
                           class="h-3.5 w-3.5 rounded border-border"
                         />
@@ -372,12 +365,13 @@
                 <!-- Publisher -->
                 {#if candidate.publisher || book.publisher_name}
                   {@const publisherMatch = !hasChange(candidate.publisher, book.publisher_name)}
-                  <tr class={publisherMatch ? 'opacity-40' : candidate.publisher && !isFieldIncluded(candidate.id, 'publisher') ? 'opacity-40' : ''}>
+                  {@const publisherIncluded = isFieldIncluded(candidate.id, 'publisher')}
+                  <tr class={publisherMatch ? 'opacity-40' : candidate.publisher && !publisherIncluded ? 'opacity-40' : ''}>
                     <td class="py-1.5 pr-1">
                       {#if candidate.publisher && !publisherMatch}
                         <input
                           type="checkbox"
-                          checked={isFieldIncluded(candidate.id, 'publisher')}
+                          checked={publisherIncluded}
                           onchange={() => toggleField(candidate.id, 'publisher')}
                           class="h-3.5 w-3.5 rounded border-border"
                         />
@@ -393,12 +387,13 @@
                 <!-- Publication Date -->
                 {#if candidate.publication_year != null || book.publication_year != null}
                   {@const pubYearMatch = candidate.publication_year === book.publication_year}
-                  <tr class={pubYearMatch ? 'opacity-40' : candidate.publication_year != null && !isFieldIncluded(candidate.id, 'publication_year') ? 'opacity-40' : ''}>
+                  {@const pubYearIncluded = isFieldIncluded(candidate.id, 'publication_year')}
+                  <tr class={pubYearMatch ? 'opacity-40' : candidate.publication_year != null && !pubYearIncluded ? 'opacity-40' : ''}>
                     <td class="py-1.5 pr-1">
                       {#if candidate.publication_year != null && !pubYearMatch}
                         <input
                           type="checkbox"
-                          checked={isFieldIncluded(candidate.id, 'publication_year')}
+                          checked={pubYearIncluded}
                           onchange={() => toggleField(candidate.id, 'publication_year')}
                           class="h-3.5 w-3.5 rounded border-border"
                         />
@@ -417,12 +412,13 @@
                     (i) => i.identifier_type === 'isbn13' || i.identifier_type === 'isbn10'
                   )}
                   {@const alreadyHas = existingIsbns.some((i) => i.value === candidate.isbn)}
-                  <tr class={alreadyHas ? 'opacity-40' : !isFieldIncluded(candidate.id, 'identifiers') ? 'opacity-40' : ''}>
+                  {@const identifiersIncluded = isFieldIncluded(candidate.id, 'identifiers')}
+                  <tr class={alreadyHas ? 'opacity-40' : !identifiersIncluded ? 'opacity-40' : ''}>
                     <td class="py-1.5 pr-1">
                       {#if !alreadyHas}
                         <input
                           type="checkbox"
-                          checked={isFieldIncluded(candidate.id, 'identifiers')}
+                          checked={identifiersIncluded}
                           onchange={() => toggleField(candidate.id, 'identifiers')}
                           class="h-3.5 w-3.5 rounded border-border"
                         />
@@ -448,12 +444,13 @@
                     : ''}
                   {@const candidateSeriesText = `${candidate.series.name}${candidate.series.position != null ? ` #${candidate.series.position}` : ''}`}
                   {@const seriesMatch = currentSeriesText === candidateSeriesText}
-                  <tr class={seriesMatch ? 'opacity-40' : !isFieldIncluded(candidate.id, 'series') ? 'opacity-40' : ''}>
+                  {@const seriesIncluded = isFieldIncluded(candidate.id, 'series')}
+                  <tr class={seriesMatch ? 'opacity-40' : !seriesIncluded ? 'opacity-40' : ''}>
                     <td class="py-1.5 pr-1">
                       {#if !seriesMatch}
                         <input
                           type="checkbox"
-                          checked={isFieldIncluded(candidate.id, 'series')}
+                          checked={seriesIncluded}
                           onchange={() => toggleField(candidate.id, 'series')}
                           class="h-3.5 w-3.5 rounded border-border"
                         />
@@ -471,12 +468,13 @@
                 <!-- Description (show truncated if present) -->
                 {#if candidate.description}
                   {@const descMatch = !hasChange(candidate.description, book.description)}
-                  <tr class={descMatch ? 'opacity-40' : !isFieldIncluded(candidate.id, 'description') ? 'opacity-40' : ''}>
+                  {@const descIncluded = isFieldIncluded(candidate.id, 'description')}
+                  <tr class={descMatch ? 'opacity-40' : !descIncluded ? 'opacity-40' : ''}>
                     <td class="py-1.5 pr-1 align-top">
                       {#if !descMatch}
                         <input
                           type="checkbox"
-                          checked={isFieldIncluded(candidate.id, 'description')}
+                          checked={descIncluded}
                           onchange={() => toggleField(candidate.id, 'description')}
                           class="mt-0.5 h-3.5 w-3.5 rounded border-border"
                         />
@@ -499,12 +497,13 @@
                 {/if}
                 <!-- Cover -->
                 {#if candidate.cover_url || book.has_cover}
-                  <tr class={candidate.cover_url && !isFieldIncluded(candidate.id, 'cover') ? 'opacity-40' : ''}>
+                  {@const coverIncluded = isFieldIncluded(candidate.id, 'cover')}
+                  <tr class={candidate.cover_url && !coverIncluded ? 'opacity-40' : ''}>
                     <td class="py-2 pr-1 align-top">
                       {#if candidate.cover_url}
                         <input
                           type="checkbox"
-                          checked={isFieldIncluded(candidate.id, 'cover')}
+                          checked={coverIncluded}
                           onchange={() => toggleField(candidate.id, 'cover')}
                           class="mt-0.5 h-3.5 w-3.5 rounded border-border"
                         />
@@ -629,84 +628,67 @@
   {/if}
 
   <!-- Confirmation dialog: applying over an existing apply -->
-  {#if confirmApplyId}
-    <div
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/70"
-      role="dialog"
-      aria-modal="true"
-      aria-label="Confirm apply"
-      onclick={() => confirmApplyId = null}
-      onkeydown={(e) => { if (e.key === 'Escape') confirmApplyId = null; }}
-    >
-      <div
-        class="mx-4 max-w-sm rounded-xl bg-popover p-6 shadow-2xl"
-        onclick={(e) => e.stopPropagation()}
-      >
-        <p class="mb-4 text-sm">
+  <AlertDialog.Root
+    open={confirmApplyId !== null}
+    onOpenChange={(open) => { if (!open) confirmApplyId = null; }}
+  >
+    <AlertDialog.Content>
+      <AlertDialog.Header>
+        <AlertDialog.Title>Confirm Apply</AlertDialog.Title>
+        <AlertDialog.Description>
           Applying this candidate will replace the previous apply and make it permanent. Continue?
-        </p>
-        <div class="flex justify-end gap-2">
-          <Button
-            size="sm"
-            variant="outline"
-            onclick={() => confirmApplyId = null}
-          >
-            Cancel
-          </Button>
-          <Button
-            size="sm"
-            onclick={() => { if (confirmApplyId) handleApply(confirmApplyId); }}
-          >
-            Apply
-          </Button>
-        </div>
-      </div>
-    </div>
-  {/if}
+        </AlertDialog.Description>
+      </AlertDialog.Header>
+      <AlertDialog.Footer>
+        <AlertDialog.Cancel>Cancel</AlertDialog.Cancel>
+        <AlertDialog.Action onclick={() => { if (confirmApplyId) handleApply(confirmApplyId); }}>
+          Apply
+        </AlertDialog.Action>
+      </AlertDialog.Footer>
+    </AlertDialog.Content>
+  </AlertDialog.Root>
 
   <!-- Cover comparison modal -->
-  {#if coverCompare}
-    <div
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/70"
-      role="dialog"
-      aria-modal="true"
-      aria-label="Cover comparison"
-      onclick={() => coverCompare = null}
-      onkeydown={(e) => { if (e.key === 'Escape') coverCompare = null; }}
-    >
-      <div
-        class="mx-4 flex max-h-[90vh] items-end gap-6 rounded-xl bg-popover p-6 shadow-2xl"
-        onclick={(e) => e.stopPropagation()}
-      >
-        <div class="flex flex-col items-center gap-2">
-          {#if coverCompare.currentUrl}
-            <img
-              src={coverCompare.currentUrl}
-              alt="Current cover"
-              class="max-h-[80vh] rounded object-contain"
-            />
-          {:else}
-            <div class="flex h-48 w-32 items-center justify-center rounded bg-muted text-xs text-muted-foreground">
-              No cover
-            </div>
-          {/if}
-          <span class="text-sm font-medium text-muted-foreground">Current</span>
+  <Dialog.Root
+    open={coverCompare !== null}
+    onOpenChange={(open) => { if (!open) coverCompare = null; }}
+  >
+    <Dialog.Content class="max-w-fit">
+      <Dialog.Header>
+        <Dialog.Title>Cover Comparison</Dialog.Title>
+      </Dialog.Header>
+      {#if coverCompare}
+        <div class="flex items-end justify-center gap-6">
+          <div class="flex flex-col items-center gap-2">
+            {#if coverCompare.currentUrl}
+              <img
+                src={coverCompare.currentUrl}
+                alt="Current cover"
+                class="max-h-[70vh] rounded object-contain"
+              />
+            {:else}
+              <div class="flex h-48 w-32 items-center justify-center rounded bg-muted text-xs text-muted-foreground">
+                No cover
+              </div>
+            {/if}
+            <span class="text-sm font-medium text-muted-foreground">Current</span>
+          </div>
+          <div class="flex flex-col items-center gap-2">
+            {#if coverCompare.candidateUrl}
+              <img
+                src={coverCompare.candidateUrl}
+                alt="Candidate cover"
+                class="max-h-[70vh] rounded object-contain"
+              />
+            {:else}
+              <div class="flex h-48 w-32 items-center justify-center rounded bg-muted text-xs text-muted-foreground">
+                No cover
+              </div>
+            {/if}
+            <span class="text-sm font-medium text-muted-foreground">Candidate</span>
+          </div>
         </div>
-        <div class="flex flex-col items-center gap-2">
-          {#if coverCompare.candidateUrl}
-            <img
-              src={coverCompare.candidateUrl}
-              alt="Candidate cover"
-              class="max-h-[80vh] rounded object-contain"
-            />
-          {:else}
-            <div class="flex h-48 w-32 items-center justify-center rounded bg-muted text-xs text-muted-foreground">
-              No cover
-            </div>
-          {/if}
-          <span class="text-sm font-medium text-muted-foreground">Candidate</span>
-        </div>
-      </div>
-    </div>
-  {/if}
+      {/if}
+    </Dialog.Content>
+  </Dialog.Root>
 </div>

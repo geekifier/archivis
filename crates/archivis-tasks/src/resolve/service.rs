@@ -30,7 +30,7 @@ use crate::import::cover;
 use crate::import::types::ThumbnailSizes;
 use crate::resolve::planner::{
     extract_dispute_reasons, plan_automatic_reconciliation, CoreFieldInput, EnrichmentFieldInput,
-    MetadataField, ReconciliationInput, ReconciliationOutcome, ReconciliationPlan,
+    PlannedField, ReconciliationInput, ReconciliationPlan,
 };
 use crate::resolve::state::{
     persist_recomputed_status, recompute_status, BookSnapshot, StatusContext,
@@ -495,9 +495,9 @@ impl<S: StorageBackend> ResolutionService<S> {
                         Ok(_) => {
                             auto_applied = matches!(
                                 plan.outcome,
-                                ReconciliationOutcome::Confirmed | ReconciliationOutcome::Enriched
+                                BookResolutionOutcome::Confirmed | BookResolutionOutcome::Enriched
                             );
-                            run_outcome = map_reconciliation_outcome(plan.outcome);
+                            run_outcome = plan.outcome;
                             decision_reason = format_reconciliation_decision(plan.outcome, best);
                         }
                         Err(e) => {
@@ -942,49 +942,43 @@ impl<S: StorageBackend> ResolutionService<S> {
         });
         let provider_provenance = provider_field_provenance(&provider_meta.provider_name);
 
-        if plan.should_apply(MetadataField::Title) {
+        if plan.should_apply(PlannedField::Title) {
             if let Some(title) = sanitize_text(
                 provider_meta.title.as_deref().unwrap_or_default(),
                 &SanitizeOptions::default(),
             ) {
                 book.set_title(title);
-                book.metadata_provenance.title = Some(provider_provenance.clone());
             }
         }
 
-        if plan.should_apply(MetadataField::Subtitle) {
+        if plan.should_apply(PlannedField::Subtitle) {
             book.subtitle = sanitize_text(
                 provider_meta.subtitle.as_deref().unwrap_or_default(),
                 &SanitizeOptions::default(),
             );
-            book.metadata_provenance.subtitle = Some(provider_provenance.clone());
         }
 
-        if plan.should_apply(MetadataField::Description) {
+        if plan.should_apply(PlannedField::Description) {
             book.description = sanitize_text(
                 provider_meta.description.as_deref().unwrap_or_default(),
                 &SanitizeOptions::default(),
             );
-            book.metadata_provenance.description = Some(provider_provenance.clone());
         }
 
-        if plan.should_apply(MetadataField::Language) {
+        if plan.should_apply(PlannedField::Language) {
             book.language.clone_from(&provider_meta.language);
-            book.metadata_provenance.language = Some(provider_provenance.clone());
         }
 
-        if plan.should_apply(MetadataField::PageCount) {
+        if plan.should_apply(PlannedField::PageCount) {
             book.page_count = provider_meta.page_count;
-            book.metadata_provenance.page_count = Some(provider_provenance.clone());
         }
 
-        if plan.should_apply(MetadataField::PublicationYear) {
+        if plan.should_apply(PlannedField::PublicationYear) {
             book.publication_year = provider_meta.publication_year;
-            book.metadata_provenance.publication_year = Some(provider_provenance.clone());
         }
 
         // Stage cover before the transaction (same pattern as manual-apply path)
-        let staged_cover = if plan.should_apply(MetadataField::Cover) {
+        let staged_cover = if plan.should_apply(PlannedField::Cover) {
             if let Some(ref cover_url) = provider_meta.cover_url {
                 match self
                     .stage_cover_for_manual_apply(book_id, &book, cover_url)
@@ -992,7 +986,6 @@ impl<S: StorageBackend> ResolutionService<S> {
                 {
                     Ok(staged) => {
                         book.cover_path = Some(staged.new_path.clone());
-                        book.metadata_provenance.cover = Some(provider_provenance.clone());
                         Some(staged)
                     }
                     Err(e) => {
@@ -1011,22 +1004,24 @@ impl<S: StorageBackend> ResolutionService<S> {
             None
         };
 
-        let should_update_authors = plan.should_apply(MetadataField::Authors);
-        let should_update_series = plan.should_apply(MetadataField::Series);
+        let should_update_authors = plan.should_apply(PlannedField::Authors);
+        let should_update_series = plan.should_apply(PlannedField::Series);
 
+        // Set provenance for all changed fields
+        set_scalar_provenance(&before_book, &mut book, &provider_provenance);
+        if book.title != before_book.title {
+            book.metadata_provenance.title = Some(provider_provenance.clone());
+        }
         if should_update_authors {
             book.metadata_provenance.authors = Some(provider_provenance.clone());
         }
-
         if should_update_series {
             book.metadata_provenance.series = Some(provider_provenance.clone());
         }
 
         // Build changeset from actual mutations
-        let mut changeset = ApplyChangeset {
-            provider_name: provider_meta.provider_name.clone(),
-            ..Default::default()
-        };
+        let mut changeset = build_scalar_changeset(&before_book, &book, &before_provenance);
+        changeset.provider_name = provider_meta.provider_name.clone();
         if book.title != before_book.title {
             changeset.title = Some(ChangesetEntry {
                 old_value: before_book.title.clone(),
@@ -1035,42 +1030,6 @@ impl<S: StorageBackend> ResolutionService<S> {
             changeset.sort_title = Some(ChangesetEntry {
                 old_value: before_book.sort_title.clone(),
                 old_provenance: None,
-            });
-        }
-        if book.subtitle != before_book.subtitle {
-            changeset.subtitle = Some(ChangesetEntry {
-                old_value: before_book.subtitle.clone(),
-                old_provenance: before_provenance.subtitle.clone(),
-            });
-        }
-        if book.description != before_book.description {
-            changeset.description = Some(ChangesetEntry {
-                old_value: before_book.description.clone(),
-                old_provenance: before_provenance.description.clone(),
-            });
-        }
-        if book.language != before_book.language {
-            changeset.language = Some(ChangesetEntry {
-                old_value: before_book.language.clone(),
-                old_provenance: before_provenance.language.clone(),
-            });
-        }
-        if book.publication_year != before_book.publication_year {
-            changeset.publication_year = Some(ChangesetEntry {
-                old_value: before_book.publication_year,
-                old_provenance: before_provenance.publication_year.clone(),
-            });
-        }
-        if book.page_count != before_book.page_count {
-            changeset.page_count = Some(ChangesetEntry {
-                old_value: before_book.page_count,
-                old_provenance: before_provenance.page_count.clone(),
-            });
-        }
-        if book.cover_path != before_book.cover_path {
-            changeset.cover_path = Some(ChangesetEntry {
-                old_value: before_book.cover_path.clone(),
-                old_provenance: before_provenance.cover.clone(),
             });
         }
         if should_update_authors {
@@ -1127,7 +1086,7 @@ impl<S: StorageBackend> ResolutionService<S> {
                 .await
                 .map_err(|e| TaskError::Failed(format!("failed to update book: {e}")))?;
 
-            if plan.should_apply(MetadataField::Identifiers) {
+            if plan.should_apply(PlannedField::Identifiers) {
                 self.add_provider_identifiers_conn(
                     tx.as_mut(),
                     book_id,
@@ -2596,26 +2555,16 @@ fn candidate_series_differs(current_series: &[String], candidate: &ProviderMetad
         .any(|name| name == candidate_series)
 }
 
-fn map_reconciliation_outcome(outcome: ReconciliationOutcome) -> BookResolutionOutcome {
-    match outcome {
-        ReconciliationOutcome::Confirmed => BookResolutionOutcome::Confirmed,
-        ReconciliationOutcome::Enriched => BookResolutionOutcome::Enriched,
-        ReconciliationOutcome::Disputed => BookResolutionOutcome::Disputed,
-        ReconciliationOutcome::Ambiguous => BookResolutionOutcome::Ambiguous,
-        ReconciliationOutcome::Unmatched => BookResolutionOutcome::Unmatched,
-    }
-}
-
 fn format_reconciliation_decision(
-    outcome: ReconciliationOutcome,
+    outcome: BookResolutionOutcome,
     best: &archivis_metadata::ScoredCandidate,
 ) -> String {
     let prefix = match outcome {
-        ReconciliationOutcome::Confirmed => "reconciliation_confirmed",
-        ReconciliationOutcome::Enriched => "reconciliation_enriched",
-        ReconciliationOutcome::Disputed => "reconciliation_disputed",
-        ReconciliationOutcome::Ambiguous => "blocked_ambiguous",
-        ReconciliationOutcome::Unmatched => "no_candidates",
+        BookResolutionOutcome::Confirmed => "reconciliation_confirmed",
+        BookResolutionOutcome::Enriched => "reconciliation_enriched",
+        BookResolutionOutcome::Disputed => "reconciliation_disputed",
+        BookResolutionOutcome::Ambiguous => "blocked_ambiguous",
+        BookResolutionOutcome::Unmatched => "no_candidates",
     };
 
     format!("{prefix}: tier={}, score={:.2}", best.tier, best.score)

@@ -13,7 +13,7 @@ DATA_DIR="${ARCHIVIS_DATA_DIR:-.local/clean}"
 PORT="${ARCHIVIS_PORT:-9514}"
 DEV_USERNAME="dev"
 DEV_PASSWORD="${ARCHIVIS_DEV_PASSWORD:-}"
-MAX_WAIT="${ARCHIVIS_MAX_WAIT:-30}"
+MAX_WAIT="${ARCHIVIS_MAX_WAIT:-60}"
 BASE_URL="http://127.0.0.1:${PORT}"
 
 # ── Path Safety ─────────────────────────────────────────────────────────────
@@ -30,12 +30,12 @@ ABS_DATA_DIR="$(python3 -c "import os,sys; print(os.path.normpath(sys.argv[1]))"
 ABS_LOCAL_DIR="${PROJECT_ROOT}/.local"
 
 case "$ABS_DATA_DIR" in
-  "${ABS_LOCAL_DIR}"/*)  ;;
-  *)
-    echo "ERROR: DATA_DIR '$ABS_DATA_DIR' is outside ${ABS_LOCAL_DIR}/" >&2
-    echo "Refusing destructive operation." >&2
-    exit 1
-    ;;
+"${ABS_LOCAL_DIR}"/*) ;;
+*)
+  echo "ERROR: DATA_DIR '$ABS_DATA_DIR' is outside ${ABS_LOCAL_DIR}/" >&2
+  echo "Refusing destructive operation." >&2
+  exit 1
+  ;;
 esac
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
@@ -51,6 +51,26 @@ ensure_password() {
 }
 
 # ── Subcommands ─────────────────────────────────────────────────────────────
+
+cmd_kill() {
+  local pid
+  pid=$(lsof -ti "tcp:${PORT}" 2>/dev/null || true)
+  if [[ -n "$pid" ]]; then
+    echo "Killing existing process on port ${PORT} (pid ${pid})..."
+    kill "$pid" 2>/dev/null || true
+    # Wait briefly for the process to exit
+    local i=0
+    while ((i < 10)) && kill -0 "$pid" 2>/dev/null; do
+      sleep 0.5
+      i=$((i + 1))
+    done
+    # Force-kill if still alive
+    if kill -0 "$pid" 2>/dev/null; then
+      echo "Process did not exit gracefully, sending SIGKILL..."
+      kill -9 "$pid" 2>/dev/null || true
+    fi
+  fi
+}
 
 cmd_wipe() {
   # Guard: refuse to rm -rf if path is empty, root, or suspiciously short
@@ -78,8 +98,8 @@ cmd_wipe_db() {
 cmd_wait() {
   echo "Waiting for server at ${BASE_URL} (max ${MAX_WAIT}s)..."
   local elapsed=0
-  while (( elapsed < MAX_WAIT )); do
-    if curl -sf "${BASE_URL}/api/auth/status" > /dev/null 2>&1; then
+  while ((elapsed < MAX_WAIT)); do
+    if curl -sf "${BASE_URL}/api/auth/status" >/dev/null 2>&1; then
       echo "Server is ready."
       return 0
     fi
@@ -109,7 +129,7 @@ cmd_setup() {
 
   # Persist credentials so dev-seed can read them later
   local creds_file="${ABS_DATA_DIR}/.dev-creds"
-  cat > "$creds_file" <<CREDS
+  cat >"$creds_file" <<CREDS
 DEV_USERNAME=${DEV_USERNAME}
 DEV_PASSWORD=${DEV_PASSWORD}
 CREDS
@@ -200,25 +220,27 @@ cmd_seed() {
 # ── Dispatch ────────────────────────────────────────────────────────────────
 
 case "${1:-help}" in
-  wipe)     cmd_wipe ;;
-  wipe-db)  cmd_wipe_db ;;
-  wait)     cmd_wait ;;
-  setup)    cmd_setup ;;
-  seed)     cmd_seed "${2:-}" ;;
-  help|*)
-    echo "Usage: $0 <command> [args]"
-    echo ""
-    echo "Commands:"
-    echo "  wipe       Remove and recreate data directory"
-    echo "  wipe-db    Remove only database files from data directory"
-    echo "  wait       Wait for server readiness"
-    echo "  setup      Wait for server + create dev admin account"
-    echo "  seed [dir] Import ebooks from dir (default: .local/test-existing)"
-    echo ""
-    echo "Environment:"
-    echo "  ARCHIVIS_DATA_DIR       Data directory (default: .local/clean)"
-    echo "  ARCHIVIS_PORT           Server port (default: 9514)"
-    echo "  ARCHIVIS_DEV_PASSWORD   Admin password (default: random)"
-    echo "  ARCHIVIS_MAX_WAIT       Readiness timeout in seconds (default: 30)"
-    ;;
+kill) cmd_kill ;;
+wipe) cmd_wipe ;;
+wipe-db) cmd_wipe_db ;;
+wait) cmd_wait ;;
+setup) cmd_setup ;;
+seed) cmd_seed "${2:-}" ;;
+help | *)
+  echo "Usage: $0 <command> [args]"
+  echo ""
+  echo "Commands:"
+  echo "  kill       Kill any existing process on the server port"
+  echo "  wipe       Remove and recreate data directory"
+  echo "  wipe-db    Remove only database files from data directory"
+  echo "  wait       Wait for server readiness"
+  echo "  setup      Wait for server + create dev admin account"
+  echo "  seed [dir] Import ebooks from dir (default: .local/test-existing)"
+  echo ""
+  echo "Environment:"
+  echo "  ARCHIVIS_DATA_DIR       Data directory (default: .local/clean)"
+  echo "  ARCHIVIS_PORT           Server port (default: 9514)"
+  echo "  ARCHIVIS_DEV_PASSWORD   Admin password (default: random)"
+  echo "  ARCHIVIS_MAX_WAIT       Readiness timeout in seconds (default: 60)"
+  ;;
 esac

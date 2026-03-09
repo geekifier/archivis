@@ -84,10 +84,6 @@ pub struct ReconciliationPlan {
     pub should_apply_candidate: bool,
     pub field_actions: Vec<FieldAction>,
 }
-
-pub type MetadataField = PlannedField;
-pub type ReconciliationOutcome = ResolutionOutcome;
-
 impl std::fmt::Display for PlannedField {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
