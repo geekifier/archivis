@@ -15,8 +15,15 @@ use crate::provider::MetadataProvider;
 use crate::provider_names;
 use crate::similarity::title_for_search;
 use crate::types::{
-    parse_year_from_str, MetadataQuery, ProviderAuthor, ProviderIdentifier, ProviderMetadata,
-    ProviderSeries,
+    parse_year_from_str, MetadataQuery, ProviderAuthor, ProviderCapabilities, ProviderFeature,
+    ProviderIdentifier, ProviderMetadata, ProviderQuality, ProviderSeries,
+};
+
+static CAPABILITIES: ProviderCapabilities = ProviderCapabilities {
+    quality: ProviderQuality::Community,
+    default_rate_limit_rpm: MAX_REQUESTS_PER_MINUTE,
+    supported_id_lookups: &[IdentifierType::Isbn13, IdentifierType::Isbn10],
+    features: &[ProviderFeature::Search, ProviderFeature::Covers],
 };
 
 const PROVIDER_NAME: &str = provider_names::OPEN_LIBRARY;
@@ -452,6 +459,10 @@ impl MetadataProvider for OpenLibraryProvider {
 
     fn is_available(&self) -> bool {
         self.is_enabled()
+    }
+
+    fn capabilities(&self) -> &'static ProviderCapabilities {
+        &CAPABILITIES
     }
 
     async fn lookup_isbn(&self, isbn: &str) -> Result<Vec<ProviderMetadata>, ProviderError> {

@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use archivis_core::models::BookFormat;
+use archivis_db::MetadataRuleRepository;
 use archivis_storage::StorageBackend;
 use tracing::{debug, info, warn};
 
@@ -164,12 +165,21 @@ impl<S: StorageBackend> BulkImportService<S> {
     ///
     /// Reports progress via the callback trait. Failures on individual files
     /// are recorded in the result but never abort the entire operation.
+    #[allow(clippy::too_many_lines)]
     pub async fn import_directory(
         &self,
         path: &Path,
         progress: &dyn ImportProgress,
     ) -> Result<BulkImportResult, ImportError> {
         let manifest = self.scan_directory(path).await?;
+
+        // Load metadata rules once for the entire batch.
+        let metadata_rules = MetadataRuleRepository::list_enabled(self.import_service.db_pool())
+            .await
+            .unwrap_or_else(|e| {
+                warn!("failed to load metadata rules: {e}");
+                Vec::new()
+            });
 
         progress.on_import_start(manifest.total_files);
 
@@ -192,7 +202,11 @@ impl<S: StorageBackend> BulkImportService<S> {
 
             progress.on_file_start(index, &entry.path);
 
-            let outcome = match self.import_service.import_file(&entry.path).await {
+            let outcome = match self
+                .import_service
+                .import_file(&entry.path, &metadata_rules)
+                .await
+            {
                 Ok(result) => match result.duplicate {
                     Some(DuplicateInfo::ExactHash { existing_book_id }) => {
                         let reason = SkipReason::DuplicateHash { existing_book_id };

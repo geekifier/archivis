@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use archivis_core::errors::TaskError;
 use archivis_core::models::TaskType;
+use archivis_db::MetadataRuleRepository;
 use archivis_storage::StorageBackend;
 use uuid::Uuid;
 
@@ -24,6 +25,7 @@ impl<S: StorageBackend> ResolveWorker<S> {
         &self,
         book_ids_val: &serde_json::Value,
         manual_refresh: bool,
+        metadata_rules: &[archivis_core::models::MetadataRule],
         progress: &ProgressSender,
     ) -> Result<serde_json::Value, TaskError> {
         let book_ids: Vec<String> = book_ids_val
@@ -42,6 +44,7 @@ impl<S: StorageBackend> ResolveWorker<S> {
         let mut results = Vec::new();
         let mut errors = Vec::new();
         let mut resolved = 0_usize;
+        let mut publisher_cache = std::collections::HashMap::new();
 
         for (index, id_str) in book_ids.iter().enumerate() {
             let book_id = Uuid::parse_str(id_str)
@@ -60,7 +63,12 @@ impl<S: StorageBackend> ResolveWorker<S> {
 
             match self
                 .service
-                .resolve_queued_book(book_id, manual_refresh)
+                .resolve_queued_book(
+                    book_id,
+                    manual_refresh,
+                    metadata_rules,
+                    &mut publisher_cache,
+                )
                 .await
             {
                 Ok(Some(outcome)) => {
@@ -107,6 +115,7 @@ impl<S: StorageBackend> ResolveWorker<S> {
         &self,
         payload: &serde_json::Value,
         manual_refresh: bool,
+        metadata_rules: &[archivis_core::models::MetadataRule],
         progress: &ProgressSender,
     ) -> Result<serde_json::Value, TaskError> {
         let book_id_str = payload
@@ -123,9 +132,15 @@ impl<S: StorageBackend> ResolveWorker<S> {
             .send_progress(0, Some(format!("Resolving book {book_id}")))
             .await;
 
+        let mut publisher_cache = std::collections::HashMap::new();
         let Some(outcome) = self
             .service
-            .resolve_queued_book(book_id, manual_refresh)
+            .resolve_queued_book(
+                book_id,
+                manual_refresh,
+                metadata_rules,
+                &mut publisher_cache,
+            )
             .await?
         else {
             progress
@@ -171,11 +186,17 @@ impl<S: StorageBackend + 'static> Worker for ResolveWorker<S> {
                 .and_then(serde_json::Value::as_bool)
                 .unwrap_or(false);
 
+            // Load metadata rules once per task execution.
+            let metadata_rules: Vec<archivis_core::models::MetadataRule> =
+                MetadataRuleRepository::list_enabled(self.service.db_pool())
+                    .await
+                    .unwrap_or_default();
+
             if let Some(book_ids_val) = payload.get("book_ids") {
-                self.execute_batch(book_ids_val, manual_refresh, &progress)
+                self.execute_batch(book_ids_val, manual_refresh, &metadata_rules, &progress)
                     .await
             } else {
-                self.execute_single(&payload, manual_refresh, &progress)
+                self.execute_single(&payload, manual_refresh, &metadata_rules, &progress)
                     .await
             }
         })

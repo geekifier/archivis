@@ -7,7 +7,8 @@ use std::sync::Arc;
 use archivis_api::state::{ApiConfig, AppState};
 use archivis_auth::{AuthService, LocalAuthAdapter};
 use archivis_metadata::{
-    HardcoverProvider, MetadataHttpClient, MetadataResolver, OpenLibraryProvider, ProviderRegistry,
+    HardcoverProvider, LocProvider, MetadataHttpClient, MetadataResolver, OpenLibraryProvider,
+    ProviderRegistry,
 };
 use archivis_storage::local::LocalStorage;
 use archivis_storage::watcher::{service::WatcherRuntimeConfig, WatcherService};
@@ -581,11 +582,16 @@ fn init_metadata_providers(
         &mut http_client,
         metadata_config.hardcover.max_requests_per_minute,
     );
+    LocProvider::register_rate_limiter_with_limit(
+        &mut http_client,
+        metadata_config.loc.max_requests_per_minute,
+    );
 
     let http_client = Arc::new(http_client);
 
     let ol_provider = OpenLibraryProvider::new(Arc::clone(&http_client), Arc::clone(settings));
     let hc_provider = HardcoverProvider::new(Arc::clone(&http_client), Arc::clone(settings));
+    let loc_provider = LocProvider::new(Arc::clone(&http_client), Arc::clone(settings));
 
     if metadata_config.hardcover.enabled && metadata_config.hardcover.api_token.is_none() {
         tracing::warn!(
@@ -596,6 +602,7 @@ fn init_metadata_providers(
     let mut registry = ProviderRegistry::new();
     registry.register(Arc::new(ol_provider));
     registry.register(Arc::new(hc_provider));
+    registry.register(Arc::new(loc_provider));
 
     let available = registry.available();
     tracing::info!(

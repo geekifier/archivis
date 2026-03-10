@@ -774,3 +774,29 @@ export interface DetectFsRequest {
 export interface ScanTriggeredResponse {
   task_id: string;
 }
+
+// --- Metadata rule types ---
+
+export interface MetadataRuleResponse {
+  id: string;
+  rule_type: string;
+  match_value: string;
+  match_mode: string;
+  outcome: string;
+  enabled: boolean;
+  builtin: boolean;
+  created_at: string;
+}
+
+export interface CreateMetadataRuleRequest {
+  rule_type: string;
+  match_value: string;
+  match_mode?: string;
+  outcome?: string;
+}
+
+export interface UpdateMetadataRuleRequest {
+  match_value?: string;
+  match_mode?: string;
+  enabled?: boolean;
+}

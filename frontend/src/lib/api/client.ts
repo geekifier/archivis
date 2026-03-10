@@ -19,6 +19,7 @@ import type {
   ContinueReadingItem,
   CreateAuthorRequest,
   CreateBookmarkRequest,
+  CreateMetadataRuleRequest,
   CreatePublisherRequest,
   CreateUserRequest,
   DetectFsRequest,
@@ -28,6 +29,7 @@ import type {
   FlagDuplicateRequest,
   FsDetectionResponse,
   MetadataField,
+  MetadataRuleResponse,
   RefreshAllMetadataResponse,
   RefreshMetadataResponse,
   IsbnScanResponse,
@@ -60,6 +62,7 @@ import type {
   UpdateSettingsResponse,
   UpdateUserRequest,
   UpdateWatchedDirectoryRequest,
+  UpdateMetadataRuleRequest,
   UploadResponse,
   User,
   WatchedDirectoryResponse
@@ -820,6 +823,32 @@ export const api = {
     }
   },
 
+  metadataRules: {
+    /** List all metadata rules. */
+    list(): Promise<MetadataRuleResponse[]> {
+      return request<MetadataRuleResponse[]>('GET', '/metadata-rules');
+    },
+
+    /** Create a new metadata rule. */
+    create(data: CreateMetadataRuleRequest): Promise<MetadataRuleResponse> {
+      return request<MetadataRuleResponse>('POST', '/metadata-rules', data);
+    },
+
+    /** Update an existing metadata rule. */
+    update(id: string, data: UpdateMetadataRuleRequest): Promise<MetadataRuleResponse> {
+      return request<MetadataRuleResponse>(
+        'PUT',
+        `/metadata-rules/${encodeURIComponent(id)}`,
+        data
+      );
+    },
+
+    /** Delete a metadata rule. */
+    delete(id: string): Promise<void> {
+      return request<void>('DELETE', `/metadata-rules/${encodeURIComponent(id)}`);
+    }
+  },
+
   stats: {
     /** Fetch library and usage statistics. */
     get(): Promise<StatsResponse> {
@@ -960,6 +989,7 @@ export type {
   ContinueReadingItem,
   CreateAuthorRequest,
   CreateBookmarkRequest,
+  CreateMetadataRuleRequest,
   CreatePublisherRequest,
   CreateUserRequest,
   DetectFsRequest,
@@ -978,6 +1008,7 @@ export type {
   MergeRequest,
   MetadataField,
   MetadataProvenance,
+  MetadataRuleResponse,
   MetadataSource,
   MetadataStatus,
   PaginatedAuthors,
@@ -1018,6 +1049,7 @@ export type {
   TocItem,
   UpdateBookRequest,
   UpdateIdentifierRequest,
+  UpdateMetadataRuleRequest,
   UpdateProgressRequest,
   UpdateSettingsResponse,
   UpdateUserRequest,

@@ -238,6 +238,29 @@ static SETTINGS: &[SettingMeta] = &[
         sensitive: false,
         options: None,
     },
+    // Library of Congress
+    SettingMeta {
+        key: "metadata.loc.enabled",
+        label: "Enabled",
+        description: "Whether Library of Congress lookups are enabled",
+        section: "metadata.loc",
+        value_type: SettingType::Bool,
+        scope: SettingScope::Runtime,
+        requires_restart: false,
+        sensitive: false,
+        options: None,
+    },
+    SettingMeta {
+        key: "metadata.loc.max_requests_per_minute",
+        label: "Rate Limit",
+        description: "Maximum requests per minute to Library of Congress (strict: exceeding may cause a 1-hour IP ban)",
+        section: "metadata.loc",
+        value_type: SettingType::Integer,
+        scope: SettingScope::Runtime,
+        requires_restart: false,
+        sensitive: false,
+        options: None,
+    },
     // Watcher settings (bootstrap scope — boot-only enable/disable)
     SettingMeta {
         key: "watcher.enabled",

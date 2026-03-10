@@ -1486,4 +1486,45 @@ impl BookRepository {
 
         Ok(())
     }
+
+    /// Mark a book's resolution as skipped (trusted publisher or other rule).
+    ///
+    /// Sets `resolution_state = 'done'` and `last_resolved_at = now`, records
+    /// the skip reason, but does **not** touch `resolution_outcome` or
+    /// `metadata_status` (preserving the import-time values).
+    pub async fn mark_resolution_skipped(
+        pool: &SqlitePool,
+        book_id: Uuid,
+        reason: &str,
+    ) -> Result<(), DbError> {
+        let now = Utc::now().to_rfc3339();
+        let id_str = book_id.to_string();
+        let done = serialize_resolution_state(ResolutionState::Done);
+
+        let result = sqlx::query(
+            "UPDATE books
+             SET resolution_state = ?,
+                 last_resolved_at = ?,
+                 resolution_requested_reason = ?,
+                 updated_at = ?
+             WHERE id = ?",
+        )
+        .bind(&done)
+        .bind(&now)
+        .bind(reason)
+        .bind(&now)
+        .bind(&id_str)
+        .execute(pool)
+        .await
+        .map_err(|e| DbError::Query(e.to_string()))?;
+
+        if result.rows_affected() == 0 {
+            return Err(DbError::NotFound {
+                entity: "book",
+                id: id_str,
+            });
+        }
+
+        Ok(())
+    }
 }

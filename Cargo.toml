@@ -107,10 +107,17 @@ ipnet = "2"
 reqwest = { version = "0.12", default-features = false, features = [
     "json",
     "rustls-tls",
+    "gzip",
 ] }
 async-trait = "0.1"
 url = "2"
 futures = "0.3"
+
+# XML parsing
+quick-xml = "0.37"
+
+# Regex
+regex = "1"
 
 # Filesystem watching
 notify = "8.2"

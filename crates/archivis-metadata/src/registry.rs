@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use crate::provider::MetadataProvider;
+use crate::types::ProviderCapabilities;
 
 /// Registry of all configured metadata providers.
 ///
@@ -35,6 +36,14 @@ impl ProviderRegistry {
     pub fn get(&self, name: &str) -> Option<Arc<dyn MetadataProvider>> {
         self.providers.iter().find(|p| p.name() == name).cloned()
     }
+
+    /// Returns `(provider_name, capabilities)` for every registered provider.
+    pub fn all_capabilities(&self) -> Vec<(&str, &'static ProviderCapabilities)> {
+        self.providers
+            .iter()
+            .map(|p| (p.name(), p.capabilities()))
+            .collect()
+    }
 }
 
 impl Default for ProviderRegistry {
@@ -47,9 +56,18 @@ impl Default for ProviderRegistry {
 mod tests {
     use async_trait::async_trait;
 
+    use archivis_core::models::IdentifierType;
+
     use super::*;
     use crate::errors::ProviderError;
-    use crate::types::{MetadataQuery, ProviderMetadata};
+    use crate::types::{MetadataQuery, ProviderFeature, ProviderMetadata, ProviderQuality};
+
+    static STUB_CAPABILITIES: ProviderCapabilities = ProviderCapabilities {
+        quality: ProviderQuality::Community,
+        default_rate_limit_rpm: 100,
+        supported_id_lookups: &[IdentifierType::Isbn13, IdentifierType::Isbn10],
+        features: &[ProviderFeature::Search, ProviderFeature::Covers],
+    };
 
     /// Minimal stub provider for testing the registry.
     struct StubProvider {
@@ -65,6 +83,10 @@ mod tests {
 
         fn is_available(&self) -> bool {
             self.available
+        }
+
+        fn capabilities(&self) -> &'static ProviderCapabilities {
+            &STUB_CAPABILITIES
         }
 
         async fn lookup_isbn(&self, _isbn: &str) -> Result<Vec<ProviderMetadata>, ProviderError> {
@@ -141,5 +163,24 @@ mod tests {
         let provider = registry.get("hardcover");
         assert!(provider.is_some());
         assert!(!provider.unwrap().is_available());
+    }
+
+    #[test]
+    fn all_capabilities_returns_all_registered() {
+        let mut registry = ProviderRegistry::new();
+        registry.register(Arc::new(StubProvider {
+            name: "open_library",
+            available: true,
+        }));
+        registry.register(Arc::new(StubProvider {
+            name: "hardcover",
+            available: false,
+        }));
+
+        let caps = registry.all_capabilities();
+        assert_eq!(caps.len(), 2);
+        assert_eq!(caps[0].0, "open_library");
+        assert_eq!(caps[1].0, "hardcover");
+        assert_eq!(caps[0].1.quality, ProviderQuality::Community);
     }
 }

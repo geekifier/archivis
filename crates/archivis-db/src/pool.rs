@@ -186,6 +186,7 @@ mod tests {
             "duplicate_links",
             "identification_candidates",
             "identifiers",
+            "metadata_rules",
             "publishers",
             "reading_progress",
             "resolution_runs",

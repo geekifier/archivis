@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 
 use crate::errors::ProviderError;
-use crate::types::{MetadataQuery, ProviderMetadata};
+use crate::types::{MetadataQuery, ProviderCapabilities, ProviderMetadata};
 
 /// Trait that all metadata providers must implement.
 ///
@@ -14,6 +14,10 @@ pub trait MetadataProvider: Send + Sync {
 
     /// Whether this provider is enabled and configured.
     fn is_available(&self) -> bool;
+
+    /// Static capabilities advertised by this provider (quality tier,
+    /// supported identifier types, feature flags, rate limit).
+    fn capabilities(&self) -> &'static ProviderCapabilities;
 
     /// Look up a book by ISBN. Returns candidates sorted by confidence
     /// (highest first).

@@ -4,11 +4,12 @@ use std::sync::Arc;
 
 use archivis_core::errors::TaskError;
 use archivis_core::isbn::{normalize_asin, normalize_isbn, to_isbn13};
+use archivis_core::models::metadata_rule::is_trusted_publisher;
 use archivis_core::models::{
     ApplyChangeset, Book, CandidateStatus, ChangesetAuthor, ChangesetEntry, ChangesetSeries,
     FieldProvenance, IdentificationCandidate, Identifier, IdentifierType, MetadataProvenance,
-    MetadataSource, MetadataStatus, ResolutionOutcome as BookResolutionOutcome, ResolutionRunState,
-    ResolutionState,
+    MetadataRule, MetadataSource, MetadataStatus, ResolutionOutcome as BookResolutionOutcome,
+    ResolutionRunState, ResolutionState,
 };
 use archivis_db::{
     AuthorRepository, BookFileRepository, BookRepository, CandidateRepository, DbPool,
@@ -178,6 +179,11 @@ impl<S: StorageBackend> ResolutionService<S> {
         }
     }
 
+    /// Access the database pool (used by workers to load metadata rules).
+    pub fn db_pool(&self) -> &DbPool {
+        &self.db_pool
+    }
+
     #[cfg(test)]
     fn set_manual_action_failpoint(&self, failpoint: ManualActionFailpoint) {
         *self
@@ -203,6 +209,8 @@ impl<S: StorageBackend> ResolutionService<S> {
         &self,
         book_id: Uuid,
         manual_refresh: bool,
+        metadata_rules: &[MetadataRule],
+        publisher_cache: &mut std::collections::HashMap<Uuid, String>,
     ) -> Result<Option<ResolutionOutcome>, TaskError> {
         let claimed = if manual_refresh {
             BookRepository::claim_manual_resolution(&self.db_pool, book_id)
@@ -218,6 +226,23 @@ impl<S: StorageBackend> ResolutionService<S> {
 
         if !claimed {
             return Ok(None);
+        }
+
+        // Check metadata rules before running full resolution.
+        // Manual refresh always bypasses rules so the user can force a provider query.
+        if !manual_refresh {
+            if let Some(skip_reason) = self
+                .check_metadata_rules(book_id, metadata_rules, publisher_cache)
+                .await?
+            {
+                BookRepository::mark_resolution_skipped(&self.db_pool, book_id, &skip_reason)
+                    .await
+                    .map_err(|e| {
+                        TaskError::Failed(format!("failed to mark resolution skipped: {e}"))
+                    })?;
+                info!(book_id = %book_id, reason = %skip_reason, "resolution skipped by metadata rule");
+                return Ok(None);
+            }
         }
 
         match self.resolve_book(book_id, manual_refresh).await {
@@ -252,6 +277,45 @@ impl<S: StorageBackend> ResolutionService<S> {
                 Err(error)
             }
         }
+    }
+
+    /// Check whether metadata rules indicate this book should skip resolution.
+    ///
+    /// Returns `Some(reason)` if a rule matches, `None` otherwise.
+    /// `publisher_cache` avoids redundant DB lookups when many books share a publisher.
+    async fn check_metadata_rules(
+        &self,
+        book_id: Uuid,
+        metadata_rules: &[MetadataRule],
+        publisher_cache: &mut std::collections::HashMap<Uuid, String>,
+    ) -> Result<Option<String>, TaskError> {
+        if metadata_rules.is_empty() {
+            return Ok(None);
+        }
+
+        let book = BookRepository::get_by_id(&self.db_pool, book_id)
+            .await
+            .map_err(|e| TaskError::Failed(format!("failed to load book: {e}")))?;
+
+        let Some(pub_id) = book.publisher_id else {
+            return Ok(None);
+        };
+
+        let publisher_name = if let Some(cached) = publisher_cache.get(&pub_id) {
+            cached.clone()
+        } else {
+            let publisher = PublisherRepository::get_by_id(&self.db_pool, pub_id)
+                .await
+                .map_err(|e| TaskError::Failed(format!("failed to load publisher: {e}")))?;
+            publisher_cache.insert(pub_id, publisher.name.clone());
+            publisher.name
+        };
+
+        if is_trusted_publisher(metadata_rules, &publisher_name) {
+            return Ok(Some(format!("trusted:publisher:{publisher_name}")));
+        }
+
+        Ok(None)
     }
 
     /// Resolve a single book by querying metadata providers.
@@ -3533,6 +3597,21 @@ mod tests {
         search_results: Vec<ProviderMetadata>,
     }
 
+    static STUB_CAPS: archivis_metadata::ProviderCapabilities =
+        archivis_metadata::ProviderCapabilities {
+            quality: archivis_metadata::ProviderQuality::Community,
+            default_rate_limit_rpm: 100,
+            supported_id_lookups: &[
+                IdentifierType::Isbn13,
+                IdentifierType::Isbn10,
+                IdentifierType::Asin,
+            ],
+            features: &[
+                archivis_metadata::ProviderFeature::Search,
+                archivis_metadata::ProviderFeature::Covers,
+            ],
+        };
+
     #[async_trait]
     impl MetadataProvider for StubProvider {
         fn name(&self) -> &str {
@@ -3541,6 +3620,10 @@ mod tests {
 
         fn is_available(&self) -> bool {
             true
+        }
+
+        fn capabilities(&self) -> &'static archivis_metadata::ProviderCapabilities {
+            &STUB_CAPS
         }
 
         async fn lookup_isbn(&self, _isbn: &str) -> Result<Vec<ProviderMetadata>, ProviderError> {
@@ -3734,13 +3817,16 @@ mod tests {
         let service_for_first = Arc::clone(&service);
         let first = tokio::spawn(async move {
             service_for_first
-                .resolve_queued_book(book.id, false)
+                .resolve_queued_book(book.id, false, &[], &mut std::collections::HashMap::new())
                 .await
                 .unwrap()
         });
 
         reached.notified().await;
-        let second = service.resolve_queued_book(book.id, false).await.unwrap();
+        let second = service
+            .resolve_queued_book(book.id, false, &[], &mut std::collections::HashMap::new())
+            .await
+            .unwrap();
         assert!(second.is_none(), "duplicate task should no-op after claim");
 
         release.notify_waiters();
@@ -3788,7 +3874,7 @@ mod tests {
         let service_for_run = Arc::clone(&service);
         let run = tokio::spawn(async move {
             service_for_run
-                .resolve_queued_book(book.id, false)
+                .resolve_queued_book(book.id, false, &[], &mut std::collections::HashMap::new())
                 .await
                 .unwrap()
                 .unwrap()

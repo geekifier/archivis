@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE, USER_AGENT};
+use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE, RETRY_AFTER, USER_AGENT};
 use tokio::sync::Mutex;
 use tracing::{debug, warn};
 
@@ -145,28 +145,8 @@ impl MetadataHttpClient {
 
             if status == 429 || status == 503 {
                 retries += 1;
-                if retries > max_retries {
-                    warn!(
-                        provider = provider_name,
-                        status = status,
-                        "max retries exceeded"
-                    );
-                    return Err(ProviderError::ApiError {
-                        status,
-                        message: format!("request failed after {max_retries} retries"),
-                    });
-                }
-
-                let backoff = Duration::from_secs(1 << (retries - 1));
-                warn!(
-                    provider = provider_name,
-                    status = status,
-                    retry = retries,
-                    backoff_secs = backoff.as_secs(),
-                    "retrying after backoff"
-                );
-                tokio::time::sleep(backoff).await;
-                self.wait_for_token(provider_name).await;
+                self.backoff_or_fail(provider_name, status, &response, retries, max_retries)
+                    .await?;
                 continue;
             }
 
@@ -202,28 +182,8 @@ impl MetadataHttpClient {
 
             if status == 429 || status == 503 {
                 retries += 1;
-                if retries > max_retries {
-                    warn!(
-                        provider = provider_name,
-                        status = status,
-                        "max retries exceeded"
-                    );
-                    return Err(ProviderError::ApiError {
-                        status,
-                        message: format!("request failed after {max_retries} retries"),
-                    });
-                }
-
-                let backoff = Duration::from_secs(1 << (retries - 1));
-                warn!(
-                    provider = provider_name,
-                    status = status,
-                    retry = retries,
-                    backoff_secs = backoff.as_secs(),
-                    "retrying after backoff"
-                );
-                tokio::time::sleep(backoff).await;
-                self.wait_for_token(provider_name).await;
+                self.backoff_or_fail(provider_name, status, &response, retries, max_retries)
+                    .await?;
                 continue;
             }
 
@@ -271,28 +231,8 @@ impl MetadataHttpClient {
 
             if status == 429 || status == 503 {
                 retries += 1;
-                if retries > max_retries {
-                    warn!(
-                        provider = provider_name,
-                        status = status,
-                        "max retries exceeded"
-                    );
-                    return Err(ProviderError::ApiError {
-                        status,
-                        message: format!("request failed after {max_retries} retries"),
-                    });
-                }
-
-                let backoff = Duration::from_secs(1 << (retries - 1));
-                warn!(
-                    provider = provider_name,
-                    status = status,
-                    retry = retries,
-                    backoff_secs = backoff.as_secs(),
-                    "retrying after backoff"
-                );
-                tokio::time::sleep(backoff).await;
-                self.wait_for_token(provider_name).await;
+                self.backoff_or_fail(provider_name, status, &response, retries, max_retries)
+                    .await?;
                 continue;
             }
 
@@ -304,6 +244,78 @@ impl MetadataHttpClient {
     /// rate limiting is not needed (e.g., fetching cover images from CDNs).
     pub fn raw_client(&self) -> &reqwest::Client {
         &self.client
+    }
+
+    /// Handle retry backoff for 429/503 responses. Returns `Err` if max
+    /// retries exceeded, otherwise sleeps for the computed backoff duration
+    /// and waits for a rate-limiter token.
+    async fn backoff_or_fail(
+        &self,
+        provider_name: &str,
+        status: u16,
+        response: &reqwest::Response,
+        retries: u32,
+        max_retries: u32,
+    ) -> Result<(), ProviderError> {
+        if retries > max_retries {
+            warn!(
+                provider = provider_name,
+                status = status,
+                "max retries exceeded"
+            );
+            return Err(ProviderError::ApiError {
+                status,
+                message: format!("request failed after {max_retries} retries"),
+            });
+        }
+
+        let exponential = Duration::from_secs(1 << (retries - 1));
+        let retry_after = Self::parse_retry_after(response);
+        let backoff = retry_after.map_or(exponential, |ra| ra.max(exponential));
+        if let Some(ra) = retry_after {
+            warn!(
+                provider = provider_name,
+                status = status,
+                retry = retries,
+                backoff_secs = backoff.as_secs(),
+                retry_after_secs = ra.as_secs(),
+                "retrying after Retry-After backoff"
+            );
+        } else {
+            warn!(
+                provider = provider_name,
+                status = status,
+                retry = retries,
+                backoff_secs = backoff.as_secs(),
+                "retrying after backoff"
+            );
+        }
+        tokio::time::sleep(backoff).await;
+        self.wait_for_token(provider_name).await;
+        Ok(())
+    }
+
+    /// Parse `Retry-After` header from a response. Supports both integer
+    /// seconds and RFC 2822 HTTP-date formats.
+    fn parse_retry_after(response: &reqwest::Response) -> Option<Duration> {
+        let value = response.headers().get(RETRY_AFTER)?.to_str().ok()?;
+
+        // Try integer seconds first
+        if let Ok(secs) = value.parse::<u64>() {
+            return Some(Duration::from_secs(secs));
+        }
+
+        // Try HTTP-date format (e.g. "Fri, 31 Dec 1999 23:59:59 GMT")
+        // chrono can parse RFC 2822 dates which cover the standard HTTP-date format.
+        if let Ok(date) = chrono::DateTime::parse_from_rfc2822(value) {
+            let now = chrono::Utc::now();
+            let delta = date.signed_duration_since(now);
+            if delta > chrono::Duration::zero() {
+                return delta.to_std().ok();
+            }
+        }
+
+        None
     }
 
     /// Wait for a rate limiter token for the given provider.

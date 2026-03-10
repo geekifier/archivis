@@ -12,6 +12,7 @@ pub use client::MetadataHttpClient;
 pub use errors::ProviderError;
 pub use provider::MetadataProvider;
 pub use providers::HardcoverProvider;
+pub use providers::LocProvider;
 pub use providers::OpenLibraryProvider;
 pub use registry::ProviderRegistry;
 pub use resolver::{
@@ -19,7 +20,8 @@ pub use resolver::{
     ScoredCandidate, DEFAULT_AUTO_APPLY_THRESHOLD,
 };
 pub use types::{
-    MetadataQuery, ProviderAuthor, ProviderIdentifier, ProviderMetadata, ProviderSeries,
+    MetadataQuery, ProviderAuthor, ProviderCapabilities, ProviderFeature, ProviderIdentifier,
+    ProviderMetadata, ProviderQuality, ProviderSeries,
 };
 
 #[cfg(test)]

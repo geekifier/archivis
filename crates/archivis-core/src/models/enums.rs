@@ -204,6 +204,7 @@ pub enum IdentifierType {
     GoogleBooks,
     OpenLibrary,
     Hardcover,
+    Lccn,
 }
 
 impl fmt::Display for IdentifierType {
@@ -215,6 +216,7 @@ impl fmt::Display for IdentifierType {
             Self::GoogleBooks => write!(f, "Google Books"),
             Self::OpenLibrary => write!(f, "Open Library"),
             Self::Hardcover => write!(f, "Hardcover"),
+            Self::Lccn => write!(f, "LCCN"),
         }
     }
 }
@@ -230,6 +232,7 @@ impl FromStr for IdentifierType {
             "google_books" | "googlebooks" => Ok(Self::GoogleBooks),
             "open_library" | "openlibrary" => Ok(Self::OpenLibrary),
             "hardcover" => Ok(Self::Hardcover),
+            "lccn" => Ok(Self::Lccn),
             _ => Err(format!("unknown identifier type: {s}")),
         }
     }
@@ -418,6 +421,7 @@ mod tests {
         assert_eq!(IdentifierType::GoogleBooks.to_string(), "Google Books");
         assert_eq!(IdentifierType::OpenLibrary.to_string(), "Open Library");
         assert_eq!(IdentifierType::Hardcover.to_string(), "Hardcover");
+        assert_eq!(IdentifierType::Lccn.to_string(), "LCCN");
     }
 
     #[test]
@@ -437,6 +441,10 @@ mod tests {
         assert_eq!(
             "google_books".parse::<IdentifierType>().unwrap(),
             IdentifierType::GoogleBooks,
+        );
+        assert_eq!(
+            "lccn".parse::<IdentifierType>().unwrap(),
+            IdentifierType::Lccn,
         );
         assert!("doi".parse::<IdentifierType>().is_err());
     }

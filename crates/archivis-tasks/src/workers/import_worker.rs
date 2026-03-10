@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use archivis_core::errors::TaskError;
 use archivis_core::models::TaskType;
+use archivis_db::MetadataRuleRepository;
 use archivis_storage::StorageBackend;
 
 use crate::import::{
@@ -64,9 +65,15 @@ impl<S: StorageBackend + 'static> Worker for ImportFileWorker<S> {
                 .send_progress(0, Some(format!("Importing: {}", file_path.display())))
                 .await;
 
+            // Load metadata rules once per task execution.
+            let metadata_rules: Vec<archivis_core::models::MetadataRule> =
+                MetadataRuleRepository::list_enabled(self.import_service.db_pool())
+                    .await
+                    .unwrap_or_default();
+
             let result = self
                 .import_service
-                .import_file(&file_path)
+                .import_file(&file_path, &metadata_rules)
                 .await
                 .map_err(|e| TaskError::Failed(e.to_string()))?;
 

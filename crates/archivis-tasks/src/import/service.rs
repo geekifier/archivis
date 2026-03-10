@@ -1,9 +1,10 @@
 use std::fmt::Write as _;
 use std::path::Path;
 
+use archivis_core::models::metadata_rule::is_trusted_publisher;
 use archivis_core::models::{
     Book, BookFile, BookFormat, DuplicateLink, FieldProvenance, Identifier, MetadataProvenance,
-    MetadataSource,
+    MetadataRule, MetadataSource, MetadataStatus,
 };
 use archivis_db::{
     AuthorRepository, BookFileRepository, BookRepository, DbPool, DuplicateRepository,
@@ -38,12 +39,25 @@ impl<S: StorageBackend> ImportService<S> {
         }
     }
 
+    /// Access the database pool (used by `BulkImportService` to load rules).
+    pub fn db_pool(&self) -> &DbPool {
+        &self.db_pool
+    }
+
     /// Import a single file from `source_path` into the library.
+    ///
+    /// When `metadata_rules` is non-empty, books whose publisher matches a
+    /// `TrustMetadata` rule are promoted to `Identified` regardless of ISBN
+    /// presence, with a confidence floor of 0.8.
     ///
     /// Returns an [`ImportResult`] on success, describing the created or matched
     /// book and file records.
     #[allow(clippy::too_many_lines)]
-    pub async fn import_file(&self, source_path: &Path) -> Result<ImportResult, ImportError> {
+    pub async fn import_file(
+        &self,
+        source_path: &Path,
+        metadata_rules: &[MetadataRule],
+    ) -> Result<ImportResult, ImportError> {
         // 1-5: Read, detect, extract, parse, score
         let data = tokio::fs::read(source_path).await?;
         let format = archivis_formats::detect::detect(&data)?;
@@ -55,11 +69,21 @@ impl<S: StorageBackend> ImportService<S> {
         let mut embedded = extract_metadata(format, &data);
         embedded.authors = archivis_formats::authors::normalize_authors(embedded.authors);
         let parsed = archivis_formats::filename::parse_path(source_path);
-        let score = archivis_formats::scoring::score_metadata(
+        let mut score = archivis_formats::scoring::score_metadata(
             &embedded,
             Some(&parsed),
             &self.config.scoring_profile,
         );
+
+        // Trusted publisher boost: if the embedded publisher matches a
+        // `TrustMetadata` rule, promote to `Identified` with a confidence floor.
+        if let Some(ref publisher_name) = embedded.publisher {
+            if is_trusted_publisher(metadata_rules, publisher_name) {
+                score.status = MetadataStatus::Identified;
+                score.confidence = score.confidence.max(0.8);
+                info!(publisher = %publisher_name, "trusted publisher — boosted to Identified");
+            }
+        }
 
         // 6: Hash check and ISBN duplicate check
         let hash = compute_sha256(&data);
@@ -741,6 +765,7 @@ fn identifier_type_to_db_str(id_type: archivis_core::models::IdentifierType) -> 
         IdentifierType::GoogleBooks => "google_books",
         IdentifierType::OpenLibrary => "open_library",
         IdentifierType::Hardcover => "hardcover",
+        IdentifierType::Lccn => "lccn",
     }
 }
 

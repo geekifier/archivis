@@ -102,6 +102,8 @@ pub struct MetadataConfig {
     pub open_library: OpenLibraryConfig,
     /// Hardcover provider settings.
     pub hardcover: HardcoverConfig,
+    /// Library of Congress provider settings.
+    pub loc: LocConfig,
     /// Automatically apply a resolved candidate when its score meets this threshold.
     pub auto_apply_threshold: f32,
     /// Maximum concurrent metadata resolution tasks.
@@ -117,6 +119,7 @@ impl Default for MetadataConfig {
             contact_email: None,
             open_library: OpenLibraryConfig::default(),
             hardcover: HardcoverConfig::default(),
+            loc: LocConfig::default(),
             auto_apply_threshold: 0.85,
             max_concurrent_resolutions: 2,
             scoring_profile: ScoringProfile::default(),
@@ -161,6 +164,25 @@ impl Default for HardcoverConfig {
             enabled: false,
             api_token: None,
             max_requests_per_minute: 50,
+        }
+    }
+}
+
+/// Library of Congress provider settings.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct LocConfig {
+    /// Whether LOC lookups are enabled.
+    pub enabled: bool,
+    /// Maximum requests per minute (default: 20).
+    pub max_requests_per_minute: u32,
+}
+
+impl Default for LocConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_requests_per_minute: 20,
         }
     }
 }
@@ -469,6 +491,11 @@ pub fn detect_env_overrides(cli: &Cli) -> HashMap<String, ConfigOverride> {
             "metadata.hardcover.max_requests_per_minute",
             "ARCHIVIS_METADATA__HARDCOVER__MAX_REQUESTS_PER_MINUTE",
         ),
+        ("metadata.loc.enabled", "ARCHIVIS_METADATA__LOC__ENABLED"),
+        (
+            "metadata.loc.max_requests_per_minute",
+            "ARCHIVIS_METADATA__LOC__MAX_REQUESTS_PER_MINUTE",
+        ),
         (
             "isbn_scan.scan_on_import",
             "ARCHIVIS_ISBN_SCAN__SCAN_ON_IMPORT",
@@ -697,6 +724,18 @@ fn apply_setting_to_config(config: &mut AppConfig, key: &str, value: &serde_json
             if let Some(n) = value.as_u64() {
                 if let Ok(v) = u32::try_from(n) {
                     config.metadata.hardcover.max_requests_per_minute = v;
+                }
+            }
+        }
+        "metadata.loc.enabled" => {
+            if let Some(b) = value.as_bool() {
+                config.metadata.loc.enabled = b;
+            }
+        }
+        "metadata.loc.max_requests_per_minute" => {
+            if let Some(n) = value.as_u64() {
+                if let Ok(v) = u32::try_from(n) {
+                    config.metadata.loc.max_requests_per_minute = v;
                 }
             }
         }

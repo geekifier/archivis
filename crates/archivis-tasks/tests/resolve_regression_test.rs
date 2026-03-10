@@ -54,6 +54,21 @@ struct FlexibleStubProvider {
     search_results: Vec<ProviderMetadata>,
 }
 
+static FLEX_STUB_CAPS: archivis_metadata::ProviderCapabilities =
+    archivis_metadata::ProviderCapabilities {
+        quality: archivis_metadata::ProviderQuality::Community,
+        default_rate_limit_rpm: 100,
+        supported_id_lookups: &[
+            IdentifierType::Isbn13,
+            IdentifierType::Isbn10,
+            IdentifierType::Asin,
+        ],
+        features: &[
+            archivis_metadata::ProviderFeature::Search,
+            archivis_metadata::ProviderFeature::Covers,
+        ],
+    };
+
 #[async_trait::async_trait]
 impl MetadataProvider for FlexibleStubProvider {
     fn name(&self) -> &'static str {
@@ -62,6 +77,10 @@ impl MetadataProvider for FlexibleStubProvider {
 
     fn is_available(&self) -> bool {
         true
+    }
+
+    fn capabilities(&self) -> &'static archivis_metadata::ProviderCapabilities {
+        &FLEX_STUB_CAPS
     }
 
     async fn lookup_isbn(

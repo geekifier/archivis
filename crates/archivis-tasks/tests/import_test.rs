@@ -267,7 +267,7 @@ async fn import_valid_epub() {
     let epub_path = tmp.path().join("dune.epub");
     std::fs::write(&epub_path, &epub_bytes).unwrap();
 
-    let result = service.import_file(&epub_path).await.unwrap();
+    let result = service.import_file(&epub_path, &[]).await.unwrap();
 
     assert!(result.duplicate.is_none());
     assert_eq!(
@@ -306,7 +306,7 @@ async fn import_sets_pending_resolution_and_protected_provenance() {
     let epub_path = tmp.path().join("dune.epub");
     std::fs::write(&epub_path, &epub_bytes).unwrap();
 
-    let result = service.import_file(&epub_path).await.unwrap();
+    let result = service.import_file(&epub_path, &[]).await.unwrap();
     let pool = get_pool(&tmp).await;
     let book = BookRepository::get_by_id(&pool, result.book_id)
         .await
@@ -376,7 +376,7 @@ async fn manual_isbn_scan_noop_does_not_enqueue_resolution_child() {
     let epub_bytes = create_test_epub("Dune", "Frank Herbert");
     let epub_path = tmp.path().join("dune.epub");
     std::fs::write(&epub_path, &epub_bytes).unwrap();
-    let import_result = import_service.import_file(&epub_path).await.unwrap();
+    let import_result = import_service.import_file(&epub_path, &[]).await.unwrap();
 
     let pool = get_pool(&tmp).await;
     let existing = Identifier::new(
@@ -432,11 +432,11 @@ async fn import_duplicate_hash() {
     std::fs::write(&epub_path, &epub_bytes).unwrap();
 
     // First import succeeds
-    let result = service.import_file(&epub_path).await.unwrap();
+    let result = service.import_file(&epub_path, &[]).await.unwrap();
     assert!(result.duplicate.is_none());
 
     // Second import of same file should fail with DuplicateFile
-    let err = service.import_file(&epub_path).await.unwrap_err();
+    let err = service.import_file(&epub_path, &[]).await.unwrap_err();
     assert!(
         matches!(err, ImportError::DuplicateFile { .. }),
         "expected DuplicateFile error, got: {err:?}"
@@ -453,7 +453,7 @@ async fn import_unknown_format() {
     let junk_path = tmp.path().join("mystery.dat");
     std::fs::write(&junk_path, &junk).unwrap();
 
-    let err = service.import_file(&junk_path).await.unwrap_err();
+    let err = service.import_file(&junk_path, &[]).await.unwrap_err();
     assert!(
         matches!(err, ImportError::InvalidFile(_)),
         "expected InvalidFile error, got: {err:?}"
@@ -466,7 +466,7 @@ async fn import_nonexistent_file() {
     let service = setup_test_env(&tmp).await;
 
     let result = service
-        .import_file(Path::new("/nonexistent/file.epub"))
+        .import_file(Path::new("/nonexistent/file.epub"), &[])
         .await;
     assert!(result.is_err());
     assert!(matches!(result.unwrap_err(), ImportError::Io(_)));
@@ -486,7 +486,7 @@ async fn import_real_epub_with_svg_cover() {
     let tmp = TempDir::new().unwrap();
     let service = setup_test_env(&tmp).await;
 
-    let result = service.import_file(&epub_path).await.unwrap();
+    let result = service.import_file(&epub_path, &[]).await.unwrap();
 
     assert!(result.cover_extracted, "cover_extracted should be true");
 
@@ -527,7 +527,7 @@ async fn import_epub_with_svg_cover_generates_thumbnails() {
     let epub_path = tmp.path().join("frankenstein.epub");
     std::fs::write(&epub_path, &epub_bytes).unwrap();
 
-    let result = service.import_file(&epub_path).await.unwrap();
+    let result = service.import_file(&epub_path, &[]).await.unwrap();
 
     assert!(result.duplicate.is_none());
     assert!(result.cover_extracted, "cover_extracted should be true");
@@ -581,13 +581,13 @@ async fn import_epub_then_pdf_links_to_same_book() {
     let epub_bytes = create_test_epub("Starship Troopers", "Robert A. Heinlein");
     let epub_path = tmp.path().join("starship_troopers.epub");
     std::fs::write(&epub_path, &epub_bytes).unwrap();
-    let r1 = service.import_file(&epub_path).await.unwrap();
+    let r1 = service.import_file(&epub_path, &[]).await.unwrap();
 
     // Import PDF with identical metadata — should auto-link
     let pdf_bytes = create_test_pdf("Starship Troopers", "Robert A. Heinlein");
     let pdf_path = tmp.path().join("starship_troopers.pdf");
     std::fs::write(&pdf_path, &pdf_bytes).unwrap();
-    let r2 = service.import_file(&pdf_path).await.unwrap();
+    let r2 = service.import_file(&pdf_path, &[]).await.unwrap();
 
     assert_eq!(
         r1.book_id, r2.book_id,
@@ -620,7 +620,7 @@ async fn import_same_format_different_content_creates_new_book() {
     let epub1 = create_test_epub("Dune", "Frank Herbert");
     let epub1_path = tmp.path().join("dune_v1.epub");
     std::fs::write(&epub1_path, &epub1).unwrap();
-    let r1 = service.import_file(&epub1_path).await.unwrap();
+    let r1 = service.import_file(&epub1_path, &[]).await.unwrap();
 
     // Import second EPUB with same metadata but different content (different hash)
     // The create_test_epub in import_test uses a fixed UUID, so we need a slightly
@@ -685,7 +685,7 @@ async fn import_same_format_different_content_creates_new_book() {
     };
     let epub2_path = tmp.path().join("dune_v2.epub");
     std::fs::write(&epub2_path, &epub2).unwrap();
-    let r2 = service.import_file(&epub2_path).await.unwrap();
+    let r2 = service.import_file(&epub2_path, &[]).await.unwrap();
 
     // Same format guard should prevent auto-linking
     assert_ne!(
@@ -705,12 +705,12 @@ async fn import_low_similarity_does_not_auto_link() {
     let epub = create_test_epub("Dune", "Frank Herbert");
     let epub_path = tmp.path().join("dune.epub");
     std::fs::write(&epub_path, &epub).unwrap();
-    let r1 = service.import_file(&epub_path).await.unwrap();
+    let r1 = service.import_file(&epub_path, &[]).await.unwrap();
 
     let pdf = create_test_pdf("Dune Messiah", "Frank Herbert");
     let pdf_path = tmp.path().join("dune_messiah.pdf");
     std::fs::write(&pdf_path, &pdf).unwrap();
-    let r2 = service.import_file(&pdf_path).await.unwrap();
+    let r2 = service.import_file(&pdf_path, &[]).await.unwrap();
 
     assert_ne!(
         r1.book_id, r2.book_id,
@@ -728,12 +728,12 @@ async fn import_different_authors_not_auto_linked() {
     let epub = create_test_epub("Algorithms", "Robert Sedgewick");
     let epub_path = tmp.path().join("algorithms_sedgewick.epub");
     std::fs::write(&epub_path, &epub).unwrap();
-    let r1 = service.import_file(&epub_path).await.unwrap();
+    let r1 = service.import_file(&epub_path, &[]).await.unwrap();
 
     let pdf = create_test_pdf("Algorithms", "Thomas H. Cormen");
     let pdf_path = tmp.path().join("algorithms_cormen.pdf");
     std::fs::write(&pdf_path, &pdf).unwrap();
-    let r2 = service.import_file(&pdf_path).await.unwrap();
+    let r2 = service.import_file(&pdf_path, &[]).await.unwrap();
 
     assert_ne!(
         r1.book_id, r2.book_id,
@@ -751,7 +751,7 @@ async fn self_duplicate_link_not_created() {
     let epub = create_test_epub("Dune", "Frank Herbert");
     let epub_path = tmp.path().join("dune.epub");
     std::fs::write(&epub_path, &epub).unwrap();
-    let r = service.import_file(&epub_path).await.unwrap();
+    let r = service.import_file(&epub_path, &[]).await.unwrap();
 
     let pool = get_pool(&tmp).await;
     let links = DuplicateRepository::find_for_book(&pool, r.book_id)
@@ -783,13 +783,13 @@ async fn auto_link_disabled_creates_separate_books() {
     let epub = create_test_epub("Permanent Record", "Edward Snowden");
     let epub_path = tmp.path().join("permanent_record.epub");
     std::fs::write(&epub_path, &epub).unwrap();
-    let r1 = service.import_file(&epub_path).await.unwrap();
+    let r1 = service.import_file(&epub_path, &[]).await.unwrap();
 
     // Import PDF with identical metadata — should NOT auto-link because setting is off
     let pdf = create_test_pdf("Permanent Record", "Edward Snowden");
     let pdf_path = tmp.path().join("permanent_record.pdf");
     std::fs::write(&pdf_path, &pdf).unwrap();
-    let r2 = service.import_file(&pdf_path).await.unwrap();
+    let r2 = service.import_file(&pdf_path, &[]).await.unwrap();
 
     assert_ne!(
         r1.book_id, r2.book_id,
@@ -815,13 +815,13 @@ async fn import_article_title_links_to_same_book() {
     let epub = create_test_epub("The Ballad of Songbirds and Snakes", "Suzanne Collins");
     let epub_path = tmp.path().join("ballad.epub");
     std::fs::write(&epub_path, &epub).unwrap();
-    let r1 = service.import_file(&epub_path).await.unwrap();
+    let r1 = service.import_file(&epub_path, &[]).await.unwrap();
 
     // Import PDF with identical metadata — should auto-link
     let pdf = create_test_pdf("The Ballad of Songbirds and Snakes", "Suzanne Collins");
     let pdf_path = tmp.path().join("ballad.pdf");
     std::fs::write(&pdf_path, &pdf).unwrap();
-    let r2 = service.import_file(&pdf_path).await.unwrap();
+    let r2 = service.import_file(&pdf_path, &[]).await.unwrap();
 
     assert_eq!(
         r1.book_id, r2.book_id,
@@ -851,7 +851,7 @@ async fn import_epub_normalizes_semicolon_authors() {
     let path = tmp.path().join("multi_author.epub");
     std::fs::write(&path, &epub).unwrap();
 
-    let result = service.import_file(&path).await.unwrap();
+    let result = service.import_file(&path, &[]).await.unwrap();
 
     let pool = get_pool(&tmp).await;
     let book = BookRepository::get_with_relations(&pool, result.book_id)
@@ -888,12 +888,12 @@ async fn import_short_word_title_links_to_same_book() {
     let epub = create_test_epub("In Plain Sight", "Ross Coulthart");
     let epub_path = tmp.path().join("in_plain_sight.epub");
     std::fs::write(&epub_path, &epub).unwrap();
-    let r1 = service.import_file(&epub_path).await.unwrap();
+    let r1 = service.import_file(&epub_path, &[]).await.unwrap();
 
     let pdf = create_test_pdf("In Plain Sight", "Ross Coulthart");
     let pdf_path = tmp.path().join("in_plain_sight.pdf");
     std::fs::write(&pdf_path, &pdf).unwrap();
-    let r2 = service.import_file(&pdf_path).await.unwrap();
+    let r2 = service.import_file(&pdf_path, &[]).await.unwrap();
 
     assert_eq!(
         r1.book_id, r2.book_id,
@@ -921,12 +921,12 @@ async fn import_mismatched_authors_flags_duplicate() {
     let epub = create_test_epub("Welcome to MyAnonamouse", "Author Alpha");
     let epub_path = tmp.path().join("mam_alpha.epub");
     std::fs::write(&epub_path, &epub).unwrap();
-    let r1 = service.import_file(&epub_path).await.unwrap();
+    let r1 = service.import_file(&epub_path, &[]).await.unwrap();
 
     let pdf = create_test_pdf("Welcome to MyAnonamouse", "Author Beta");
     let pdf_path = tmp.path().join("mam_beta.pdf");
     std::fs::write(&pdf_path, &pdf).unwrap();
-    let r2 = service.import_file(&pdf_path).await.unwrap();
+    let r2 = service.import_file(&pdf_path, &[]).await.unwrap();
 
     assert_ne!(
         r1.book_id, r2.book_id,
@@ -957,13 +957,13 @@ async fn import_one_empty_author_flags_duplicate() {
     let epub = create_test_epub("Welcome to MyAnonamouse", "Some Author");
     let epub_path = tmp.path().join("mam_with_author.epub");
     std::fs::write(&epub_path, &epub).unwrap();
-    let r1 = service.import_file(&epub_path).await.unwrap();
+    let r1 = service.import_file(&epub_path, &[]).await.unwrap();
 
     // PDF with empty author — the filename-based fallback will yield "Unknown Author"
     let pdf = create_test_pdf("Welcome to MyAnonamouse", "");
     let pdf_path = tmp.path().join("mam_no_author.pdf");
     std::fs::write(&pdf_path, &pdf).unwrap();
-    let r2 = service.import_file(&pdf_path).await.unwrap();
+    let r2 = service.import_file(&pdf_path, &[]).await.unwrap();
 
     assert_ne!(
         r1.book_id, r2.book_id,
@@ -995,7 +995,7 @@ async fn import_best_candidate_preferred() {
     let epub1 = create_test_epub("Algorithms Unlocked", "Author X");
     let epub1_path = tmp.path().join("algo_x.epub");
     std::fs::write(&epub1_path, &epub1).unwrap();
-    let r1 = service.import_file(&epub1_path).await.unwrap();
+    let r1 = service.import_file(&epub1_path, &[]).await.unwrap();
 
     // Use a variant EPUB (different UUID → different hash) for the second book
     let epub2 = {
@@ -1058,7 +1058,7 @@ async fn import_best_candidate_preferred() {
     };
     let epub2_path = tmp.path().join("algo_y.epub");
     std::fs::write(&epub2_path, &epub2).unwrap();
-    let r2 = service.import_file(&epub2_path).await.unwrap();
+    let r2 = service.import_file(&epub2_path, &[]).await.unwrap();
 
     assert_ne!(
         r1.book_id, r2.book_id,
@@ -1069,7 +1069,7 @@ async fn import_best_candidate_preferred() {
     let pdf = create_test_pdf("Algorithms Unlocked", "Author Y");
     let pdf_path = tmp.path().join("algo_y.pdf");
     std::fs::write(&pdf_path, &pdf).unwrap();
-    let r3 = service.import_file(&pdf_path).await.unwrap();
+    let r3 = service.import_file(&pdf_path, &[]).await.unwrap();
 
     assert_eq!(
         r3.book_id, r2.book_id,

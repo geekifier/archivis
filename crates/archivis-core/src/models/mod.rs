@@ -5,6 +5,7 @@ mod candidate;
 mod duplicate;
 mod enums;
 mod identifier;
+pub mod metadata_rule;
 mod publisher;
 mod reading_progress;
 mod resolution_run;
@@ -27,6 +28,7 @@ pub use enums::{
     ScoringProfile,
 };
 pub use identifier::Identifier;
+pub use metadata_rule::{MatchMode, MetadataRule, MetadataRuleType, RuleOutcome};
 pub use publisher::Publisher;
 pub use reading_progress::{Bookmark, ReadingProgress};
 pub use resolution_run::{ResolutionRun, ResolutionRunState};

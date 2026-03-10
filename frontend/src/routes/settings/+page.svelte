@@ -7,6 +7,7 @@
   import { Button } from '$lib/components/ui/button/index.js';
   import { Separator } from '$lib/components/ui/separator/index.js';
   import UserManagement from '$lib/components/settings/UserManagement.svelte';
+  import MetadataRulesSettings from '$lib/components/settings/MetadataRulesSettings.svelte';
   import WatchedDirectoriesSettings from '$lib/components/settings/WatchedDirectoriesSettings.svelte';
 
   // Admin guard
@@ -344,6 +345,11 @@
 
   <!-- Watched Directories section (always visible, handles its own loading) -->
   <WatchedDirectoriesSettings />
+
+  <Separator />
+
+  <!-- Metadata Rules section -->
+  <MetadataRulesSettings />
 
   {#if loading}
     <div class="flex items-center justify-center py-12">

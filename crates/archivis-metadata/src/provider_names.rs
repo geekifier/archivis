@@ -7,3 +7,4 @@
 pub const OPEN_LIBRARY: &str = "open_library";
 pub const HARDCOVER: &str = "hardcover";
 pub const GOOGLE_BOOKS: &str = "google_books";
+pub const LOC: &str = "loc";

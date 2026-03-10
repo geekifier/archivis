@@ -148,6 +148,21 @@ impl StubProvider {
     }
 }
 
+static COVER_STUB_CAPS: archivis_metadata::ProviderCapabilities =
+    archivis_metadata::ProviderCapabilities {
+        quality: archivis_metadata::ProviderQuality::Community,
+        default_rate_limit_rpm: 100,
+        supported_id_lookups: &[
+            archivis_core::models::IdentifierType::Isbn13,
+            archivis_core::models::IdentifierType::Isbn10,
+            archivis_core::models::IdentifierType::Asin,
+        ],
+        features: &[
+            archivis_metadata::ProviderFeature::Search,
+            archivis_metadata::ProviderFeature::Covers,
+        ],
+    };
+
 #[async_trait::async_trait]
 impl MetadataProvider for StubProvider {
     fn name(&self) -> &'static str {
@@ -156,6 +171,10 @@ impl MetadataProvider for StubProvider {
 
     fn is_available(&self) -> bool {
         true
+    }
+
+    fn capabilities(&self) -> &'static archivis_metadata::ProviderCapabilities {
+        &COVER_STUB_CAPS
     }
 
     async fn lookup_isbn(

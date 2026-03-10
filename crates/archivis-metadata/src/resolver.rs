@@ -44,7 +44,7 @@ use crate::provider::MetadataProvider;
 use crate::provider_names;
 use crate::registry::ProviderRegistry;
 use crate::similarity;
-use crate::types::{MetadataQuery, ProviderIdentifier, ProviderMetadata};
+use crate::types::{MetadataQuery, ProviderFeature, ProviderIdentifier, ProviderMetadata};
 
 // ── Scoring constants ───────────────────────────────────────────────
 
@@ -65,6 +65,10 @@ const PUBLISHER_MATCH_BONUS: f32 = 0.05;
 
 /// Bonus when multiple providers return the same book.
 const CROSS_PROVIDER_BONUS: f32 = 0.1;
+
+/// Maximum bonus for candidate field completeness (data richness).
+/// Awarded proportionally to the number of valuable metadata fields present.
+const FIELD_COMPLETENESS_MAX_BONUS: f32 = 0.05;
 
 /// Penalty when candidate title is very different from existing title.
 const CONTRADICTION_PENALTY: f32 = 0.15;
@@ -202,6 +206,8 @@ pub struct ScoredCandidate {
     signals: HashSet<MatchSignal>,
     /// Match confidence tier, assigned after scoring/dedup.
     pub tier: CandidateMatchTier,
+    /// Cached count of populated metadata fields for sort tiebreaking.
+    pub field_count: usize,
 }
 
 impl ScoredCandidate {
@@ -219,6 +225,7 @@ impl ScoredCandidate {
             match_reasons,
             signals: HashSet::new(),
             tier: CandidateMatchTier::WeakMatch,
+            field_count: 0,
         }
     }
 }
@@ -322,12 +329,13 @@ impl MetadataResolver {
         // Phase 4: Deduplication and cross-provider bonuses.
         deduplicate_and_boost(&mut all_candidates);
 
-        // Phase 5: Sort by score descending.
-        all_candidates.sort_by(|a, b| {
-            b.score
-                .partial_cmp(&a.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        // Recompute cached `field_count` after merges may have changed metadata.
+        for candidate in &mut all_candidates {
+            candidate.field_count = FieldCounts::of(&candidate.metadata).present;
+        }
+
+        // Phase 5: Sort by score descending, then by field count (richer first).
+        all_candidates.sort_by(cmp_candidates);
 
         // Phase 6: Assign match tiers and apply tier-based score adjustment.
         for candidate in &mut all_candidates {
@@ -350,11 +358,7 @@ impl MetadataResolver {
         }
 
         // Re-sort after tier adjustment (tier multiplier can change relative ordering).
-        all_candidates.sort_by(|a, b| {
-            b.score
-                .partial_cmp(&a.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        all_candidates.sort_by(cmp_candidates);
 
         // Phase 7: Determine auto-apply.
         let best_match = all_candidates.first().cloned();
@@ -469,29 +473,50 @@ impl MetadataResolver {
         let mut candidates = Vec::new();
 
         // Fire ISBN and ASIN lookups concurrently when both are present;
-        // each branch already fans out across providers via join_all.
+        // each branch already fans out across providers via `join_all`.
+        // Only send lookups to providers that advertise support.
         match (&query.isbn, &query.asin) {
             (Some(isbn), Some(asin)) => {
+                let isbn_provs = filter_providers(
+                    providers,
+                    |p| p.capabilities().supports_isbn(),
+                    "skipping ISBN lookup (not supported)",
+                );
+                let asin_provs = filter_providers(
+                    providers,
+                    |p| p.capabilities().supports_id_lookup(IdentifierType::Asin),
+                    "skipping ASIN lookup (not supported)",
+                );
                 let normalized_asin = normalize_asin(asin);
                 debug!(isbn = %isbn, "resolving metadata via ISBN lookup");
                 debug!(asin = %normalized_asin, "resolving metadata via ASIN lookup");
                 let (isbn_results, asin_results) = tokio::join!(
-                    query_providers_by_id(providers, isbn, IdentifierLookup::Isbn),
-                    query_providers_by_id(providers, &normalized_asin, IdentifierLookup::Asin),
+                    query_providers_by_id(&isbn_provs, isbn, IdentifierLookup::Isbn),
+                    query_providers_by_id(&asin_provs, &normalized_asin, IdentifierLookup::Asin),
                 );
                 candidates.extend(isbn_results);
                 candidates.extend(asin_results);
             }
             (Some(isbn), None) => {
+                let isbn_provs = filter_providers(
+                    providers,
+                    |p| p.capabilities().supports_isbn(),
+                    "skipping ISBN lookup (not supported)",
+                );
                 debug!(isbn = %isbn, "resolving metadata via ISBN lookup");
                 candidates
-                    .extend(query_providers_by_id(providers, isbn, IdentifierLookup::Isbn).await);
+                    .extend(query_providers_by_id(&isbn_provs, isbn, IdentifierLookup::Isbn).await);
             }
             (None, Some(asin)) => {
+                let asin_provs = filter_providers(
+                    providers,
+                    |p| p.capabilities().supports_id_lookup(IdentifierType::Asin),
+                    "skipping ASIN lookup (not supported)",
+                );
                 let normalized = normalize_asin(asin);
                 debug!(asin = %normalized, "resolving metadata via ASIN lookup");
                 candidates.extend(
-                    query_providers_by_id(providers, &normalized, IdentifierLookup::Asin).await,
+                    query_providers_by_id(&asin_provs, &normalized, IdentifierLookup::Asin).await,
                 );
             }
             (None, None) => {}
@@ -506,10 +531,15 @@ impl MetadataResolver {
             return candidates;
         }
 
-        // Title+author search fallback.
+        // Title+author search fallback — only providers that support `Search`.
         if query.title.is_some() {
             debug!("no identifier results, falling back to title+author search");
-            let mut search_candidates = query_providers_search(providers, query).await;
+            let search_provs = filter_providers(
+                providers,
+                |p| p.capabilities().has_feature(ProviderFeature::Search),
+                "skipping search (not supported)",
+            );
+            let mut search_candidates = query_providers_search(&search_provs, query).await;
             filter_unsupported_candidates(&mut search_candidates);
             search_candidates
         } else {
@@ -517,6 +547,26 @@ impl MetadataResolver {
             Vec::new()
         }
     }
+}
+
+/// Filter providers by a capability predicate, logging skipped providers.
+fn filter_providers(
+    providers: &[Arc<dyn MetadataProvider>],
+    predicate: impl Fn(&dyn MetadataProvider) -> bool,
+    skip_reason: &str,
+) -> Vec<Arc<dyn MetadataProvider>> {
+    providers
+        .iter()
+        .filter(|p| {
+            if predicate(p.as_ref()) {
+                true
+            } else {
+                debug!(provider = %p.name(), "{skip_reason}");
+                false
+            }
+        })
+        .cloned()
+        .collect()
 }
 
 /// Kind of identifier lookup to dispatch.
@@ -574,6 +624,7 @@ async fn query_providers_by_id(
             match_reasons: Vec::new(),
             signals: HashSet::new(),
             tier: CandidateMatchTier::WeakMatch,
+            field_count: 0,
             metadata,
         })
         .collect()
@@ -618,6 +669,7 @@ async fn query_providers_search(
             match_reasons: Vec::new(),
             signals: HashSet::new(),
             tier: CandidateMatchTier::WeakMatch,
+            field_count: 0,
             metadata,
         })
         .collect()
@@ -634,6 +686,52 @@ fn empty_result() -> ResolverResult {
 }
 
 // ── Scoring helpers ─────────────────────────────────────────────────
+
+/// Populated-field statistics for a candidate's metadata.
+///
+/// Single source of truth for which fields count toward "data richness",
+/// so the scoring bonus and sort tiebreaker stay in sync even as
+/// `ProviderMetadata` evolves.
+struct FieldCounts {
+    present: usize,
+    total: usize,
+}
+
+impl FieldCounts {
+    fn of(metadata: &ProviderMetadata) -> Self {
+        let fields: &[bool] = &[
+            metadata.subtitle.is_some(),
+            !metadata.authors.is_empty(),
+            metadata.description.is_some(),
+            metadata.publisher.is_some(),
+            metadata.publication_year.is_some(),
+            metadata.cover_url.is_some(),
+            !metadata.subjects.is_empty(),
+            metadata.series.is_some(),
+            metadata.page_count.is_some(),
+            metadata.language.is_some(),
+        ];
+        let present = fields.iter().filter(|&&f| f).count();
+        Self {
+            present,
+            total: fields.len(),
+        }
+    }
+
+    /// Completeness as a 0.0–1.0 ratio.
+    #[allow(clippy::cast_precision_loss)]
+    fn ratio(&self) -> f32 {
+        self.present as f32 / self.total as f32
+    }
+}
+
+/// Compare candidates by score descending, then by field count (richer first).
+fn cmp_candidates(a: &ScoredCandidate, b: &ScoredCandidate) -> std::cmp::Ordering {
+    b.score
+        .partial_cmp(&a.score)
+        .unwrap_or(std::cmp::Ordering::Equal)
+        .then_with(|| b.field_count.cmp(&a.field_count))
+}
 
 /// Score an individual candidate based on the query and existing metadata.
 fn score_candidate(
@@ -721,6 +819,12 @@ fn score_candidate(
             }
         }
     }
+
+    // ── Field completeness bonus ──
+    // Reward candidates that have more metadata fields populated.
+    let counts = FieldCounts::of(&candidate.metadata);
+    candidate.field_count = counts.present;
+    score += counts.ratio() * FIELD_COMPLETENESS_MAX_BONUS;
 
     // Clamp to 0.0-1.0.
     score = score.clamp(0.0, 1.0);
@@ -909,7 +1013,7 @@ fn deduplicate_and_boost(candidates: &mut Vec<ScoredCandidate>) {
                     &loser_metadata,
                     &mut reasons,
                 );
-                reasons.push(format!("Merged with {loser_name} (ISBN match)"));
+                reasons.push(format!("Merged with {loser_name} (shared ISBN)"));
                 candidates[winner_idx].match_reasons = reasons;
                 consumed[loser_idx] = true;
                 claimed[loser_idx] = true;
@@ -1283,6 +1387,7 @@ fn identifier_type_belongs_to_provider(id_type: IdentifierType, provider: &str) 
         IdentifierType::OpenLibrary => provider == provider_names::OPEN_LIBRARY,
         IdentifierType::Hardcover => provider == provider_names::HARDCOVER,
         IdentifierType::GoogleBooks => provider == provider_names::GOOGLE_BOOKS,
+        IdentifierType::Lccn => provider == provider_names::LOC,
         // Portable types don't belong to any single provider.
         IdentifierType::Isbn13 | IdentifierType::Isbn10 | IdentifierType::Asin => false,
     }
@@ -1391,12 +1496,29 @@ mod tests {
         assert!((resolver.auto_apply_threshold() - 0.92).abs() < f32::EPSILON);
     }
 
+    use crate::types::{ProviderCapabilities, ProviderFeature, ProviderQuality};
+
+    /// Default "supports everything" capabilities for test stubs.
+    static STUB_CAPABILITIES: ProviderCapabilities = ProviderCapabilities {
+        quality: ProviderQuality::Community,
+        default_rate_limit_rpm: 100,
+        supported_id_lookups: &[
+            IdentifierType::Isbn13,
+            IdentifierType::Isbn10,
+            IdentifierType::Asin,
+            IdentifierType::Lccn,
+            IdentifierType::Hardcover,
+        ],
+        features: &[ProviderFeature::Search, ProviderFeature::Covers],
+    };
+
     /// A configurable stub provider for testing the resolver.
     struct StubProvider {
         name: String,
         isbn_results: Vec<ProviderMetadata>,
         asin_results: Vec<ProviderMetadata>,
         search_results: Vec<ProviderMetadata>,
+        capabilities: &'static ProviderCapabilities,
     }
 
     impl StubProvider {
@@ -1406,6 +1528,7 @@ mod tests {
                 isbn_results: Vec::new(),
                 asin_results: Vec::new(),
                 search_results: Vec::new(),
+                capabilities: &STUB_CAPABILITIES,
             }
         }
 
@@ -1423,6 +1546,11 @@ mod tests {
             self.search_results = results;
             self
         }
+
+        fn with_capabilities(mut self, caps: &'static ProviderCapabilities) -> Self {
+            self.capabilities = caps;
+            self
+        }
     }
 
     #[async_trait]
@@ -1433,6 +1561,10 @@ mod tests {
 
         fn is_available(&self) -> bool {
             true
+        }
+
+        fn capabilities(&self) -> &'static ProviderCapabilities {
+            self.capabilities
         }
 
         async fn lookup_isbn(&self, _isbn: &str) -> Result<Vec<ProviderMetadata>, ProviderError> {
@@ -1745,6 +1877,7 @@ mod tests {
             match_reasons: Vec::new(),
             signals: HashSet::new(),
             tier: CandidateMatchTier::WeakMatch,
+            field_count: 0,
         };
         let b = ScoredCandidate {
             metadata: make_metadata("hc", "Dune", &["Frank Herbert"], Some("9780441172719"), 0.9),
@@ -1753,6 +1886,7 @@ mod tests {
             match_reasons: Vec::new(),
             signals: HashSet::new(),
             tier: CandidateMatchTier::WeakMatch,
+            field_count: 0,
         };
         assert_eq!(book_match_strength(&a, &b), BookMatch::Strong);
     }
@@ -1766,6 +1900,7 @@ mod tests {
             match_reasons: Vec::new(),
             signals: HashSet::new(),
             tier: CandidateMatchTier::WeakMatch,
+            field_count: 0,
         };
         let b = ScoredCandidate {
             metadata: make_metadata("hc", "Dune", &["Herbert, Frank"], None, 0.9),
@@ -1774,6 +1909,7 @@ mod tests {
             match_reasons: Vec::new(),
             signals: HashSet::new(),
             tier: CandidateMatchTier::WeakMatch,
+            field_count: 0,
         };
         assert_eq!(book_match_strength(&a, &b), BookMatch::Fuzzy);
     }
@@ -1787,6 +1923,7 @@ mod tests {
             match_reasons: Vec::new(),
             signals: HashSet::new(),
             tier: CandidateMatchTier::WeakMatch,
+            field_count: 0,
         };
         let b = ScoredCandidate {
             metadata: make_metadata("hc", "Foundation", &["Isaac Asimov"], None, 0.9),
@@ -1795,6 +1932,7 @@ mod tests {
             match_reasons: Vec::new(),
             signals: HashSet::new(),
             tier: CandidateMatchTier::WeakMatch,
+            field_count: 0,
         };
         assert_eq!(book_match_strength(&a, &b), BookMatch::No);
     }
@@ -1808,6 +1946,7 @@ mod tests {
             match_reasons: vec!["ISBN exact match".to_string()],
             signals: HashSet::from([MatchSignal::IsbnMatch]),
             tier: CandidateMatchTier::WeakMatch,
+            field_count: 0,
         };
         assert!(
             !has_multi_signal(&candidate),
@@ -1829,6 +1968,7 @@ mod tests {
                 .into_iter()
                 .collect(),
             tier: CandidateMatchTier::WeakMatch,
+            field_count: 0,
         };
         assert!(
             has_multi_signal(&candidate),
@@ -1936,6 +2076,7 @@ mod tests {
                 match_reasons: Vec::new(),
                 signals: HashSet::new(),
                 tier: CandidateMatchTier::WeakMatch,
+                field_count: 0,
             },
             ScoredCandidate {
                 metadata: make_metadata(
@@ -1950,6 +2091,7 @@ mod tests {
                 match_reasons: Vec::new(),
                 signals: HashSet::new(),
                 tier: CandidateMatchTier::WeakMatch,
+                field_count: 0,
             },
         ];
 
@@ -1978,6 +2120,7 @@ mod tests {
                 match_reasons: Vec::new(),
                 signals: HashSet::new(),
                 tier: CandidateMatchTier::WeakMatch,
+                field_count: 0,
             },
             ScoredCandidate {
                 metadata: make_metadata(
@@ -1992,6 +2135,7 @@ mod tests {
                 match_reasons: Vec::new(),
                 signals: HashSet::new(),
                 tier: CandidateMatchTier::WeakMatch,
+                field_count: 0,
             },
         ];
 
@@ -2041,6 +2185,7 @@ mod tests {
                 match_reasons: Vec::new(),
                 signals: HashSet::new(),
                 tier: CandidateMatchTier::WeakMatch,
+                field_count: 0,
             },
             ScoredCandidate {
                 metadata: make_metadata(
@@ -2055,6 +2200,7 @@ mod tests {
                 match_reasons: Vec::new(),
                 signals: HashSet::new(),
                 tier: CandidateMatchTier::WeakMatch,
+                field_count: 0,
             },
         ];
 
@@ -2122,6 +2268,7 @@ mod tests {
                 match_reasons: Vec::new(),
                 signals: HashSet::new(),
                 tier: CandidateMatchTier::WeakMatch,
+                field_count: 0,
             },
             ScoredCandidate {
                 metadata: low_score,
@@ -2130,6 +2277,7 @@ mod tests {
                 match_reasons: Vec::new(),
                 signals: HashSet::new(),
                 tier: CandidateMatchTier::WeakMatch,
+                field_count: 0,
             },
         ];
 
@@ -2227,6 +2375,7 @@ mod tests {
             match_reasons: reasons,
             signals,
             tier,
+            field_count: 0,
         }
     }
 
@@ -2740,6 +2889,7 @@ mod tests {
                 match_reasons: Vec::new(),
                 signals: HashSet::new(),
                 tier: CandidateMatchTier::WeakMatch,
+                field_count: 0,
             },
             ScoredCandidate {
                 metadata: hc_meta,
@@ -2748,6 +2898,7 @@ mod tests {
                 match_reasons: Vec::new(),
                 signals: HashSet::new(),
                 tier: CandidateMatchTier::WeakMatch,
+                field_count: 0,
             },
         ];
 
@@ -2815,6 +2966,7 @@ mod tests {
                 match_reasons: Vec::new(),
                 signals: HashSet::new(),
                 tier: CandidateMatchTier::WeakMatch,
+                field_count: 0,
             },
             ScoredCandidate {
                 metadata: hc_meta,
@@ -2823,6 +2975,7 @@ mod tests {
                 match_reasons: Vec::new(),
                 signals: HashSet::new(),
                 tier: CandidateMatchTier::WeakMatch,
+                field_count: 0,
             },
         ];
 
@@ -2864,6 +3017,7 @@ mod tests {
                 match_reasons: Vec::new(),
                 signals: HashSet::new(),
                 tier: CandidateMatchTier::WeakMatch,
+                field_count: 0,
             },
             ScoredCandidate {
                 metadata: make_metadata(
@@ -2878,6 +3032,7 @@ mod tests {
                 match_reasons: Vec::new(),
                 signals: HashSet::new(),
                 tier: CandidateMatchTier::WeakMatch,
+                field_count: 0,
             },
         ];
 
@@ -2938,6 +3093,7 @@ mod tests {
                 match_reasons: Vec::new(),
                 signals: HashSet::new(),
                 tier: CandidateMatchTier::WeakMatch,
+                field_count: 0,
             },
             ScoredCandidate {
                 metadata: hc_meta,
@@ -2946,6 +3102,7 @@ mod tests {
                 match_reasons: Vec::new(),
                 signals: HashSet::new(),
                 tier: CandidateMatchTier::WeakMatch,
+                field_count: 0,
             },
         ];
 
@@ -2985,6 +3142,7 @@ mod tests {
                 match_reasons: Vec::new(),
                 signals: HashSet::new(),
                 tier: CandidateMatchTier::WeakMatch,
+                field_count: 0,
             },
             ScoredCandidate {
                 metadata: make_metadata(
@@ -2999,6 +3157,7 @@ mod tests {
                 match_reasons: Vec::new(),
                 signals: HashSet::new(),
                 tier: CandidateMatchTier::WeakMatch,
+                field_count: 0,
             },
             ScoredCandidate {
                 metadata: make_metadata(
@@ -3013,6 +3172,7 @@ mod tests {
                 match_reasons: Vec::new(),
                 signals: HashSet::new(),
                 tier: CandidateMatchTier::WeakMatch,
+                field_count: 0,
             },
         ];
 
@@ -3057,6 +3217,7 @@ mod tests {
                 match_reasons: Vec::new(),
                 signals: HashSet::new(),
                 tier: CandidateMatchTier::WeakMatch,
+                field_count: 0,
             },
             ScoredCandidate {
                 // B: similar title to both A and C (bridge).
@@ -3072,6 +3233,7 @@ mod tests {
                 match_reasons: Vec::new(),
                 signals: HashSet::new(),
                 tier: CandidateMatchTier::WeakMatch,
+                field_count: 0,
             },
             ScoredCandidate {
                 // C: similar to B but NOT directly similar to A (title sim 0.71).
@@ -3087,6 +3249,7 @@ mod tests {
                 match_reasons: Vec::new(),
                 signals: HashSet::new(),
                 tier: CandidateMatchTier::WeakMatch,
+                field_count: 0,
             },
         ];
 
@@ -3120,6 +3283,7 @@ mod tests {
                 match_reasons: Vec::new(),
                 signals: HashSet::new(),
                 tier: CandidateMatchTier::WeakMatch,
+                field_count: 0,
             },
             ScoredCandidate {
                 metadata: make_metadata(
@@ -3134,6 +3298,7 @@ mod tests {
                 match_reasons: Vec::new(),
                 signals: HashSet::new(),
                 tier: CandidateMatchTier::WeakMatch,
+                field_count: 0,
             },
             ScoredCandidate {
                 // C: different ISBN, different title — no fuzzy match with A.
@@ -3149,6 +3314,7 @@ mod tests {
                 match_reasons: Vec::new(),
                 signals: HashSet::new(),
                 tier: CandidateMatchTier::WeakMatch,
+                field_count: 0,
             },
         ];
 
@@ -3185,6 +3351,7 @@ mod tests {
                 match_reasons: Vec::new(),
                 signals: HashSet::new(),
                 tier: CandidateMatchTier::WeakMatch,
+                field_count: 0,
             },
             ScoredCandidate {
                 metadata: make_metadata(
@@ -3199,6 +3366,7 @@ mod tests {
                 match_reasons: Vec::new(),
                 signals: HashSet::new(),
                 tier: CandidateMatchTier::WeakMatch,
+                field_count: 0,
             },
         ];
 
@@ -3225,6 +3393,7 @@ mod tests {
                 .into_iter()
                 .collect(),
             tier: CandidateMatchTier::WeakMatch,
+            field_count: 0,
         };
         assert!(
             !has_multi_signal(&candidate_isbn_cp),
@@ -3241,6 +3410,7 @@ mod tests {
                 .into_iter()
                 .collect(),
             tier: CandidateMatchTier::WeakMatch,
+            field_count: 0,
         };
         assert!(
             has_multi_signal(&candidate_isbn_title),
@@ -3266,6 +3436,7 @@ mod tests {
                 match_reasons: Vec::new(),
                 signals: HashSet::new(),
                 tier: CandidateMatchTier::WeakMatch,
+                field_count: 0,
             },
             ScoredCandidate {
                 metadata: make_metadata(
@@ -3280,6 +3451,7 @@ mod tests {
                 match_reasons: Vec::new(),
                 signals: HashSet::new(),
                 tier: CandidateMatchTier::WeakMatch,
+                field_count: 0,
             },
             ScoredCandidate {
                 // C: same title/author, different ISBN → fuzzy match with A.
@@ -3295,6 +3467,7 @@ mod tests {
                 match_reasons: Vec::new(),
                 signals: HashSet::new(),
                 tier: CandidateMatchTier::WeakMatch,
+                field_count: 0,
             },
         ];
 
@@ -3348,6 +3521,7 @@ mod tests {
                 .into_iter()
                 .collect(),
             tier: CandidateMatchTier::WeakMatch,
+            field_count: 0,
         };
 
         assert!(
@@ -3388,6 +3562,7 @@ mod tests {
                 match_reasons: Vec::new(),
                 signals: HashSet::new(),
                 tier: CandidateMatchTier::WeakMatch,
+                field_count: 0,
             },
             ScoredCandidate {
                 metadata: b_meta,
@@ -3396,6 +3571,7 @@ mod tests {
                 match_reasons: Vec::new(),
                 signals: HashSet::new(),
                 tier: CandidateMatchTier::WeakMatch,
+                field_count: 0,
             },
             ScoredCandidate {
                 metadata: make_metadata(
@@ -3410,6 +3586,7 @@ mod tests {
                 match_reasons: Vec::new(),
                 signals: HashSet::new(),
                 tier: CandidateMatchTier::WeakMatch,
+                field_count: 0,
             },
         ];
 
@@ -3464,6 +3641,7 @@ mod tests {
                 match_reasons: Vec::new(),
                 signals: HashSet::new(),
                 tier: CandidateMatchTier::WeakMatch,
+                field_count: 0,
             },
             ScoredCandidate {
                 metadata: b_meta,
@@ -3472,6 +3650,7 @@ mod tests {
                 match_reasons: Vec::new(),
                 signals: HashSet::new(),
                 tier: CandidateMatchTier::WeakMatch,
+                field_count: 0,
             },
             ScoredCandidate {
                 metadata: make_metadata(
@@ -3486,6 +3665,7 @@ mod tests {
                 match_reasons: Vec::new(),
                 signals: HashSet::new(),
                 tier: CandidateMatchTier::WeakMatch,
+                field_count: 0,
             },
         ];
 
@@ -4338,6 +4518,7 @@ mod tests {
             match_reasons: Vec::new(),
             signals: HashSet::new(),
             tier: CandidateMatchTier::WeakMatch,
+            field_count: 0,
         };
 
         score_candidate(&mut candidate, &query, Some(&existing));
@@ -4380,6 +4561,7 @@ mod tests {
             match_reasons: Vec::new(),
             signals: HashSet::new(),
             tier: CandidateMatchTier::WeakMatch,
+            field_count: 0,
         };
 
         let mut without_pub = ScoredCandidate {
@@ -4393,6 +4575,7 @@ mod tests {
             match_reasons: Vec::new(),
             signals: HashSet::new(),
             tier: CandidateMatchTier::WeakMatch,
+            field_count: 0,
         };
 
         score_candidate(&mut with_pub, &query, Some(&existing));
@@ -4566,6 +4749,451 @@ mod tests {
         assert!(
             candidates.is_empty(),
             "search fallback should filter unsupported formats"
+        );
+    }
+
+    // ── Capability-aware filtering ──────────────────────────────────
+
+    static ISBN_ONLY_CAPS: ProviderCapabilities = ProviderCapabilities {
+        quality: ProviderQuality::Authoritative,
+        default_rate_limit_rpm: 20,
+        supported_id_lookups: &[IdentifierType::Isbn13, IdentifierType::Isbn10],
+        features: &[ProviderFeature::Search],
+    };
+
+    static ASIN_CAPS: ProviderCapabilities = ProviderCapabilities {
+        quality: ProviderQuality::Curated,
+        default_rate_limit_rpm: 50,
+        supported_id_lookups: &[
+            IdentifierType::Isbn13,
+            IdentifierType::Isbn10,
+            IdentifierType::Asin,
+        ],
+        features: &[ProviderFeature::Search, ProviderFeature::Covers],
+    };
+
+    static NO_SEARCH_CAPS: ProviderCapabilities = ProviderCapabilities {
+        quality: ProviderQuality::Community,
+        default_rate_limit_rpm: 100,
+        supported_id_lookups: &[IdentifierType::Isbn13],
+        features: &[ProviderFeature::Covers],
+    };
+
+    #[tokio::test]
+    async fn asin_lookup_skips_non_asin_provider() {
+        // `isbn_only` does NOT support ASIN; `asin_provider` does.
+        let isbn_only = Arc::new(
+            StubProvider::new("isbn_only")
+                .with_capabilities(&ISBN_ONLY_CAPS)
+                .with_asin_results(vec![make_metadata(
+                    "isbn_only",
+                    "Should Not Appear",
+                    &["Author"],
+                    None,
+                    0.9,
+                )]),
+        ) as Arc<dyn MetadataProvider>;
+
+        let asin_provider = Arc::new(
+            StubProvider::new("asin_provider")
+                .with_capabilities(&ASIN_CAPS)
+                .with_asin_results(vec![make_metadata(
+                    "asin_provider",
+                    "Dune",
+                    &["Frank Herbert"],
+                    None,
+                    0.95,
+                )]),
+        ) as Arc<dyn MetadataProvider>;
+
+        let registry = make_registry(vec![isbn_only, asin_provider]);
+        let resolver = MetadataResolver::with_defaults(registry);
+
+        let query = MetadataQuery {
+            asin: Some("B00GFHJKQ4".to_string()),
+            ..Default::default()
+        };
+
+        let result = resolver.resolve(&query, None).await;
+
+        // Only `asin_provider` should have been queried.
+        assert_eq!(result.candidates.len(), 1);
+        assert_eq!(result.candidates[0].metadata.title.as_deref(), Some("Dune"));
+        assert_eq!(result.candidates[0].provider_name, "asin_provider");
+    }
+
+    #[tokio::test]
+    async fn search_skips_non_search_provider() {
+        // `no_search` has only Covers, no Search feature.
+        let no_search = Arc::new(
+            StubProvider::new("no_search")
+                .with_capabilities(&NO_SEARCH_CAPS)
+                .with_search_results(vec![make_metadata(
+                    "no_search",
+                    "Should Not Appear",
+                    &["Author"],
+                    None,
+                    0.9,
+                )]),
+        ) as Arc<dyn MetadataProvider>;
+
+        let with_search = Arc::new(
+            StubProvider::new("with_search")
+                .with_capabilities(&ASIN_CAPS)
+                .with_search_results(vec![make_metadata(
+                    "with_search",
+                    "Dune",
+                    &["Frank Herbert"],
+                    None,
+                    0.8,
+                )]),
+        ) as Arc<dyn MetadataProvider>;
+
+        let registry = make_registry(vec![no_search, with_search]);
+        let resolver = MetadataResolver::with_defaults(registry);
+
+        let query = MetadataQuery {
+            title: Some("Dune".to_string()),
+            ..Default::default()
+        };
+
+        let result = resolver.resolve(&query, None).await;
+
+        // Only `with_search` should have been queried.
+        assert_eq!(result.candidates.len(), 1);
+        assert_eq!(result.candidates[0].provider_name, "with_search");
+    }
+
+    // ── Field completeness / data richness tests ────────────────────
+
+    #[test]
+    fn field_completeness_score_minimal() {
+        // Title-only metadata (authors empty, everything else None/empty).
+        let mut meta = make_metadata("ol", "Dune", &[], None, 0.5);
+        meta.authors.clear();
+        let fc = FieldCounts::of(&meta);
+        assert!(
+            fc.ratio() < 0.15,
+            "expected low completeness for minimal metadata, got {}/{}",
+            fc.present,
+            fc.total,
+        );
+    }
+
+    #[test]
+    fn field_completeness_score_full() {
+        let meta = ProviderMetadata {
+            provider_name: "test".into(),
+            title: Some("Dune".into()),
+            subtitle: Some("Sub".into()),
+            authors: vec![ProviderAuthor {
+                name: "Frank Herbert".into(),
+                role: Some("author".into()),
+            }],
+            description: Some("A novel".into()),
+            language: Some("en".into()),
+            publisher: Some("Ace".into()),
+            publication_year: Some(1965),
+            identifiers: Vec::new(),
+            subjects: vec!["sci-fi".into()],
+            series: Some(ProviderSeries {
+                name: "Dune".into(),
+                position: Some(1.0),
+            }),
+            page_count: Some(412),
+            cover_url: Some("https://example.com/cover.jpg".into()),
+            rating: None,
+            physical_format: None,
+            confidence: 0.9,
+        };
+        let fc = FieldCounts::of(&meta);
+        assert_eq!(
+            fc.present, fc.total,
+            "expected all fields present for fully populated metadata, got {}/{}",
+            fc.present, fc.total,
+        );
+    }
+
+    #[test]
+    fn richness_bonus_differentiates_equal_candidates() {
+        let query = MetadataQuery {
+            title: Some("Ready for Anything".into()),
+            ..Default::default()
+        };
+        let existing = ExistingBookMetadata {
+            title: Some("Ready for Anything".into()),
+            authors: vec!["David Allen".into()],
+            ..Default::default()
+        };
+
+        // Sparse candidate: title + author only.
+        let mut sparse = ScoredCandidate {
+            metadata: make_metadata("loc", "Ready for Anything", &["David Allen"], None, 0.5),
+            score: 0.5,
+            provider_name: "loc".into(),
+            match_reasons: Vec::new(),
+            signals: HashSet::new(),
+            tier: CandidateMatchTier::WeakMatch,
+            field_count: 0,
+        };
+
+        // Rich candidate: same base, but with subtitle + publisher + cover.
+        let mut rich = ScoredCandidate {
+            metadata: {
+                let mut m = make_metadata("loc", "Ready for Anything", &["David Allen"], None, 0.5);
+                m.subtitle = Some("52 Productivity Principles".into());
+                m.publisher = Some("Viking".into());
+                m.cover_url = Some("https://example.com/cover.jpg".into());
+                m.publication_year = Some(2003);
+                m
+            },
+            score: 0.5,
+            provider_name: "loc".into(),
+            match_reasons: Vec::new(),
+            signals: HashSet::new(),
+            tier: CandidateMatchTier::WeakMatch,
+            field_count: 0,
+        };
+
+        score_candidate(&mut sparse, &query, Some(&existing));
+        score_candidate(&mut rich, &query, Some(&existing));
+
+        assert!(
+            rich.score > sparse.score,
+            "richer candidate should score higher: rich={:.4} vs sparse={:.4}",
+            rich.score,
+            sparse.score,
+        );
+    }
+
+    #[test]
+    fn richness_cannot_override_isbn_match() {
+        let query = MetadataQuery {
+            title: Some("Dune".into()),
+            isbn: Some("9780441172719".into()),
+            ..Default::default()
+        };
+        let existing = ExistingBookMetadata {
+            title: Some("Dune".into()),
+            authors: vec!["Frank Herbert".into()],
+            ..Default::default()
+        };
+
+        // Sparse candidate WITH ISBN match.
+        let mut sparse_isbn = ScoredCandidate {
+            metadata: make_metadata("ol", "Dune", &["Frank Herbert"], Some("9780441172719"), 0.5),
+            score: 0.5,
+            provider_name: "open_library".into(),
+            match_reasons: Vec::new(),
+            signals: HashSet::new(),
+            tier: CandidateMatchTier::WeakMatch,
+            field_count: 0,
+        };
+
+        // Rich candidate WITHOUT ISBN match.
+        let mut rich_no_isbn = ScoredCandidate {
+            metadata: {
+                let mut m = make_metadata("ol", "Dune", &["Frank Herbert"], None, 0.5);
+                m.subtitle = Some("Sub".into());
+                m.publisher = Some("Ace".into());
+                m.cover_url = Some("https://example.com/cover.jpg".into());
+                m.description = Some("A novel about desert planet".into());
+                m.language = Some("en".into());
+                m.publication_year = Some(1965);
+                m.page_count = Some(412);
+                m.subjects = vec!["sci-fi".into()];
+                m.series = Some(ProviderSeries {
+                    name: "Dune".into(),
+                    position: Some(1.0),
+                });
+                m
+            },
+            score: 0.5,
+            provider_name: "open_library".into(),
+            match_reasons: Vec::new(),
+            signals: HashSet::new(),
+            tier: CandidateMatchTier::WeakMatch,
+            field_count: 0,
+        };
+
+        score_candidate(&mut sparse_isbn, &query, Some(&existing));
+        score_candidate(&mut rich_no_isbn, &query, Some(&existing));
+
+        assert!(
+            sparse_isbn.score > rich_no_isbn.score,
+            "ISBN match must outweigh richness: isbn={:.4} vs rich={:.4}",
+            sparse_isbn.score,
+            rich_no_isbn.score,
+        );
+    }
+
+    #[test]
+    fn richness_cannot_override_cross_provider_bonus() {
+        // Two candidates: one with cross-provider bonus, one richer but without it.
+        let query = MetadataQuery {
+            title: Some("Dune".into()),
+            ..Default::default()
+        };
+        let existing = ExistingBookMetadata {
+            title: Some("Dune".into()),
+            authors: vec!["Frank Herbert".into()],
+            ..Default::default()
+        };
+
+        // Candidate with cross-provider bonus applied.
+        let mut cross_prov = ScoredCandidate {
+            metadata: make_metadata("ol", "Dune", &["Frank Herbert"], None, 0.5),
+            score: 0.5,
+            provider_name: "open_library".into(),
+            match_reasons: Vec::new(),
+            signals: HashSet::new(),
+            tier: CandidateMatchTier::WeakMatch,
+            field_count: 0,
+        };
+        score_candidate(&mut cross_prov, &query, Some(&existing));
+        // Simulate cross-provider bonus.
+        cross_prov.score = (cross_prov.score + CROSS_PROVIDER_BONUS).min(1.0);
+
+        // Rich candidate without cross-provider bonus.
+        let mut rich = ScoredCandidate {
+            metadata: {
+                let mut m = make_metadata("hc", "Dune", &["Frank Herbert"], None, 0.5);
+                m.subtitle = Some("Sub".into());
+                m.publisher = Some("Ace".into());
+                m.cover_url = Some("https://example.com/cover.jpg".into());
+                m.description = Some("A novel".into());
+                m.language = Some("en".into());
+                m.publication_year = Some(1965);
+                m.page_count = Some(412);
+                m.subjects = vec!["sci-fi".into()];
+                m.series = Some(ProviderSeries {
+                    name: "Dune".into(),
+                    position: Some(1.0),
+                });
+                m
+            },
+            score: 0.5,
+            provider_name: "hardcover".into(),
+            match_reasons: Vec::new(),
+            signals: HashSet::new(),
+            tier: CandidateMatchTier::WeakMatch,
+            field_count: 0,
+        };
+        score_candidate(&mut rich, &query, Some(&existing));
+
+        assert!(
+            cross_prov.score > rich.score,
+            "cross-provider bonus must outweigh richness: cross={:.4} vs rich={:.4}",
+            cross_prov.score,
+            rich.score,
+        );
+    }
+
+    #[test]
+    fn sort_tiebreaker_prefers_richer_candidate() {
+        let sparse = ScoredCandidate {
+            metadata: make_metadata("ol", "Dune", &["Frank Herbert"], None, 0.5),
+            score: 0.85,
+            provider_name: "open_library".into(),
+            match_reasons: Vec::new(),
+            signals: HashSet::new(),
+            tier: CandidateMatchTier::ProbableMatch,
+            field_count: 1, // authors only
+        };
+
+        let rich = ScoredCandidate {
+            metadata: {
+                let mut m = make_metadata("ol", "Dune", &["Frank Herbert"], None, 0.5);
+                m.subtitle = Some("Sub".into());
+                m.publisher = Some("Ace".into());
+                m.cover_url = Some("https://example.com/cover.jpg".into());
+                m
+            },
+            score: 0.85, // Identical score.
+            provider_name: "open_library".into(),
+            match_reasons: Vec::new(),
+            signals: HashSet::new(),
+            tier: CandidateMatchTier::ProbableMatch,
+            field_count: 4, // authors + subtitle + publisher + cover_url
+        };
+
+        // Sparse first, rich second — sort should flip them.
+        let mut candidates = [sparse, rich];
+        candidates.sort_by(cmp_candidates);
+
+        assert!(
+            candidates[0].metadata.subtitle.is_some(),
+            "richer candidate should sort first on tie"
+        );
+    }
+
+    #[tokio::test]
+    async fn full_resolve_ranks_richer_candidate_higher() {
+        // Replicate the "Ready for Anything" scenario: two candidates from the
+        // same provider with different field completeness should rank the richer
+        // one higher.
+        let sparse_meta = make_metadata(
+            "stub",
+            "Ready for Anything",
+            &["David Allen"],
+            Some("9780743535304"),
+            0.5,
+        );
+
+        let rich_meta = {
+            let mut m = make_metadata(
+                "stub",
+                "Ready for Anything",
+                &["David Allen"],
+                Some("9780670032501"),
+                0.5,
+            );
+            m.subtitle = Some("52 Productivity Principles for Work and Life".into());
+            m.publisher = Some("Viking".into());
+            m.publication_year = Some(2003);
+            m.page_count = Some(164);
+            m
+        };
+
+        let provider =
+            Arc::new(StubProvider::new("stub").with_search_results(vec![sparse_meta, rich_meta]))
+                as Arc<dyn MetadataProvider>;
+
+        let registry = make_registry(vec![provider]);
+        let resolver = MetadataResolver::with_defaults(registry);
+
+        let query = MetadataQuery {
+            title: Some("Ready for Anything".into()),
+            ..Default::default()
+        };
+
+        let existing = ExistingBookMetadata {
+            title: Some(
+                "Ready for Anything: 52 Productivity Principles for Getting Things Done".into(),
+            ),
+            authors: vec!["David Allen".into()],
+            ..Default::default()
+        };
+
+        let result = resolver.resolve(&query, Some(&existing)).await;
+
+        assert!(
+            result.candidates.len() >= 2,
+            "expected at least 2 candidates, got {}",
+            result.candidates.len()
+        );
+
+        // The richer candidate should rank first.
+        assert!(
+            result.candidates[0].metadata.subtitle.is_some(),
+            "richer candidate (with subtitle) should rank first, but first candidate subtitle: {:?}",
+            result.candidates[0].metadata.subtitle,
+        );
+        assert!(
+            result.candidates[0].score >= result.candidates[1].score,
+            "first candidate score ({:.4}) should be >= second ({:.4})",
+            result.candidates[0].score,
+            result.candidates[1].score,
         );
     }
 }

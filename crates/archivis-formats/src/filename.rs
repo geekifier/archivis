@@ -112,7 +112,7 @@ pub fn parse_path(path: &Path) -> ParsedFilename {
         0 => {}
         1 => {
             // `Author/file.ext`
-            if result.author.is_none() {
+            if result.author.is_none() && is_usable_path_component(components[0]) {
                 result.author = clean_value(&normalise(components[0]));
             }
         }
@@ -121,7 +121,7 @@ pub fn parse_path(path: &Path) -> ParsedFilename {
             let grandparent = components[components.len() - 2];
             let parent = components[components.len() - 1];
 
-            if result.author.is_none() {
+            if result.author.is_none() && is_usable_path_component(grandparent) {
                 result.author = clean_value(&normalise(grandparent));
             }
 
@@ -131,10 +131,13 @@ pub fn parse_path(path: &Path) -> ParsedFilename {
 
             if result.title.is_none() {
                 // Use parent directory as title if it differs from the stem.
-                if stem_clean != parent_clean {
+                if stem_clean != parent_clean && is_usable_path_component(parent) {
                     result.title = clean_value(&parent_clean);
                 }
-            } else if filename_is_title_only && stem_clean != parent_clean {
+            } else if filename_is_title_only
+                && stem_clean != parent_clean
+                && is_usable_path_component(parent)
+            {
                 // The filename was just a bare stem (e.g. `book.epub`) with no
                 // structured metadata. The parent directory (e.g. `Dune/`) is
                 // more likely the real title.
@@ -211,6 +214,58 @@ fn title_only(stem: &str) -> ParsedFilename {
         title: clean_value(stem),
         ..Default::default()
     }
+}
+
+// ---------------------------------------------------------------------------
+// Path-component guards
+// ---------------------------------------------------------------------------
+
+/// Directory names that are infrastructure artifacts, not semantic metadata.
+const INFRASTRUCTURE_NAMES: &[&str] = &[
+    "books",
+    "cache",
+    "clean",
+    "data",
+    "downloads",
+    "ebooks",
+    "fresh",
+    "import",
+    "imports",
+    "inbox",
+    "ingestion",
+    "library",
+    "media",
+    "staging",
+    "storage",
+    "tmp",
+    "uploads",
+];
+
+/// Returns `true` if the string matches the `8-4-4-4-12` UUID hex pattern.
+fn looks_like_uuid(s: &str) -> bool {
+    let b = s.as_bytes();
+    if b.len() != 36 {
+        return false;
+    }
+    // Check hyphen positions: 8, 13, 18, 23
+    if b[8] != b'-' || b[13] != b'-' || b[18] != b'-' || b[23] != b'-' {
+        return false;
+    }
+    // Every other byte must be a hex digit
+    b.iter()
+        .enumerate()
+        .all(|(i, &ch)| i == 8 || i == 13 || i == 18 || i == 23 || ch.is_ascii_hexdigit())
+}
+
+/// Returns `true` if the directory component likely represents semantic
+/// metadata (author name, book title) rather than infrastructure scaffolding.
+fn is_usable_path_component(s: &str) -> bool {
+    if looks_like_uuid(s) {
+        return false;
+    }
+    !INFRASTRUCTURE_NAMES
+        .iter()
+        .any(|&name| name.eq_ignore_ascii_case(s))
 }
 
 // ---------------------------------------------------------------------------
@@ -542,6 +597,78 @@ mod tests {
     #[test]
     fn deeply_nested_path_uses_last_two_components() {
         let path = PathBuf::from("library/fiction/Frank Herbert/Dune/book.epub");
+        let result = parse_path(&path);
+        assert_eq!(result.author, Some("Frank Herbert".into()));
+        assert_eq!(result.title, Some("Dune".into()));
+    }
+
+    // -----------------------------------------------------------------------
+    // Path-component guard tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn looks_like_uuid_positive() {
+        assert!(looks_like_uuid("2404ec6b-d4f3-4fbb-b148-79235ab19c37"));
+        assert!(looks_like_uuid("00000000-0000-0000-0000-000000000000"));
+        assert!(looks_like_uuid("ABCDEF01-2345-6789-abcd-ef0123456789"));
+    }
+
+    #[test]
+    fn looks_like_uuid_negative() {
+        assert!(!looks_like_uuid("Frank Herbert"));
+        assert!(!looks_like_uuid("Dune"));
+        assert!(!looks_like_uuid(""));
+        // Wrong length
+        assert!(!looks_like_uuid("2404ec6b-d4f3-4fbb-b148-79235ab19c3"));
+        // Non-hex character
+        assert!(!looks_like_uuid("zzzzzzzz-zzzz-zzzz-zzzz-zzzzzzzzzzzz"));
+        // Missing hyphens
+        assert!(!looks_like_uuid("2404ec6bd4f34fbbb14879235ab19c37"));
+    }
+
+    #[test]
+    fn is_usable_path_component_filters_infrastructure() {
+        assert!(!is_usable_path_component("uploads"));
+        assert!(!is_usable_path_component("Uploads"));
+        assert!(!is_usable_path_component("UPLOADS"));
+        assert!(!is_usable_path_component("cache"));
+        assert!(!is_usable_path_component("tmp"));
+        assert!(!is_usable_path_component("staging"));
+        assert!(!is_usable_path_component("downloads"));
+    }
+
+    #[test]
+    fn is_usable_path_component_accepts_real_metadata() {
+        assert!(is_usable_path_component("Frank Herbert"));
+        assert!(is_usable_path_component("Dune"));
+        assert!(is_usable_path_component("Seneca"));
+        assert!(is_usable_path_component("Science Fiction"));
+    }
+
+    #[test]
+    fn upload_path_preserves_filename_title() {
+        let path = PathBuf::from(
+            "uploads/2404ec6b-d4f3-4fbb-b148-79235ab19c37/Elf_Receiver_Radio-Craft_August_1936.cbz",
+        );
+        let result = parse_path(&path);
+        assert_eq!(
+            result.title,
+            Some("Elf Receiver Radio-Craft August 1936".into())
+        );
+        assert_eq!(result.author, None);
+    }
+
+    #[test]
+    fn single_infrastructure_dir_does_not_become_author() {
+        let path = PathBuf::from("uploads/Dune.epub");
+        let result = parse_path(&path);
+        assert_eq!(result.title, Some("Dune".into()));
+        assert_eq!(result.author, None);
+    }
+
+    #[test]
+    fn semantic_dirs_still_work_after_guards() {
+        let path = PathBuf::from("Frank Herbert/Dune/book.epub");
         let result = parse_path(&path);
         assert_eq!(result.author, Some("Frank Herbert".into()));
         assert_eq!(result.title, Some("Dune".into()));

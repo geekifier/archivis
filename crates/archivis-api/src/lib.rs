@@ -7,6 +7,7 @@ pub mod filesystem;
 pub mod health;
 pub mod import;
 pub mod isbn_scan;
+pub mod metadata_rules;
 pub mod publishers;
 pub mod reader;
 pub mod resolve;
@@ -162,6 +163,11 @@ mod openapi {
             super::watcher::handlers::remove_watched,
             super::watcher::handlers::trigger_scan,
             super::watcher::handlers::detect_fs,
+            // Metadata Rules
+            super::metadata_rules::handlers::list_metadata_rules,
+            super::metadata_rules::handlers::create_metadata_rule,
+            super::metadata_rules::handlers::update_metadata_rule,
+            super::metadata_rules::handlers::delete_metadata_rule,
         ),
         components(schemas(
             // Auth
@@ -277,6 +283,10 @@ mod openapi {
             super::watcher::types::FsDetectionResponse,
             super::watcher::types::DetectFsRequest,
             super::watcher::types::ScanTriggeredResponse,
+            // Metadata Rules
+            super::metadata_rules::types::MetadataRuleResponse,
+            super::metadata_rules::types::CreateMetadataRuleRequest,
+            super::metadata_rules::types::UpdateMetadataRuleRequest,
             // UI
             super::ui::types::SidebarCountsResponse,
             // Stats
@@ -310,6 +320,7 @@ mod openapi {
             (name = "stats", description = "Library and usage statistics"),
             (name = "users", description = "User management"),
             (name = "watched-directories", description = "Watched directory management"),
+            (name = "metadata-rules", description = "Metadata policy rules"),
         )
     )]
     pub struct ApiDoc;
@@ -338,7 +349,8 @@ pub fn build_router(state: AppState) -> Router {
         .nest("/stats", stats::router())
         .nest("/ui", ui::router())
         .nest("/users", users::router())
-        .nest("/watched-directories", watcher::router());
+        .nest("/watched-directories", watcher::router())
+        .nest("/metadata-rules", metadata_rules::router());
 
     let mut router = Router::new()
         .merge(SwaggerUi::new("/api/docs").url("/api/openapi.json", openapi::ApiDoc::openapi()))
