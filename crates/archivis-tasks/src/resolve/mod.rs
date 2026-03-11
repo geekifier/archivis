@@ -7,4 +7,7 @@ pub use planner::{
     ReconciliationPlan,
 };
 pub use service::{ResolutionOutcome, ResolutionService};
-pub use state::{persist_recomputed_status, recompute_status, BookSnapshot, StatusContext};
+pub use state::{
+    apply_review_floor, persist_recomputed_status, recompute_status, update_status_with_floor,
+    BookSnapshot, StatusContext,
+};

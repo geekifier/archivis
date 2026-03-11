@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::book::FieldProvenance;
+use super::enums::{MetadataStatus, ResolutionOutcome};
 
 /// Status of an identification candidate in the review workflow.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -132,6 +133,25 @@ pub struct ApplyChangeset {
     pub authors: Option<ChangesetEntry<Vec<ChangesetAuthor>>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub series: Option<ChangesetEntry<Vec<ChangesetSeries>>>,
+
+    /// Pre-apply `metadata_status` for undo restore.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub old_metadata_status: Option<MetadataStatus>,
+
+    /// Pre-apply `review_baseline_metadata_status` for undo restore.
+    /// Outer `None` = field absent (backward compat), inner `None` = value was `None`.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub old_review_baseline_metadata_status: Option<Option<MetadataStatus>>,
+
+    /// Pre-apply `resolution_outcome` for undo restore.
+    /// Outer `None` = field absent (backward compat), inner `None` = value was `None`.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub old_resolution_outcome: Option<Option<ResolutionOutcome>>,
+
+    /// Pre-apply `review_baseline_resolution_outcome` for undo restore.
+    /// Outer `None` = field absent (backward compat), inner `None` = value was `None`.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub old_review_baseline_resolution_outcome: Option<Option<ResolutionOutcome>>,
 }
 
 impl ApplyChangeset {
@@ -148,6 +168,10 @@ impl ApplyChangeset {
             && self.publisher_id.is_none()
             && self.authors.is_none()
             && self.series.is_none()
+            && self.old_metadata_status.is_none()
+            && self.old_review_baseline_metadata_status.is_none()
+            && self.old_resolution_outcome.is_none()
+            && self.old_review_baseline_resolution_outcome.is_none()
     }
 }
 

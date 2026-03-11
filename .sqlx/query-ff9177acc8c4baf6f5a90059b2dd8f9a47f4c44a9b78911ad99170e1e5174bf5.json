@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE books SET title = ?, subtitle = ?, sort_title = ?, description = ?, language = ?, publication_year = ?, publisher_id = ?, updated_at = ?, rating = ?, page_count = ?, metadata_status = ?, review_baseline_metadata_status = ?, review_baseline_resolution_outcome = ?, ingest_quality_score = ?, resolution_state = ?, resolution_outcome = ?, resolution_requested_at = ?, resolution_requested_reason = ?, last_resolved_at = ?, last_resolution_run_id = ?, metadata_locked = ?, metadata_provenance = ?, cover_path = ?, norm_title = ? WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 25
+    },
+    "nullable": []
+  },
+  "hash": "ff9177acc8c4baf6f5a90059b2dd8f9a47f4c44a9b78911ad99170e1e5174bf5"
+}

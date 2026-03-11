@@ -34,7 +34,7 @@ use crate::resolve::planner::{
     PlannedField, ReconciliationInput, ReconciliationPlan,
 };
 use crate::resolve::state::{
-    persist_recomputed_status, recompute_status, BookSnapshot, StatusContext,
+    persist_recomputed_status, update_status_with_floor, BookSnapshot, StatusContext,
 };
 
 // ── Field-category policy for apply merges ──────────────────────────
@@ -210,7 +210,6 @@ impl<S: StorageBackend> ResolutionService<S> {
         book_id: Uuid,
         manual_refresh: bool,
         metadata_rules: &[MetadataRule],
-        publisher_cache: &mut std::collections::HashMap<Uuid, String>,
     ) -> Result<Option<ResolutionOutcome>, TaskError> {
         let claimed = if manual_refresh {
             BookRepository::claim_manual_resolution(&self.db_pool, book_id)
@@ -231,10 +230,7 @@ impl<S: StorageBackend> ResolutionService<S> {
         // Check metadata rules before running full resolution.
         // Manual refresh always bypasses rules so the user can force a provider query.
         if !manual_refresh {
-            if let Some(skip_reason) = self
-                .check_metadata_rules(book_id, metadata_rules, publisher_cache)
-                .await?
-            {
+            if let Some(skip_reason) = self.check_metadata_rules(book_id, metadata_rules).await? {
                 BookRepository::mark_resolution_skipped(&self.db_pool, book_id, &skip_reason)
                     .await
                     .map_err(|e| {
@@ -282,12 +278,10 @@ impl<S: StorageBackend> ResolutionService<S> {
     /// Check whether metadata rules indicate this book should skip resolution.
     ///
     /// Returns `Some(reason)` if a rule matches, `None` otherwise.
-    /// `publisher_cache` avoids redundant DB lookups when many books share a publisher.
     async fn check_metadata_rules(
         &self,
         book_id: Uuid,
         metadata_rules: &[MetadataRule],
-        publisher_cache: &mut std::collections::HashMap<Uuid, String>,
     ) -> Result<Option<String>, TaskError> {
         if metadata_rules.is_empty() {
             return Ok(None);
@@ -301,18 +295,12 @@ impl<S: StorageBackend> ResolutionService<S> {
             return Ok(None);
         };
 
-        let publisher_name = if let Some(cached) = publisher_cache.get(&pub_id) {
-            cached.clone()
-        } else {
-            let publisher = PublisherRepository::get_by_id(&self.db_pool, pub_id)
-                .await
-                .map_err(|e| TaskError::Failed(format!("failed to load publisher: {e}")))?;
-            publisher_cache.insert(pub_id, publisher.name.clone());
-            publisher.name
-        };
+        let publisher = PublisherRepository::get_by_id(&self.db_pool, pub_id)
+            .await
+            .map_err(|e| TaskError::Failed(format!("failed to load publisher: {e}")))?;
 
-        if is_trusted_publisher(metadata_rules, &publisher_name) {
-            return Ok(Some(format!("trusted:publisher:{publisher_name}")));
+        if is_trusted_publisher(metadata_rules, &publisher.name) {
+            return Ok(Some(format!("trusted:publisher:{}", publisher.name)));
         }
 
         Ok(None)
@@ -333,7 +321,7 @@ impl<S: StorageBackend> ResolutionService<S> {
         manual_refresh: bool,
     ) -> Result<ResolutionOutcome, TaskError> {
         // 1. Load book from DB with identifiers
-        let book = BookRepository::get_by_id(&self.db_pool, book_id)
+        let mut book = BookRepository::get_by_id(&self.db_pool, book_id)
             .await
             .map_err(|e| TaskError::Failed(format!("failed to load book: {e}")))?;
 
@@ -484,6 +472,22 @@ impl<S: StorageBackend> ResolutionService<S> {
                 .await;
         }
 
+        // 5b. Set review baseline when entering review (candidates exist).
+        // Only set if not already set (handles second refresh while in review).
+        if !stored_candidates.is_empty() && book.review_baseline_metadata_status.is_none() {
+            BookRepository::set_review_baseline(
+                &self.db_pool,
+                book_id,
+                Some(book.metadata_status),
+                book.resolution_outcome,
+            )
+            .await
+            .map_err(|e| TaskError::Failed(format!("failed to set review baseline: {e}")))?;
+            // Update local copy so persist_recomputed_status sees it
+            book.review_baseline_metadata_status = Some(book.metadata_status);
+            book.review_baseline_resolution_outcome = book.resolution_outcome;
+        }
+
         // 6. Auto-apply decision.
         //
         // The resolver is the single authoritative source for the auto-apply
@@ -616,15 +620,15 @@ impl<S: StorageBackend> ResolutionService<S> {
                 decision_reason = "auto_apply_failed: no best match".into();
             }
         } else if result.candidates.is_empty() {
+            // 0 candidates: skip `persist_recomputed_status` to avoid
+            // downgrading `metadata_status` via the simplified heuristic.
             self.run_step(
                 run.id,
                 candidate_count,
                 best_candidate_id,
                 best_score,
                 best_tier_text.as_deref(),
-                persist_recomputed_status(&self.db_pool, book_id)
-                    .await
-                    .map(|_| ()),
+                Ok(()),
             )
             .await?;
             run_outcome = BookResolutionOutcome::Unmatched;
@@ -1146,6 +1150,10 @@ impl<S: StorageBackend> ResolutionService<S> {
                 .await?;
             }
 
+            // Clear baseline — apply establishes new truth (mirrors manual `apply_candidate`)
+            book.review_baseline_metadata_status = None;
+            book.review_baseline_resolution_outcome = None;
+
             BookRepository::update_conn(tx.as_mut(), &book)
                 .await
                 .map_err(|e| TaskError::Failed(format!("failed to update book: {e}")))?;
@@ -1281,11 +1289,13 @@ impl<S: StorageBackend> ResolutionService<S> {
             .await
             .map_err(|e| TaskError::Failed(format!("failed to load book relations: {e}")))?;
 
-        book.metadata_status = manual_review_status(
-            !relations.authors.is_empty(),
-            !relations.identifiers.is_empty(),
-            &next_candidates,
-        );
+        let (ctx, has_applied) = StatusContext::from_candidates(&next_candidates);
+        let snapshot = BookSnapshot {
+            has_authors: !relations.authors.is_empty(),
+            has_identifiers: !relations.identifiers.is_empty(),
+            has_applied_candidate: has_applied,
+        };
+        update_status_with_floor(&mut book, &snapshot, &ctx);
 
         let tx_result = async {
             let mut tx = self
@@ -1375,11 +1385,13 @@ impl<S: StorageBackend> ResolutionService<S> {
             .await
             .map_err(|e| TaskError::Failed(format!("failed to load book relations: {e}")))?;
 
-        book.metadata_status = manual_review_status(
-            !relations.authors.is_empty(),
-            !relations.identifiers.is_empty(),
-            &next_candidates,
-        );
+        let (ctx, has_applied) = StatusContext::from_candidates(&next_candidates);
+        let snapshot = BookSnapshot {
+            has_authors: !relations.authors.is_empty(),
+            has_identifiers: !relations.identifiers.is_empty(),
+            has_applied_candidate: has_applied,
+        };
+        update_status_with_floor(&mut book, &snapshot, &ctx);
 
         let mut tx = self
             .db_pool
@@ -1422,6 +1434,8 @@ impl<S: StorageBackend> ResolutionService<S> {
             .map(|c| c.id)
             .collect();
 
+        book.review_baseline_metadata_status = None;
+        book.review_baseline_resolution_outcome = None;
         book.metadata_status = MetadataStatus::Identified;
         book.resolution_outcome = Some(BookResolutionOutcome::Confirmed);
         book.resolution_state = ResolutionState::Done;
@@ -1649,6 +1663,13 @@ impl<S: StorageBackend> ResolutionService<S> {
             });
         }
 
+        // Capture pre-apply status/baseline/outcome for undo restore
+        changeset.old_metadata_status = Some(book.metadata_status);
+        changeset.old_review_baseline_metadata_status = Some(book.review_baseline_metadata_status);
+        changeset.old_resolution_outcome = Some(book.resolution_outcome);
+        changeset.old_review_baseline_resolution_outcome =
+            Some(book.review_baseline_resolution_outcome);
+
         let changeset_json = serde_json::to_string(&changeset)
             .map_err(|e| TaskError::Failed(format!("failed to serialize apply changeset: {e}")))?;
 
@@ -1665,15 +1686,21 @@ impl<S: StorageBackend> ResolutionService<S> {
             }
         }
 
-        book.metadata_status = manual_review_status(
-            should_update_authors || has_authors_before,
-            identifiers_present_after_apply(
+        // Clear baseline — apply establishes new truth
+        book.review_baseline_metadata_status = None;
+        book.review_baseline_resolution_outcome = None;
+
+        let (ctx, has_applied) = StatusContext::from_candidates(&next_candidates);
+        let snapshot = BookSnapshot {
+            has_authors: should_update_authors || has_authors_before,
+            has_identifiers: identifiers_present_after_apply(
                 &book_identifiers,
                 &provider_meta,
                 should_update_identifiers,
             ),
-            &next_candidates,
-        );
+            has_applied_candidate: has_applied,
+        };
+        update_status_with_floor(&mut book, &snapshot, &ctx);
         book.resolution_outcome = Some(BookResolutionOutcome::Enriched);
 
         let tx_result = async {
@@ -2047,6 +2074,21 @@ impl<S: StorageBackend> ResolutionService<S> {
                 }
             }
 
+            // Restore status, baseline, and outcome from changeset if present,
+            // else fall back to persist_recomputed_status (backward compat).
+            if let Some(old_status) = changeset.old_metadata_status {
+                book.metadata_status = old_status;
+            }
+            if let Some(old_baseline) = changeset.old_review_baseline_metadata_status {
+                book.review_baseline_metadata_status = old_baseline;
+            }
+            if let Some(old_outcome) = changeset.old_resolution_outcome {
+                book.resolution_outcome = old_outcome;
+            }
+            if let Some(old_baseline_outcome) = changeset.old_review_baseline_resolution_outcome {
+                book.review_baseline_resolution_outcome = old_baseline_outcome;
+            }
+
             BookRepository::update_conn(tx.as_mut(), &book)
                 .await
                 .map_err(|e| TaskError::Failed(format!("failed to update book: {e}")))?;
@@ -2061,8 +2103,14 @@ impl<S: StorageBackend> ResolutionService<S> {
 
         tx_result?;
 
-        // Recompute status from current state
-        let book = persist_recomputed_status(&self.db_pool, book_id).await?;
+        // Fall back to recompute for old changesets that lack status fields.
+        // When the changeset has status fields, `book` was already updated
+        // and persisted inside the transaction — no reload needed.
+        let book = if changeset.old_metadata_status.is_none() {
+            persist_recomputed_status(&self.db_pool, book_id).await?
+        } else {
+            book
+        };
 
         info!(
             book_id = %book_id,
@@ -2435,30 +2483,6 @@ fn identifiers_present_after_apply(
     }
 
     should_update_identifiers && !provider_meta.identifiers.is_empty()
-}
-
-fn manual_review_status(
-    has_authors: bool,
-    has_identifiers: bool,
-    candidates: &[IdentificationCandidate],
-) -> MetadataStatus {
-    let snapshot = BookSnapshot {
-        has_authors,
-        has_identifiers,
-        has_applied_candidate: candidates
-            .iter()
-            .any(|candidate| candidate.status == CandidateStatus::Applied),
-    };
-    let ctx = StatusContext {
-        has_ambiguous_candidates: candidates
-            .iter()
-            .any(|candidate| candidate.status == CandidateStatus::Pending),
-        has_disputed_candidates: candidates.iter().any(|candidate| {
-            candidate.status == CandidateStatus::Pending && !candidate.disputes.is_empty()
-        }),
-    };
-
-    recompute_status(&snapshot, &ctx)
 }
 
 fn build_reconciliation_input(
@@ -3817,14 +3841,14 @@ mod tests {
         let service_for_first = Arc::clone(&service);
         let first = tokio::spawn(async move {
             service_for_first
-                .resolve_queued_book(book.id, false, &[], &mut std::collections::HashMap::new())
+                .resolve_queued_book(book.id, false, &[])
                 .await
                 .unwrap()
         });
 
         reached.notified().await;
         let second = service
-            .resolve_queued_book(book.id, false, &[], &mut std::collections::HashMap::new())
+            .resolve_queued_book(book.id, false, &[])
             .await
             .unwrap();
         assert!(second.is_none(), "duplicate task should no-op after claim");
@@ -3874,7 +3898,7 @@ mod tests {
         let service_for_run = Arc::clone(&service);
         let run = tokio::spawn(async move {
             service_for_run
-                .resolve_queued_book(book.id, false, &[], &mut std::collections::HashMap::new())
+                .resolve_queued_book(book.id, false, &[])
                 .await
                 .unwrap()
                 .unwrap()

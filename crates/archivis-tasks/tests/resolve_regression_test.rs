@@ -12,8 +12,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use archivis_core::models::{
-    Book, FieldProvenance, IdentificationCandidate, Identifier, IdentifierType, MetadataSource,
-    MetadataStatus, ResolutionOutcome as BookResolutionOutcome,
+    Book, CandidateStatus, FieldProvenance, IdentificationCandidate, Identifier, IdentifierType,
+    MetadataSource, MetadataStatus, ResolutionOutcome as BookResolutionOutcome,
 };
 use archivis_core::settings::SettingsReader;
 use archivis_db::{AuthorRepository, BookRepository, CandidateRepository, IdentifierRepository};
@@ -775,5 +775,325 @@ async fn lady_of_the_lake_article_and_translator_regression() {
         ),
         "expected Enriched or Confirmed, got {:?}",
         updated.resolution_outcome
+    );
+}
+
+// ── Baseline resolution_outcome regression tests ────────────────
+
+/// Regression: reject-all must restore the pre-review `resolution_outcome`.
+///
+/// Scenario: book is `Confirmed` after a successful identification.
+/// A second `resolve_book()` produces new candidates and enters review,
+/// overwriting `resolution_outcome` to `Ambiguous`. Rejecting all
+/// candidates must restore `Confirmed`.
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn reject_all_restores_confirmed_outcome() {
+    let tmp = TempDir::new().unwrap();
+
+    let provider = Arc::new(FlexibleStubProvider {
+        isbn_results: vec![ProviderMetadata {
+            provider_name: "test_provider".into(),
+            title: Some("Dune".into()),
+            subtitle: None,
+            authors: vec![ProviderAuthor {
+                name: "Frank Herbert".into(),
+                role: Some("author".into()),
+            }],
+            description: Some("Arrakis awaits.".into()),
+            language: None,
+            publisher: None,
+            publication_year: None,
+            identifiers: vec![ProviderIdentifier {
+                identifier_type: IdentifierType::Isbn13,
+                value: "9780441172719".into(),
+            }],
+            subjects: vec![],
+            series: None,
+            page_count: None,
+            cover_url: None,
+            rating: None,
+            physical_format: None,
+            confidence: 0.95,
+        }],
+        search_results: vec![],
+    });
+
+    let (service, pool) = setup_with_provider(&tmp, provider).await;
+
+    // 1. Create book with ISBN, resolve → auto-apply (strong ISBN match)
+    let book = Book::new("Dune");
+    BookRepository::create(&pool, &book).await.unwrap();
+
+    let author = archivis_core::models::Author::new("Frank Herbert");
+    AuthorRepository::create(&pool, &author).await.unwrap();
+    BookRepository::add_author(&pool, book.id, author.id, "author", 0)
+        .await
+        .unwrap();
+
+    let isbn = Identifier::new(
+        book.id,
+        IdentifierType::Isbn13,
+        "9780441172719",
+        MetadataSource::Embedded,
+        0.9,
+    );
+    IdentifierRepository::create(&pool, &isbn).await.unwrap();
+
+    let outcome1 = service.resolve_book(book.id, false).await.unwrap();
+    assert!(outcome1.auto_applied, "precondition: should auto-apply");
+
+    // 2. Keep current metadata to set Confirmed outcome
+    service.keep_current_metadata(book.id).await.unwrap();
+    let confirmed_book = BookRepository::get_by_id(&pool, book.id).await.unwrap();
+    assert_eq!(
+        confirmed_book.resolution_outcome,
+        Some(BookResolutionOutcome::Confirmed),
+        "precondition: should be Confirmed after keep_current_metadata"
+    );
+
+    // 3. Second resolve → enters review (manual refresh)
+    let outcome2 = service.resolve_book(book.id, true).await.unwrap();
+    assert!(
+        !outcome2.auto_applied,
+        "manual refresh should not auto-apply"
+    );
+
+    let review_book = BookRepository::get_by_id(&pool, book.id).await.unwrap();
+    assert!(
+        review_book.review_baseline_metadata_status.is_some(),
+        "should have review baseline set"
+    );
+    assert_eq!(
+        review_book.review_baseline_resolution_outcome,
+        Some(BookResolutionOutcome::Confirmed),
+        "baseline should capture the Confirmed outcome"
+    );
+
+    // 4. Reject all pending candidates
+    let candidates = CandidateRepository::list_by_book(&pool, book.id)
+        .await
+        .unwrap();
+    let pending_ids: Vec<_> = candidates
+        .iter()
+        .filter(|c| c.status == CandidateStatus::Pending)
+        .map(|c| c.id)
+        .collect();
+    assert!(
+        !pending_ids.is_empty(),
+        "precondition: should have pending candidates"
+    );
+
+    service
+        .reject_candidates(book.id, &pending_ids)
+        .await
+        .unwrap();
+
+    // 5. Verify: outcome restored to Confirmed, baselines cleared
+    let final_book = BookRepository::get_by_id(&pool, book.id).await.unwrap();
+    assert_eq!(
+        final_book.resolution_outcome,
+        Some(BookResolutionOutcome::Confirmed),
+        "resolution_outcome should be restored to Confirmed after reject-all; got {:?}",
+        final_book.resolution_outcome
+    );
+    assert!(
+        final_book.review_baseline_metadata_status.is_none(),
+        "review_baseline_metadata_status should be cleared"
+    );
+    assert!(
+        final_book.review_baseline_resolution_outcome.is_none(),
+        "review_baseline_resolution_outcome should be cleared"
+    );
+    assert_eq!(
+        final_book.metadata_status,
+        MetadataStatus::Identified,
+        "metadata_status should be restored to baseline Identified; got {:?}",
+        final_book.metadata_status
+    );
+}
+
+/// Reject-all on a fresh book (no prior outcome) restores `None` outcome.
+#[tokio::test]
+async fn reject_all_restores_none_outcome_for_fresh_book() {
+    let tmp = TempDir::new().unwrap();
+
+    // Provider returns a search-only result (no ISBN in result → WeakMatch tier)
+    let provider = Arc::new(FlexibleStubProvider {
+        isbn_results: vec![],
+        search_results: vec![ProviderMetadata {
+            provider_name: "test_provider".into(),
+            title: Some("Fresh Book Title".into()),
+            subtitle: None,
+            authors: vec![ProviderAuthor {
+                name: "Some Author".into(),
+                role: None,
+            }],
+            description: None,
+            language: None,
+            publisher: None,
+            publication_year: None,
+            identifiers: vec![],
+            subjects: vec![],
+            series: None,
+            page_count: None,
+            cover_url: None,
+            rating: None,
+            physical_format: None,
+            confidence: 0.7,
+        }],
+    });
+
+    let (service, pool) = setup_with_provider(&tmp, provider).await;
+
+    let book = Book::new("Fresh Book Title");
+    assert!(
+        book.resolution_outcome.is_none(),
+        "precondition: fresh book has no outcome"
+    );
+    BookRepository::create(&pool, &book).await.unwrap();
+
+    let author = archivis_core::models::Author::new("Some Author");
+    AuthorRepository::create(&pool, &author).await.unwrap();
+    BookRepository::add_author(&pool, book.id, author.id, "author", 0)
+        .await
+        .unwrap();
+
+    // Resolve → candidates stored, no auto-apply (search-only, weak match)
+    let outcome = service.resolve_book(book.id, false).await.unwrap();
+    assert!(
+        !outcome.auto_applied,
+        "precondition: should not auto-apply weak match"
+    );
+
+    let review_book = BookRepository::get_by_id(&pool, book.id).await.unwrap();
+    let pre_review_status = review_book
+        .review_baseline_metadata_status
+        .expect("precondition: baseline status should be set");
+    let pre_review_outcome = review_book.review_baseline_resolution_outcome;
+
+    // Reject all pending candidates
+    let candidates = CandidateRepository::list_by_book(&pool, book.id)
+        .await
+        .unwrap();
+    let pending_ids: Vec<_> = candidates
+        .iter()
+        .filter(|c| c.status == CandidateStatus::Pending)
+        .map(|c| c.id)
+        .collect();
+
+    if !pending_ids.is_empty() {
+        service
+            .reject_candidates(book.id, &pending_ids)
+            .await
+            .unwrap();
+    }
+
+    let final_book = BookRepository::get_by_id(&pool, book.id).await.unwrap();
+    assert_eq!(
+        final_book.metadata_status, pre_review_status,
+        "metadata_status should be restored to pre-review value ({:?}); got {:?}",
+        pre_review_status, final_book.metadata_status
+    );
+    assert_eq!(
+        final_book.resolution_outcome, pre_review_outcome,
+        "outcome should be restored to pre-review value ({:?}); got {:?}",
+        pre_review_outcome, final_book.resolution_outcome
+    );
+    assert!(
+        final_book.review_baseline_metadata_status.is_none(),
+        "baseline should be cleared"
+    );
+    assert!(
+        final_book.review_baseline_resolution_outcome.is_none(),
+        "baseline outcome should be cleared"
+    );
+}
+
+/// Apply then undo must restore `review_baseline_resolution_outcome` from changeset.
+#[tokio::test]
+async fn apply_then_undo_restores_baseline_resolution_outcome() {
+    let tmp = TempDir::new().unwrap();
+
+    // Provider returns a search-only candidate (no ISBN → won't auto-apply)
+    let provider = Arc::new(FlexibleStubProvider {
+        isbn_results: vec![],
+        search_results: vec![ProviderMetadata {
+            provider_name: "test_provider".into(),
+            title: Some("Undo Test Book".into()),
+            subtitle: None,
+            authors: vec![ProviderAuthor {
+                name: "Test Author".into(),
+                role: None,
+            }],
+            description: Some("A description.".into()),
+            language: None,
+            publisher: None,
+            publication_year: None,
+            identifiers: vec![],
+            subjects: vec![],
+            series: None,
+            page_count: None,
+            cover_url: None,
+            rating: None,
+            physical_format: None,
+            confidence: 0.7,
+        }],
+    });
+
+    let (service, pool) = setup_with_provider(&tmp, provider).await;
+
+    let book = Book::new("Undo Test Book");
+    BookRepository::create(&pool, &book).await.unwrap();
+
+    let author = archivis_core::models::Author::new("Test Author");
+    AuthorRepository::create(&pool, &author).await.unwrap();
+    BookRepository::add_author(&pool, book.id, author.id, "author", 0)
+        .await
+        .unwrap();
+
+    // Resolve → candidates stored, enters review
+    let outcome = service.resolve_book(book.id, false).await.unwrap();
+    assert!(!outcome.auto_applied, "precondition: should not auto-apply");
+
+    let review_book = BookRepository::get_by_id(&pool, book.id).await.unwrap();
+    assert!(
+        review_book.review_baseline_metadata_status.is_some(),
+        "precondition: baseline should be set"
+    );
+
+    // Find the pending candidate
+    let candidates = CandidateRepository::list_by_book(&pool, book.id)
+        .await
+        .unwrap();
+    let pending = candidates
+        .iter()
+        .find(|c| c.status == CandidateStatus::Pending)
+        .expect("should have a pending candidate");
+
+    // Apply → baseline cleared, outcome set
+    let applied_book = service
+        .apply_candidate(book.id, pending.id, &HashSet::new())
+        .await
+        .unwrap();
+    assert!(
+        applied_book.review_baseline_metadata_status.is_none(),
+        "baseline should be cleared after apply"
+    );
+    assert!(
+        applied_book.review_baseline_resolution_outcome.is_none(),
+        "baseline outcome should be cleared after apply"
+    );
+
+    // Undo → baseline restored from changeset
+    let undone_book = service.undo_candidate(book.id, pending.id).await.unwrap();
+    assert_eq!(
+        undone_book.review_baseline_metadata_status, review_book.review_baseline_metadata_status,
+        "baseline status should be restored after undo"
+    );
+    assert_eq!(
+        undone_book.review_baseline_resolution_outcome,
+        review_book.review_baseline_resolution_outcome,
+        "baseline outcome should be restored after undo"
     );
 }

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE books SET review_baseline_metadata_status = ?, review_baseline_resolution_outcome = ?, updated_at = ? WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "9ab098a5f0fa04c41cdedee2bc6019a6149dbf86b78c56eba16e48e6cbe71972"
+}

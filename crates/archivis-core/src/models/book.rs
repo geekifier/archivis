@@ -52,6 +52,15 @@ pub struct Book {
     pub rating: Option<f32>,
     pub page_count: Option<i32>,
     pub metadata_status: MetadataStatus,
+    /// Snapshot of `metadata_status` from before the current review session.
+    /// Present only while pending candidates exist. Used as a floor to prevent
+    /// status downgrades when resolution produces no actionable result.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub review_baseline_metadata_status: Option<MetadataStatus>,
+    /// Snapshot of `resolution_outcome` from before the current review session.
+    /// Present only while pending candidates exist.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub review_baseline_resolution_outcome: Option<ResolutionOutcome>,
     /// Import-time local metadata quality score (0.0–1.0).
     #[serde(default)]
     pub ingest_quality_score: f32,
@@ -98,6 +107,8 @@ impl Book {
             rating: None,
             page_count: None,
             metadata_status: MetadataStatus::Unidentified,
+            review_baseline_metadata_status: None,
+            review_baseline_resolution_outcome: None,
             ingest_quality_score: 0.0,
             resolution_state: ResolutionState::Pending,
             resolution_outcome: None,
@@ -178,6 +189,7 @@ mod tests {
         assert_eq!(book.title, "Dune");
         assert_eq!(book.sort_title, "Dune");
         assert_eq!(book.metadata_status, MetadataStatus::Unidentified);
+        assert!(book.review_baseline_metadata_status.is_none());
         assert!((book.ingest_quality_score - 0.0).abs() < f32::EPSILON);
         assert_eq!(book.resolution_state, ResolutionState::Pending);
         assert!(book.resolution_outcome.is_none());

@@ -44,8 +44,6 @@ impl<S: StorageBackend> ResolveWorker<S> {
         let mut results = Vec::new();
         let mut errors = Vec::new();
         let mut resolved = 0_usize;
-        let mut publisher_cache = std::collections::HashMap::new();
-
         for (index, id_str) in book_ids.iter().enumerate() {
             let book_id = Uuid::parse_str(id_str)
                 .map_err(|e| TaskError::Failed(format!("invalid UUID '{id_str}': {e}")))?;
@@ -63,12 +61,7 @@ impl<S: StorageBackend> ResolveWorker<S> {
 
             match self
                 .service
-                .resolve_queued_book(
-                    book_id,
-                    manual_refresh,
-                    metadata_rules,
-                    &mut publisher_cache,
-                )
+                .resolve_queued_book(book_id, manual_refresh, metadata_rules)
                 .await
             {
                 Ok(Some(outcome)) => {
@@ -132,15 +125,9 @@ impl<S: StorageBackend> ResolveWorker<S> {
             .send_progress(0, Some(format!("Resolving book {book_id}")))
             .await;
 
-        let mut publisher_cache = std::collections::HashMap::new();
         let Some(outcome) = self
             .service
-            .resolve_queued_book(
-                book_id,
-                manual_refresh,
-                metadata_rules,
-                &mut publisher_cache,
-            )
+            .resolve_queued_book(book_id, manual_refresh, metadata_rules)
             .await?
         else {
             progress

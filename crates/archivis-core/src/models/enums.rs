@@ -97,6 +97,27 @@ pub enum MetadataStatus {
     Unidentified,
 }
 
+impl MetadataStatus {
+    /// Numeric rank for ordering: higher is better.
+    pub fn rank(self) -> u8 {
+        match self {
+            Self::Unidentified => 0,
+            Self::NeedsReview => 1,
+            Self::Identified => 2,
+        }
+    }
+
+    /// Return whichever status ranks higher (self or `floor`).
+    #[must_use]
+    pub fn at_least(self, floor: Self) -> Self {
+        if self.rank() >= floor.rank() {
+            self
+        } else {
+            floor
+        }
+    }
+}
+
 impl fmt::Display for MetadataStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -537,5 +558,29 @@ mod tests {
         assert_eq!(json, r#""balanced""#);
         let deserialized: ScoringProfile = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized, profile);
+    }
+
+    // ── MetadataStatus rank / at_least ─────────────────────────────
+
+    #[test]
+    fn metadata_status_rank_ordering() {
+        assert!(MetadataStatus::Unidentified.rank() < MetadataStatus::NeedsReview.rank());
+        assert!(MetadataStatus::NeedsReview.rank() < MetadataStatus::Identified.rank());
+    }
+
+    #[test]
+    fn metadata_status_at_least_returns_higher() {
+        assert_eq!(
+            MetadataStatus::NeedsReview.at_least(MetadataStatus::Identified),
+            MetadataStatus::Identified,
+        );
+        assert_eq!(
+            MetadataStatus::Identified.at_least(MetadataStatus::NeedsReview),
+            MetadataStatus::Identified,
+        );
+        assert_eq!(
+            MetadataStatus::Unidentified.at_least(MetadataStatus::Unidentified),
+            MetadataStatus::Unidentified,
+        );
     }
 }

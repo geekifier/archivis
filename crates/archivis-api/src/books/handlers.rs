@@ -17,8 +17,8 @@ use archivis_core::isbn::validate_isbn;
 use archivis_core::models::{Book, FieldProvenance, Identifier, IdentifierType, MetadataSource};
 
 use archivis_db::{
-    AuthorRepository, BookFileRepository, BookFilter, BookRepository, IdentifierRepository,
-    PaginationParams, SeriesRepository, SortOrder, TagRepository,
+    AuthorRepository, BookFileRepository, BookFilter, BookRepository, CandidateRepository,
+    IdentifierRepository, PaginationParams, SeriesRepository, SortOrder, TagRepository,
 };
 use archivis_storage::StorageBackend;
 use archivis_tasks::resolve::persist_recomputed_status;
@@ -132,8 +132,30 @@ async fn invalidate_resolution_for_user_edit(
     pool: &archivis_db::DbPool,
     book_id: Uuid,
 ) -> Result<(), ApiError> {
+    // 1. Stamp resolution_requested_at FIRST so any in-flight resolver
+    //    sees the supersession signal before we touch artifacts.
     BookRepository::mark_resolution_pending(pool, book_id, USER_EDIT_TRIGGER).await?;
+
+    // 2. Supersede the active reviewable run and its candidates
+    supersede_active_review(pool, book_id).await?;
+
+    // 3. Clear the review baseline (targeted write, no full-row update)
+    BookRepository::set_review_baseline(pool, book_id, None, None).await?;
+
+    // 4. Recompute status from the user's new data
     persist_recomputed_status(pool, book_id).await?;
+    Ok(())
+}
+
+/// Supersede the currently active reviewable run and its candidates so
+/// `persist_recomputed_status` doesn't see stale pending candidates.
+async fn supersede_active_review(
+    pool: &archivis_db::DbPool,
+    book_id: Uuid,
+) -> Result<(), ApiError> {
+    // `delete_by_book` already finds the latest reviewable run and marks it superseded,
+    // or supersedes legacy candidates if no run exists.
+    CandidateRepository::delete_by_book(pool, book_id).await?;
     Ok(())
 }
 
