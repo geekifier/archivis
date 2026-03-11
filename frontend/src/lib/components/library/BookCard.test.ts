@@ -81,6 +81,6 @@ describe('BookCard', () => {
     render(BookCard, { props: { book } });
     const img = screen.getByAltText('Cover of With Cover');
     expect(img).toBeInTheDocument();
-    expect(img).toHaveAttribute('src', '/api/books/book-42/cover?size=sm');
+    expect(img).toHaveAttribute('src', '/api/books/book-42/cover?size=sm&t=1704067200000');
   });
 });

@@ -14,8 +14,9 @@
 
   const authors = $derived(book.authors?.map((a) => a.name).join(', ') ?? '');
 
-  const coverSm = $derived(`/api/books/${book.id}/cover?size=sm`);
-  const coverMd = $derived(`/api/books/${book.id}/cover?size=md`);
+  const coverTs = $derived(book.updated_at ? Date.parse(book.updated_at) : 0);
+  const coverSm = $derived(`/api/books/${book.id}/cover?size=sm&t=${coverTs}`);
+  const coverMd = $derived(`/api/books/${book.id}/cover?size=md&t=${coverTs}`);
 
   const hue = $derived(placeholderHue(book.id));
 
