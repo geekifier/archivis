@@ -28,7 +28,7 @@ use crate::provider_names;
 use crate::similarity::title_for_search;
 use crate::types::{
     parse_year_from_str, titlecase_title, MetadataQuery, ProviderAuthor, ProviderCapabilities,
-    ProviderFeature, ProviderIdentifier, ProviderMetadata, ProviderQuality,
+    ProviderFeature, ProviderIdentifier, ProviderMetadata, ProviderQuality, ProviderSeries,
 };
 
 static CAPABILITIES: ProviderCapabilities = ProviderCapabilities {
@@ -274,7 +274,13 @@ impl LocProvider {
             publication_year,
             identifiers,
             subjects,
-            series: None,
+            series: record.series_title.map(|name| ProviderSeries {
+                name: titlecase_title(&name),
+                position: record
+                    .series_position
+                    .as_deref()
+                    .and_then(parse_series_position),
+            }),
             page_count,
             cover_url: None,
             rating: None,
@@ -415,6 +421,8 @@ struct ModsRecord {
     lccn: Option<String>,
     lcc_classifications: Vec<String>,
     ddc_classifications: Vec<String>,
+    series_title: Option<String>,
+    series_position: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -448,6 +456,8 @@ fn parse_mods_record(xml: &str) -> Option<ModsRecord> {
     let mut in_primary_title_info = false;
     let mut in_origin_info = false;
     let mut in_physical_description = false;
+    let mut in_related_item_series = false;
+    let mut in_series_title_info = false;
 
     loop {
         match reader.read_event() {
@@ -455,6 +465,16 @@ fn parse_mods_record(xml: &str) -> Option<ModsRecord> {
                 let local = e.local_name();
 
                 match local.as_ref() {
+                    b"relatedItem" => {
+                        let is_series = e
+                            .attributes()
+                            .flatten()
+                            .any(|a| a.key.as_ref() == b"type" && a.value.as_ref() == b"series");
+                        in_related_item_series = is_series;
+                    }
+                    b"titleInfo" if in_related_item_series => {
+                        in_series_title_info = true;
+                    }
                     b"titleInfo" => {
                         // Only treat as primary title if no @type attribute
                         let has_type = e.attributes().flatten().any(|a| a.key.as_ref() == b"type");
@@ -509,6 +529,16 @@ fn parse_mods_record(xml: &str) -> Option<ModsRecord> {
                             record.non_sort = Some(raw);
                         }
                     }
+                    b"title" if in_series_title_info && !text.is_empty() => {
+                        if record.series_title.is_none() {
+                            record.series_title = Some(text);
+                        }
+                    }
+                    b"partNumber" if in_series_title_info && !text.is_empty() => {
+                        if record.series_position.is_none() {
+                            record.series_position = Some(text);
+                        }
+                    }
                     b"title" if in_primary_title_info && !text.is_empty() => {
                         if record.title.is_none() {
                             record.title = Some(text);
@@ -520,7 +550,11 @@ fn parse_mods_record(xml: &str) -> Option<ModsRecord> {
                         }
                     }
                     b"titleInfo" => {
+                        in_series_title_info = false;
                         in_primary_title_info = false;
+                    }
+                    b"relatedItem" => {
+                        in_related_item_series = false;
                     }
                     b"namePart" if in_name && !text.is_empty() => {
                         if current_name.name.is_empty() {
@@ -631,6 +665,9 @@ pub(crate) fn clean_author_name(name: &str) -> String {
     // Remove parenthetical qualifiers (e.g. "(John Ronald Reuel)")
     let name = strip_parentheticals(&name);
 
+    // Strip MARC field-terminating period
+    let name = strip_marc_trailing_period(&name);
+
     // Strip trailing comma/semicolon (LOC names often end with comma)
     let name = name.trim_end_matches([',', ';']).trim();
 
@@ -654,6 +691,35 @@ fn strip_trailing_dates(name: &str) -> String {
 /// Remove parenthetical expressions like "(John Ronald Reuel)"
 fn strip_parentheticals(name: &str) -> String {
     PARENTHETICALS_RE.replace_all(name, " ").trim().to_string()
+}
+
+/// Strip MARC field-terminating period, preserving periods on initials.
+///
+/// MARC 100/700 fields always end with punctuation. When the name ends
+/// with a multi-character word + period, that period is purely MARC
+/// punctuation. When it ends with a single letter + period (an initial),
+/// the period is part of the name.
+fn strip_marc_trailing_period(name: &str) -> String {
+    if !name.ends_with('.') {
+        return name.to_string();
+    }
+    let before = &name[..name.len() - 1];
+    let last_word = before.split_whitespace().next_back().unwrap_or("");
+    // Single letter before period = initial → keep the period
+    if last_word.len() == 1 && last_word.chars().all(char::is_alphabetic) {
+        name.to_string()
+    } else {
+        before.trim_end().to_string()
+    }
+}
+
+/// Parse a MODS `partNumber` string into a numeric position.
+///
+/// Handles: `"1"`, `"2"`, `"bk. 2"`, `"vol. 3"`, `"1.5"`
+fn parse_series_position(raw: &str) -> Option<f32> {
+    raw.split_whitespace()
+        .filter_map(|tok| tok.trim_end_matches('.').parse::<f32>().ok())
+        .next_back()
 }
 
 /// Parse page count from LOC extent strings.
@@ -1040,6 +1106,8 @@ mod tests {
             lccn: Some("65022576".to_string()),
             lcc_classifications: vec!["PZ4.H536".to_string()],
             ddc_classifications: vec!["813/.54".to_string()],
+            series_title: None,
+            series_position: None,
         };
 
         let metadata = LocProvider::record_to_metadata(record, 0.95);
@@ -1332,5 +1400,129 @@ mod tests {
         assert_eq!(normalize_marc_role("ctb"), "contributor");
         assert_eq!(normalize_marc_role("nrt"), "narrator");
         assert_eq!(normalize_marc_role("aui"), "author of introduction");
+    }
+
+    // ── MARC trailing period stripping ───────────────────────────────
+
+    #[test]
+    fn clean_name_marc_trailing_period() {
+        assert_eq!(clean_author_name("Huber, Anna Lee."), "Anna Lee Huber");
+    }
+
+    #[test]
+    fn clean_name_marc_period_preserves_initial() {
+        assert_eq!(clean_author_name("Le Guin, Ursula K."), "Ursula K. Le Guin");
+    }
+
+    #[test]
+    fn clean_name_marc_period_single_name() {
+        assert_eq!(clean_author_name("Voltaire."), "Voltaire");
+    }
+
+    // ── Series position parsing ──────────────────────────────────────
+
+    #[test]
+    fn parse_series_position_plain_number() {
+        assert!((parse_series_position("1").unwrap() - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn parse_series_position_prefixed() {
+        assert!((parse_series_position("bk. 2").unwrap() - 2.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn parse_series_position_decimal() {
+        assert!((parse_series_position("1.5").unwrap() - 1.5).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn parse_series_position_no_number() {
+        assert!(parse_series_position("vol").is_none());
+    }
+
+    // ── Series extraction from MODS ──────────────────────────────────
+
+    #[test]
+    fn parse_mods_series_with_position() {
+        let xml = r#"
+        <mods xmlns="http://www.loc.gov/mods/v3">
+            <titleInfo><title>Mortal Arts</title></titleInfo>
+            <relatedItem type="series">
+                <titleInfo>
+                    <title>A Lady Darby mystery</title>
+                    <partNumber>1</partNumber>
+                </titleInfo>
+            </relatedItem>
+        </mods>
+        "#;
+        let record = parse_mods_record(xml).unwrap();
+        assert_eq!(record.series_title.as_deref(), Some("A Lady Darby mystery"));
+        assert_eq!(record.series_position.as_deref(), Some("1"));
+    }
+
+    #[test]
+    fn parse_mods_series_without_position() {
+        let xml = r#"
+        <mods xmlns="http://www.loc.gov/mods/v3">
+            <titleInfo><title>Some Book</title></titleInfo>
+            <relatedItem type="series">
+                <titleInfo>
+                    <title>Great Series</title>
+                </titleInfo>
+            </relatedItem>
+        </mods>
+        "#;
+        let record = parse_mods_record(xml).unwrap();
+        assert_eq!(record.series_title.as_deref(), Some("Great Series"));
+        assert!(record.series_position.is_none());
+    }
+
+    #[test]
+    fn parse_mods_non_series_related_item_ignored() {
+        let xml = r#"
+        <mods xmlns="http://www.loc.gov/mods/v3">
+            <titleInfo><title>Some Book</title></titleInfo>
+            <relatedItem type="otherFormat">
+                <titleInfo>
+                    <title>Electronic version</title>
+                </titleInfo>
+            </relatedItem>
+        </mods>
+        "#;
+        let record = parse_mods_record(xml).unwrap();
+        assert!(record.series_title.is_none());
+    }
+
+    #[test]
+    fn record_to_metadata_includes_titlecased_series() {
+        let record = ModsRecord {
+            title: Some("Mortal Arts".to_string()),
+            series_title: Some("A Lady Darby mystery".to_string()),
+            series_position: Some("1".to_string()),
+            ..ModsRecord::default()
+        };
+        let metadata = LocProvider::record_to_metadata(record, 0.9);
+        let series = metadata.series.expect("should have series");
+        assert_eq!(series.name, "A Lady Darby Mystery");
+        assert!((series.position.unwrap() - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn parse_mods_series_does_not_clobber_primary_title() {
+        let xml = r#"
+        <mods xmlns="http://www.loc.gov/mods/v3">
+            <titleInfo><title>Mortal Arts</title></titleInfo>
+            <relatedItem type="series">
+                <titleInfo>
+                    <title>A Lady Darby mystery</title>
+                    <partNumber>1</partNumber>
+                </titleInfo>
+            </relatedItem>
+        </mods>
+        "#;
+        let record = parse_mods_record(xml).unwrap();
+        assert_eq!(record.title.as_deref(), Some("Mortal Arts"));
+        assert_eq!(record.series_title.as_deref(), Some("A Lady Darby mystery"));
     }
 }

@@ -14,8 +14,8 @@ use crate::provider::MetadataProvider;
 use crate::provider_names;
 use crate::similarity::title_for_search;
 use crate::types::{
-    parse_year_from_str, MetadataQuery, ProviderAuthor, ProviderCapabilities, ProviderFeature,
-    ProviderIdentifier, ProviderMetadata, ProviderQuality, ProviderSeries,
+    parse_year_from_str, titlecase_title, MetadataQuery, ProviderAuthor, ProviderCapabilities,
+    ProviderFeature, ProviderIdentifier, ProviderMetadata, ProviderQuality, ProviderSeries,
 };
 
 static CAPABILITIES: ProviderCapabilities = ProviderCapabilities {
@@ -986,7 +986,7 @@ fn extract_series(book_series: Option<&Vec<HcBookSeries>>) -> Option<ProviderSer
             s.series.as_ref().map(|ser| {
                 #[allow(clippy::cast_possible_truncation)]
                 ProviderSeries {
-                    name: ser.name.clone(),
+                    name: titlecase_title(&ser.name),
                     position: s.position.map(|p| p as f32),
                 }
             })

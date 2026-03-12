@@ -15,8 +15,8 @@ use crate::provider::MetadataProvider;
 use crate::provider_names;
 use crate::similarity::title_for_search;
 use crate::types::{
-    parse_year_from_str, MetadataQuery, ProviderAuthor, ProviderCapabilities, ProviderFeature,
-    ProviderIdentifier, ProviderMetadata, ProviderQuality, ProviderSeries,
+    parse_year_from_str, titlecase_title, MetadataQuery, ProviderAuthor, ProviderCapabilities,
+    ProviderFeature, ProviderIdentifier, ProviderMetadata, ProviderQuality, ProviderSeries,
 };
 
 static CAPABILITIES: ProviderCapabilities = ProviderCapabilities {
@@ -666,7 +666,7 @@ fn parse_series_string(raw: &str) -> ProviderSeries {
         if !name.is_empty() {
             if let Ok(position) = num_str.trim().parse::<f32>() {
                 return ProviderSeries {
-                    name: name.to_string(),
+                    name: titlecase_title(name),
                     position: Some(position),
                 };
             }
@@ -674,7 +674,7 @@ fn parse_series_string(raw: &str) -> ProviderSeries {
     }
 
     ProviderSeries {
-        name: trimmed.to_string(),
+        name: titlecase_title(trimmed),
         position: None,
     }
 }
@@ -1728,6 +1728,13 @@ mod tests {
         let s = parse_series_string("42");
         assert_eq!(s.name, "42");
         assert!(s.position.is_none());
+    }
+
+    #[test]
+    fn parse_series_titlecases_name() {
+        let s = parse_series_string("a lady darby mystery, #1");
+        assert_eq!(s.name, "A Lady Darby Mystery");
+        assert!((s.position.unwrap() - 1.0).abs() < f32::EPSILON);
     }
 
     // ── Integration test (live API — ignored by default) ─────────────
