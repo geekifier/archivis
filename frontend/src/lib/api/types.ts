@@ -407,6 +407,7 @@ export interface TaskResponse {
 /** SSE progress event data for a single task. */
 export interface TaskProgressEvent {
   task_id: string;
+  task_type?: TaskType;
   status: TaskStatus;
   progress: number;
   message: string | null;
@@ -434,6 +435,7 @@ export interface SidebarCountsResponse {
   duplicates: number;
   needs_review: number;
   unidentified: number;
+  active_tasks: number;
 }
 
 // --- Duplicate types ---

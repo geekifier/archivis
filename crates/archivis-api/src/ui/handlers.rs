@@ -30,5 +30,6 @@ pub async fn sidebar_counts(
         duplicates: counts.duplicates,
         needs_review: counts.needs_review,
         unidentified: counts.unidentified,
+        active_tasks: counts.active_tasks,
     }))
 }

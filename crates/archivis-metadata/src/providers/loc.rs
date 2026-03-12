@@ -28,7 +28,7 @@ use crate::provider_names;
 use crate::similarity::title_for_search;
 use crate::types::{
     parse_year_from_str, titlecase_title, MetadataQuery, ProviderAuthor, ProviderCapabilities,
-    ProviderFeature, ProviderIdentifier, ProviderMetadata, ProviderQuality, ProviderSeries,
+    ProviderIdentifier, ProviderMetadata, ProviderQuality, ProviderSeries,
 };
 
 static CAPABILITIES: ProviderCapabilities = ProviderCapabilities {
@@ -39,7 +39,7 @@ static CAPABILITIES: ProviderCapabilities = ProviderCapabilities {
         IdentifierType::Isbn10,
         IdentifierType::Lccn,
     ],
-    features: &[ProviderFeature::Search],
+    features: &[],
 };
 
 const PROVIDER_NAME: &str = provider_names::LOC;

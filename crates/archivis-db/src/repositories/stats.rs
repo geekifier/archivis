@@ -55,6 +55,7 @@ pub struct SidebarCounts {
     pub duplicates: i64,
     pub needs_review: i64,
     pub unidentified: i64,
+    pub active_tasks: i64,
 }
 
 pub struct StatsRepository;
@@ -202,7 +203,8 @@ impl StatsRepository {
             r"SELECT
                 (SELECT COUNT(*) FROM duplicate_links WHERE status = 'pending') AS duplicates,
                 (SELECT COUNT(*) FROM books WHERE metadata_status = 'needs_review') AS needs_review,
-                (SELECT COUNT(*) FROM books WHERE metadata_status = 'unidentified') AS unidentified",
+                (SELECT COUNT(*) FROM books WHERE metadata_status = 'unidentified') AS unidentified,
+                (SELECT COUNT(*) FROM tasks WHERE status IN ('pending', 'running')) AS active_tasks",
         )
         .fetch_one(pool)
         .await
@@ -217,6 +219,9 @@ impl StatsRepository {
                 .map_err(|e| DbError::Query(e.to_string()))?,
             unidentified: row
                 .try_get("unidentified")
+                .map_err(|e| DbError::Query(e.to_string()))?,
+            active_tasks: row
+                .try_get("active_tasks")
                 .map_err(|e| DbError::Query(e.to_string()))?,
         })
     }

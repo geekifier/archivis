@@ -6,6 +6,8 @@ export function taskStatusLabel(status: TaskStatus | string): string {
       return 'Pending';
     case 'running':
       return 'Running';
+    case 'processing':
+      return 'Processing';
     case 'cancelling':
       return 'Cancelling';
     case 'completed':
@@ -41,6 +43,7 @@ export function statusColorClass(status: TaskStatus | string): string {
     case 'failed':
       return 'text-destructive';
     case 'running':
+    case 'processing':
       return 'text-blue-600 dark:text-blue-400';
     case 'cancelling':
     case 'cancelled':
@@ -57,6 +60,7 @@ export function statusBgClass(status: TaskStatus | string): string {
     case 'failed':
       return 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400';
     case 'running':
+    case 'processing':
       return 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400';
     case 'cancelling':
     case 'cancelled':
@@ -109,4 +113,34 @@ export function formatElapsedTime(startedAt: string): string {
 
 export function isTerminalStatus(status: TaskStatus | string): boolean {
   return status === 'completed' || status === 'failed' || status === 'cancelled';
+}
+
+export function taskTypeStageName(taskType: string): string {
+  switch (taskType) {
+    case 'scan_isbn':
+      return 'scanning';
+    case 'resolve_book':
+      return 'resolving';
+    case 'import_file':
+    case 'import_directory':
+      return 'importing';
+    default:
+      return 'processing';
+  }
+}
+
+export function taskStatsLabels(taskType: TaskType | string): {
+  countLabel: string;
+  successLabel: string;
+} {
+  switch (taskType) {
+    case 'resolve_book':
+      return { countLabel: 'Books', successLabel: 'Resolved' };
+    case 'scan_isbn':
+      return { countLabel: 'Books', successLabel: 'Scanned' };
+    case 'import_directory':
+      return { countLabel: 'Files', successLabel: 'Imported' };
+    default:
+      return { countLabel: 'Items', successLabel: 'Processed' };
+  }
 }

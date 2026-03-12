@@ -45,6 +45,11 @@ impl<S: StorageBackend> ResolveWorker<S> {
         let mut errors = Vec::new();
         let mut resolved = 0_usize;
         for (index, id_str) in book_ids.iter().enumerate() {
+            // Check for cancellation before each book
+            if progress.is_cancelled() {
+                return Err(TaskError::Cancelled);
+            }
+
             let book_id = Uuid::parse_str(id_str)
                 .map_err(|e| TaskError::Failed(format!("invalid UUID '{id_str}': {e}")))?;
 
@@ -56,7 +61,16 @@ impl<S: StorageBackend> ResolveWorker<S> {
             };
 
             progress
-                .send_progress(pct, Some(format!("Resolving book {}/{}", index + 1, total)))
+                .send_progress_with_data(
+                    pct,
+                    Some(format!("Resolving book {}/{}", index + 1, total)),
+                    Some(serde_json::json!({
+                        "processed": index,
+                        "total": total,
+                        "resolved": resolved,
+                        "failed": errors.len(),
+                    })),
+                )
                 .await;
 
             match self
@@ -90,7 +104,16 @@ impl<S: StorageBackend> ResolveWorker<S> {
         }
 
         progress
-            .send_progress(100, Some("Batch resolution complete".into()))
+            .send_progress_with_data(
+                100,
+                Some("Batch resolution complete".into()),
+                Some(serde_json::json!({
+                    "processed": total,
+                    "total": total,
+                    "resolved": resolved,
+                    "failed": errors.len(),
+                })),
+            )
             .await;
 
         Ok(serde_json::json!({

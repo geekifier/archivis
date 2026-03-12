@@ -41,7 +41,8 @@ describe('navCounts store', () => {
       mockSidebarCounts.mockResolvedValueOnce({
         duplicates: 3,
         needs_review: 7,
-        unidentified: 12
+        unidentified: 12,
+        active_tasks: 0
       });
 
       navCounts.refresh();
@@ -58,7 +59,8 @@ describe('navCounts store', () => {
       mockSidebarCounts.mockResolvedValueOnce({
         duplicates: 5,
         needs_review: 2,
-        unidentified: 1
+        unidentified: 1,
+        active_tasks: 0
       });
       navCounts.refresh();
       await vi.runAllTimersAsync();
@@ -80,7 +82,8 @@ describe('navCounts store', () => {
       mockSidebarCounts.mockResolvedValue({
         duplicates: 1,
         needs_review: 1,
-        unidentified: 1
+        unidentified: 1,
+        active_tasks: 0
       });
 
       // Start a debounced invalidate
@@ -100,7 +103,8 @@ describe('navCounts store', () => {
       mockSidebarCounts.mockResolvedValue({
         duplicates: 1,
         needs_review: 1,
-        unidentified: 1
+        unidentified: 1,
+        active_tasks: 0
       });
 
       navCounts.invalidate();
@@ -120,7 +124,8 @@ describe('navCounts store', () => {
       mockSidebarCounts.mockResolvedValue({
         duplicates: 2,
         needs_review: 3,
-        unidentified: 4
+        unidentified: 4,
+        active_tasks: 0
       });
 
       expect(hookRef.current).toBeTypeOf('function');
@@ -138,7 +143,8 @@ describe('navCounts store', () => {
       mockSidebarCounts.mockResolvedValueOnce({
         duplicates: 5,
         needs_review: 3,
-        unidentified: 8
+        unidentified: 8,
+        active_tasks: 0
       });
       navCounts.refresh();
       await vi.runAllTimersAsync();

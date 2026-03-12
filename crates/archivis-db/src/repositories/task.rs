@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use archivis_core::errors::DbError;
 use archivis_core::models::{Task, TaskStatus, TaskType};
 use chrono::{DateTime, Utc};
@@ -142,6 +144,63 @@ impl TaskRepository {
             failed: row.failed,
             cancelled: row.cancelled,
         })
+    }
+
+    /// Get child summaries for multiple parent tasks in a single query.
+    pub async fn child_summaries_batch(
+        pool: &SqlitePool,
+        parent_ids: &[Uuid],
+    ) -> Result<HashMap<Uuid, ChildTaskSummary>, DbError> {
+        if parent_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let placeholders = parent_ids
+            .iter()
+            .map(|_| "?")
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            r"SELECT
+                parent_task_id,
+                COUNT(*) as total,
+                COALESCE(SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END), 0) as pending,
+                COALESCE(SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END), 0) as running,
+                COALESCE(SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END), 0) as completed,
+                COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) as failed,
+                COALESCE(SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END), 0) as cancelled
+            FROM tasks WHERE parent_task_id IN ({placeholders})
+            GROUP BY parent_task_id",
+        );
+
+        let mut query = sqlx::query_as::<_, ChildSummaryRow>(&sql);
+        for id in parent_ids {
+            query = query.bind(id.to_string());
+        }
+
+        let rows = query
+            .fetch_all(pool)
+            .await
+            .map_err(|e| DbError::Query(e.to_string()))?;
+
+        let mut map = HashMap::with_capacity(rows.len());
+        for row in rows {
+            let parent_id = Uuid::parse_str(&row.parent_task_id)
+                .map_err(|e| DbError::Query(format!("invalid parent_task_id UUID: {e}")))?;
+            map.insert(
+                parent_id,
+                ChildTaskSummary {
+                    total: row.total,
+                    pending: row.pending,
+                    running: row.running,
+                    completed: row.completed,
+                    failed: row.failed,
+                    cancelled: row.cancelled,
+                },
+            );
+        }
+
+        Ok(map)
     }
 
     /// Cancel all pending children of a parent task.
@@ -289,7 +348,18 @@ impl TaskRepository {
     }
 }
 
-// ── Row type for sqlx mapping ──────────────────────────────────
+// ── Row types for sqlx mapping ─────────────────────────────────
+
+#[derive(sqlx::FromRow)]
+struct ChildSummaryRow {
+    parent_task_id: String,
+    total: i64,
+    pending: i64,
+    running: i64,
+    completed: i64,
+    failed: i64,
+    cancelled: i64,
+}
 
 #[derive(sqlx::FromRow)]
 struct TaskRow {

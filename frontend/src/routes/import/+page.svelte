@@ -78,9 +78,16 @@
     tasksError = null;
     try {
       recentTasks = await api.tasks.list();
-      // Auto-detect running/pending tasks and add them to activeTaskIds
-      // so the ActiveTaskPanel picks them up after navigation
-      const runningIds = recentTasks.filter((t) => !isTerminalStatus(t.status)).map((t) => t.id);
+      // Auto-detect active tasks and add them to activeTaskIds
+      // so the ActiveTaskPanel picks them up after navigation.
+      // Include terminal roots whose children are still running.
+      const runningIds = recentTasks
+        .filter((t) => {
+          if (!isTerminalStatus(t.status)) return true;
+          const cs = t.children_summary;
+          return cs != null && (cs.running > 0 || cs.pending > 0);
+        })
+        .map((t) => t.id);
       if (runningIds.length > 0) {
         const existing = new Set(activeTaskIds);
         const newIds = runningIds.filter((id) => !existing.has(id));

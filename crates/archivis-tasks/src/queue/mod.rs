@@ -158,6 +158,7 @@ pub async fn run_dispatcher<S: ::std::hash::BuildHasher>(
         let token = cancellation_registry.register(task_id);
         let progress = progress
             .for_task(task_id)
+            .with_task_type(task.task_type)
             .with_parent(task.parent_task_id)
             .with_cancellation_token(token);
         let pool = db_pool.clone();
@@ -229,6 +230,7 @@ async fn dispatch_task(
             // Broadcast completion
             let update = TaskProgress {
                 task_id,
+                task_type: progress.task_type(),
                 status: TaskStatus::Completed,
                 progress: 100,
                 message: None,
@@ -265,6 +267,7 @@ async fn dispatch_task(
             // Broadcast cancellation
             let update = TaskProgress {
                 task_id,
+                task_type: progress.task_type(),
                 status: TaskStatus::Cancelled,
                 progress: 0,
                 message: Some("Task cancelled".into()),
@@ -297,6 +300,7 @@ async fn dispatch_task(
             // Broadcast failure
             let update = TaskProgress {
                 task_id,
+                task_type: progress.task_type(),
                 status: TaskStatus::Failed,
                 progress: 0,
                 message: None,

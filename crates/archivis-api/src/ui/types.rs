@@ -6,4 +6,5 @@ pub struct SidebarCountsResponse {
     pub duplicates: i64,
     pub needs_review: i64,
     pub unidentified: i64,
+    pub active_tasks: i64,
 }

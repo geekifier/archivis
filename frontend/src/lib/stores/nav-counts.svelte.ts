@@ -4,6 +4,7 @@ function createNavCounts() {
   let duplicateCount = $state<number | null>(null);
   let needsReviewCount = $state<number | null>(null);
   let unidentifiedCount = $state<number | null>(null);
+  let activeTaskCount = $state<number | null>(null);
   let debounceTimer: ReturnType<typeof setTimeout> | undefined;
 
   async function refreshAll() {
@@ -12,6 +13,7 @@ function createNavCounts() {
       duplicateCount = counts.duplicates;
       needsReviewCount = counts.needs_review;
       unidentifiedCount = counts.unidentified;
+      activeTaskCount = counts.active_tasks;
     } catch {
       // Silently ignore — keep previous counts
     }
@@ -29,7 +31,7 @@ function createNavCounts() {
 
   function reset() {
     clearTimeout(debounceTimer);
-    duplicateCount = needsReviewCount = unidentifiedCount = null;
+    duplicateCount = needsReviewCount = unidentifiedCount = activeTaskCount = null;
   }
 
   // Auto-register with API layer
@@ -44,6 +46,9 @@ function createNavCounts() {
     },
     get unidentifiedCount() {
       return unidentifiedCount;
+    },
+    get activeTaskCount() {
+      return activeTaskCount;
     },
     refresh,
     invalidate,

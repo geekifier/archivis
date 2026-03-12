@@ -27,17 +27,20 @@ pub async fn list_tasks(
     AuthUser(_user): AuthUser,
 ) -> Result<Json<Vec<TaskResponse>>, ApiError> {
     let tasks = TaskRepository::list_recent(state.db_pool(), 50).await?;
-    let mut responses = Vec::with_capacity(tasks.len());
-    for task in tasks {
-        let task_id = task.id;
-        let mut resp: TaskResponse = task.into();
-        // Attach children summary for tasks that have children
-        let summary = TaskRepository::child_summary(state.db_pool(), task_id).await?;
-        if summary.total > 0 {
-            resp.children_summary = Some(summary.into());
-        }
-        responses.push(resp);
-    }
+    let task_ids: Vec<Uuid> = tasks.iter().map(|t| t.id).collect();
+    let mut summaries = TaskRepository::child_summaries_batch(state.db_pool(), &task_ids).await?;
+    let responses = tasks
+        .into_iter()
+        .map(|task| {
+            let mut resp: TaskResponse = task.into();
+            if let Some(summary) = summaries.remove(&resp.id) {
+                if summary.total > 0 {
+                    resp.children_summary = Some(summary.into());
+                }
+            }
+            resp
+        })
+        .collect();
     Ok(Json(responses))
 }
 
@@ -93,7 +96,20 @@ pub async fn list_children(
     // Verify parent exists
     let _parent = TaskRepository::get_by_id(state.db_pool(), id).await?;
     let children = TaskRepository::list_children(state.db_pool(), id).await?;
-    let responses: Vec<TaskResponse> = children.into_iter().map(Into::into).collect();
+    let child_ids: Vec<Uuid> = children.iter().map(|t| t.id).collect();
+    let mut summaries = TaskRepository::child_summaries_batch(state.db_pool(), &child_ids).await?;
+    let responses = children
+        .into_iter()
+        .map(|child| {
+            let mut resp: TaskResponse = child.into();
+            if let Some(summary) = summaries.remove(&resp.id) {
+                if summary.total > 0 {
+                    resp.children_summary = Some(summary.into());
+                }
+            }
+            resp
+        })
+        .collect();
     Ok(Json(responses))
 }
 
@@ -121,10 +137,22 @@ pub async fn cancel_task(
     let task = TaskRepository::get_by_id(state.db_pool(), id).await?;
 
     if task.status.is_terminal() {
-        return Err(ApiError::Validation(format!(
-            "task is already in terminal state: {}",
-            task.status
-        )));
+        // Task is terminal, but children might still be active — cancel them
+        let summary = TaskRepository::child_summary(state.db_pool(), id).await?;
+        if summary.running > 0 || summary.pending > 0 {
+            let children = TaskRepository::list_children(state.db_pool(), id).await?;
+            for child in &children {
+                if child.status == TaskStatus::Running {
+                    state.task_queue().cancellation_registry().cancel(child.id);
+                }
+            }
+            TaskRepository::cancel_pending_children(state.db_pool(), id).await?;
+        } else {
+            return Err(ApiError::Validation(format!(
+                "task is already in terminal state: {}",
+                task.status
+            )));
+        }
     }
 
     match task.status {
@@ -145,6 +173,7 @@ pub async fn cancel_task(
             // Broadcast cancellation event
             let update = archivis_core::models::TaskProgress {
                 task_id: id,
+                task_type: task.task_type,
                 status: TaskStatus::Cancelled,
                 progress: 0,
                 message: Some("Task cancelled".into()),

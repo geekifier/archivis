@@ -333,6 +333,13 @@
               </svg>
             {/if}
             <span class="flex-1">{item.label}</span>
+            {#if item.icon === 'import' && navCounts.activeTaskCount != null && navCounts.activeTaskCount > 0}
+              <span
+                class="min-w-5 rounded-full bg-green-500/15 px-1.5 py-0.5 text-center text-xs font-medium text-green-600 dark:text-green-400"
+              >
+                {navCounts.activeTaskCount}
+              </span>
+            {/if}
             {#if item.icon === 'duplicates' && navCounts.duplicateCount != null && navCounts.duplicateCount > 0}
               <span
                 class="min-w-5 rounded-full bg-amber-500/15 px-1.5 py-0.5 text-center text-xs font-medium text-amber-600 dark:text-amber-400"

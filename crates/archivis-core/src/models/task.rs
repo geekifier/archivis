@@ -133,6 +133,7 @@ impl Task {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskProgress {
     pub task_id: Uuid,
+    pub task_type: TaskType,
     pub status: TaskStatus,
     pub progress: u8,
     pub message: Option<String>,

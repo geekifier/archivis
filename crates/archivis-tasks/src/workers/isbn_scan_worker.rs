@@ -54,6 +54,11 @@ impl<S: StorageBackend> IsbnScanWorker<S> {
         let mut resolve_book_ids = Vec::new();
 
         for (index, id_str) in book_ids.iter().enumerate() {
+            // Check for cancellation before each book
+            if progress.is_cancelled() {
+                return Err(TaskError::Cancelled);
+            }
+
             let book_id = Uuid::parse_str(id_str)
                 .map_err(|e| TaskError::Failed(format!("invalid UUID '{id_str}': {e}")))?;
 
@@ -65,9 +70,15 @@ impl<S: StorageBackend> IsbnScanWorker<S> {
             };
 
             progress
-                .send_progress(
+                .send_progress_with_data(
                     pct,
                     Some(format!("Scanning book {}/{total} for ISBNs", index + 1)),
+                    Some(serde_json::json!({
+                        "processed": index,
+                        "total": total,
+                        "scanned": results.len(),
+                        "failed": errors.len(),
+                    })),
                 )
                 .await;
 
@@ -92,15 +103,25 @@ impl<S: StorageBackend> IsbnScanWorker<S> {
             }
         }
 
+        let resolution_parent = progress.resolution_parent();
         enqueue_resolution_batch(
             self.task_queue.as_ref(),
-            progress.task_id(),
+            resolution_parent,
             resolve_book_ids,
         )
         .await;
 
         progress
-            .send_progress(100, Some("Batch ISBN scan complete".into()))
+            .send_progress_with_data(
+                100,
+                Some("Batch ISBN scan complete".into()),
+                Some(serde_json::json!({
+                    "processed": total,
+                    "total": total,
+                    "scanned": results.len(),
+                    "failed": errors.len(),
+                })),
+            )
             .await;
 
         Ok(serde_json::json!({
@@ -136,7 +157,8 @@ impl<S: StorageBackend> IsbnScanWorker<S> {
         let result = self.service.scan_book(book_id).await?;
 
         if resolve_after_scan || result.isbns_stored > 0 {
-            enqueue_resolution_single(self.task_queue.as_ref(), progress.task_id(), book_id).await;
+            let resolution_parent = progress.resolution_parent();
+            enqueue_resolution_single(self.task_queue.as_ref(), resolution_parent, book_id).await;
         }
 
         progress

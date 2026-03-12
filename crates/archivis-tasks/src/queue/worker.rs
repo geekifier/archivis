@@ -27,6 +27,7 @@ pub trait Worker: Send + Sync {
 #[derive(Clone)]
 pub struct ProgressSender {
     task_id: Uuid,
+    task_type: TaskType,
     parent_task_id: Option<Uuid>,
     pub(crate) tx: broadcast::Sender<TaskProgress>,
     db_pool: DbPool,
@@ -37,6 +38,7 @@ impl ProgressSender {
     pub fn new(tx: broadcast::Sender<TaskProgress>, db_pool: DbPool) -> Self {
         Self {
             task_id: Uuid::nil(),
+            task_type: TaskType::ImportFile,
             parent_task_id: None,
             tx,
             db_pool,
@@ -49,6 +51,7 @@ impl ProgressSender {
     pub fn for_task(&self, task_id: Uuid) -> Self {
         Self {
             task_id,
+            task_type: TaskType::ImportFile,
             parent_task_id: None,
             tx: self.tx.clone(),
             db_pool: self.db_pool.clone(),
@@ -60,6 +63,13 @@ impl ProgressSender {
     #[must_use]
     pub fn with_parent(mut self, parent_task_id: Option<Uuid>) -> Self {
         self.parent_task_id = parent_task_id;
+        self
+    }
+
+    /// Set the task type for SSE events.
+    #[must_use]
+    pub fn with_task_type(mut self, task_type: TaskType) -> Self {
+        self.task_type = task_type;
         self
     }
 
@@ -89,6 +99,22 @@ impl ProgressSender {
     /// Get the task ID.
     pub fn task_id(&self) -> Uuid {
         self.task_id
+    }
+
+    /// Get the parent task ID (if this task is a child).
+    pub fn parent_task_id(&self) -> Option<Uuid> {
+        self.parent_task_id
+    }
+
+    /// Get the parent task ID, falling back to this task's own ID.
+    /// Used when enqueueing child tasks that should resolve to the top-level parent.
+    pub fn resolution_parent(&self) -> Uuid {
+        self.parent_task_id.unwrap_or(self.task_id)
+    }
+
+    /// Get the task type.
+    pub fn task_type(&self) -> TaskType {
+        self.task_type
     }
 
     /// Get the broadcast sender (for direct sends in dispatch).
@@ -123,6 +149,7 @@ impl ProgressSender {
 
         let update = TaskProgress {
             task_id: self.task_id,
+            task_type: self.task_type,
             status: TaskStatus::Running,
             progress,
             message,
