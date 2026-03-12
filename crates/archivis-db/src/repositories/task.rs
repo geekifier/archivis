@@ -234,6 +234,36 @@ impl TaskRepository {
         Ok(())
     }
 
+    /// Delete terminal tasks (completed/failed/cancelled) whose `completed_at`
+    /// is older than the given cutoff. Children are deleted first to respect FKs.
+    /// Returns the total number of rows deleted.
+    pub async fn delete_terminal_older_than(
+        pool: &SqlitePool,
+        cutoff: DateTime<Utc>,
+    ) -> Result<u64, DbError> {
+        let cutoff_str = cutoff.to_rfc3339();
+
+        // Children first (FK safety)
+        let children = sqlx::query!(
+            "DELETE FROM tasks WHERE status IN ('completed','failed','cancelled') AND completed_at < ? AND parent_task_id IS NOT NULL",
+            cutoff_str,
+        )
+        .execute(pool)
+        .await
+        .map_err(|e| DbError::Query(e.to_string()))?;
+
+        // Then parents
+        let parents = sqlx::query!(
+            "DELETE FROM tasks WHERE status IN ('completed','failed','cancelled') AND completed_at < ? AND parent_task_id IS NULL",
+            cutoff_str,
+        )
+        .execute(pool)
+        .await
+        .map_err(|e| DbError::Query(e.to_string()))?;
+
+        Ok(children.rows_affected() + parents.rows_affected())
+    }
+
     /// Recover tasks that were running when the application was interrupted.
     /// Resets them to pending so they can be re-dispatched.
     /// Skips cancelled tasks. Returns the recovered tasks.

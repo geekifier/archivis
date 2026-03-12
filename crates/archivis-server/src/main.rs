@@ -342,6 +342,12 @@ async fn init_services_and_router(
         .await;
     });
 
+    // Periodic DB maintenance (expired sessions + old tasks)
+    let maintenance_pool = db_pool.clone();
+    tokio::spawn(async move {
+        archivis_tasks::maintenance::run_maintenance_loop(maintenance_pool).await;
+    });
+
     // Recover interrupted tasks from previous run
     if let Err(err) = queue::recover_tasks(&db_pool, &task_queue.dispatch_sender()).await {
         tracing::warn!(%err, "Failed to recover interrupted tasks");

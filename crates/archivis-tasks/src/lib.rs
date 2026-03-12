@@ -1,5 +1,6 @@
 pub mod import;
 pub mod isbn_scan;
+pub mod maintenance;
 pub mod merge;
 pub mod queue;
 pub mod resolve;

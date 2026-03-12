@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM tasks WHERE status IN ('completed','failed','cancelled') AND completed_at < ? AND parent_task_id IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "8729010b76e613bf828cad5aed693e37bb604338f3e30fc8b6f28b02d827a938"
+}
