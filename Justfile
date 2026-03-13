@@ -1,3 +1,5 @@
+host := "127.0.0.1"
+
 default:
     @just --list
 
@@ -85,8 +87,8 @@ dev:
     CREDS
     fi
     printf 'Dev admin: %s / %s\n' "$ARCHIVIS_ADMIN_USERNAME" "$ARCHIVIS_ADMIN_PASSWORD"
-    cargo run --package archivis-server -- --data-dir .local/data &
-    cd frontend && npm run dev &
+    cargo run --package archivis-server -- --data-dir .local/data --listen-address {{host}} &
+    cd frontend && npm run dev -- --host {{host}} &
     wait
 
 # Run backend only with local dev data
@@ -106,11 +108,11 @@ dev-backend:
     CREDS
     fi
     printf 'Dev admin: %s / %s\n' "$ARCHIVIS_ADMIN_USERNAME" "$ARCHIVIS_ADMIN_PASSWORD"
-    cargo run --package archivis-server -- --data-dir .local/data
+    cargo run --package archivis-server -- --data-dir .local/data --listen-address {{host}}
 
 # Run frontend dev server only (expects backend on :9514)
 dev-frontend:
-    cd frontend && npm run dev
+    cd frontend && npm run dev -- --host {{host}}
 
 # ── Dev Clean (disposable data in .local/clean) ──────────────────────────────
 
@@ -122,8 +124,8 @@ dev-clean:
     export ARCHIVIS_DATA_DIR=".local/clean"
     ./scripts/dev-boot.sh kill
     ./scripts/dev-boot.sh wipe
-    cargo run --package archivis-server -- --data-dir .local/clean &
-    cd frontend && npm run dev &
+    cargo run --package archivis-server -- --data-dir .local/clean --listen-address {{host}} &
+    cd frontend && npm run dev -- --host {{host}} &
     sleep 1
     ./scripts/dev-boot.sh setup
     wait
@@ -132,8 +134,10 @@ dev-clean:
 dev-clean-resume:
     #!/usr/bin/env bash
     trap 'kill 0' EXIT
-    cargo run --package archivis-server -- --data-dir .local/clean &
-    cd frontend && npm run dev &
+    echo "===== Local Dev Credentials ====="
+    cargo run --package archivis-server -- --data-dir .local/clean --listen-address {{host}} &
+    cat .local/clean/.dev-creds 2>/dev/null || echo "No existing clean creds found"
+    cd frontend && npm run dev -- --host {{host}} --clearScreen false &
     wait
 
 # Alias for resuming the clean dev instance (no wipe/setup).
@@ -147,7 +151,7 @@ dev-clean-backend:
     export ARCHIVIS_DATA_DIR=".local/clean"
     ./scripts/dev-boot.sh kill
     ./scripts/dev-boot.sh wipe
-    cargo run --package archivis-server -- --data-dir .local/clean &
+    cargo run --package archivis-server -- --data-dir .local/clean --listen-address {{host}} &
     ./scripts/dev-boot.sh setup
     wait
 
@@ -159,8 +163,8 @@ dev-clean-seed:
     export ARCHIVIS_DATA_DIR=".local/clean"
     ./scripts/dev-boot.sh kill
     ./scripts/dev-boot.sh wipe
-    cargo run --package archivis-server -- --data-dir .local/clean &
-    cd frontend && npm run dev &
+    cargo run --package archivis-server -- --data-dir .local/clean --listen-address {{host}} &
+    cd frontend && npm run dev -- --host {{host}} &
     sleep 1
     ./scripts/dev-boot.sh setup
     ./scripts/dev-boot.sh seed
