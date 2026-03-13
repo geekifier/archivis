@@ -323,7 +323,11 @@ impl<S: StorageBackend> ImportService<S> {
                 .as_deref()
                 .and_then(|s| sanitize_text(s, sanitize_opts));
             book.description = clean_description;
-            book.language.clone_from(&embedded.language);
+            book.language = embedded
+                .language
+                .as_deref()
+                .and_then(archivis_core::language::normalize_language)
+                .map(String::from);
             book.page_count = embedded.page_count;
             book.publication_year = embedded.publication_year;
             if let Some(ref publisher_name) = embedded.publisher {

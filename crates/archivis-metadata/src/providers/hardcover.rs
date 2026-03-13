@@ -379,8 +379,9 @@ impl HardcoverProvider {
 
         let title = edition
             .title
-            .clone()
-            .or_else(|| book.and_then(|b| b.title.clone()));
+            .as_deref()
+            .or_else(|| book.and_then(|b| b.title.as_deref()))
+            .map(titlecase_title);
 
         let authors =
             extract_authors_from_contributions(book.and_then(|b| b.contributions.as_ref()));
@@ -413,7 +414,8 @@ impl HardcoverProvider {
         let language = edition
             .language
             .as_ref()
-            .and_then(|l| normalize_language(&l.language));
+            .and_then(|l| archivis_core::language::normalize_language(&l.language))
+            .map(String::from);
 
         let physical_format = edition
             .reading_format
@@ -463,7 +465,7 @@ impl HardcoverProvider {
     /// Build `ProviderMetadata` from a Hardcover book (work) response
     /// returned by the search follow-up query.
     fn build_metadata_from_book(book: &HcBook, query: &MetadataQuery) -> ProviderMetadata {
-        let title = book.title.clone();
+        let title = book.title.as_deref().map(titlecase_title);
 
         let authors = extract_authors_from_contributions(book.contributions.as_ref());
 
@@ -489,7 +491,8 @@ impl HardcoverProvider {
             .and_then(parse_year_from_str);
         let language = edition
             .and_then(|e| e.language.as_ref())
-            .and_then(|l| normalize_language(&l.language));
+            .and_then(|l| archivis_core::language::normalize_language(&l.language))
+            .map(String::from);
 
         // Cover URL: prefer high-res `image.url` over `cached_image` thumbnail.
         let cover_url = edition
@@ -1176,60 +1179,6 @@ fn extract_image_url(value: &serde_json::Value) -> Option<String> {
     None
 }
 
-/// Normalize a language name to an ISO 639-1 code.
-fn normalize_language(name: &str) -> Option<String> {
-    match name.to_lowercase().as_str() {
-        "english" => Some("en".to_string()),
-        "french" | "français" => Some("fr".to_string()),
-        "german" | "deutsch" => Some("de".to_string()),
-        "spanish" | "español" => Some("es".to_string()),
-        "italian" | "italiano" => Some("it".to_string()),
-        "portuguese" | "português" => Some("pt".to_string()),
-        "russian" | "русский" => Some("ru".to_string()),
-        "japanese" | "日本語" => Some("ja".to_string()),
-        "chinese" | "中文" => Some("zh".to_string()),
-        "korean" | "한국어" => Some("ko".to_string()),
-        "arabic" | "العربية" => Some("ar".to_string()),
-        "hindi" | "हिन्दी" => Some("hi".to_string()),
-        "dutch" | "nederlands" => Some("nl".to_string()),
-        "polish" | "polski" => Some("pl".to_string()),
-        "swedish" | "svenska" => Some("sv".to_string()),
-        "norwegian" | "norsk" => Some("no".to_string()),
-        "danish" | "dansk" => Some("da".to_string()),
-        "finnish" | "suomi" => Some("fi".to_string()),
-        "turkish" | "türkçe" => Some("tr".to_string()),
-        "czech" | "čeština" => Some("cs".to_string()),
-        "hungarian" | "magyar" => Some("hu".to_string()),
-        "romanian" | "română" => Some("ro".to_string()),
-        "greek" | "ελληνικά" => Some("el".to_string()),
-        "hebrew" | "עברית" => Some("he".to_string()),
-        "thai" | "ไทย" => Some("th".to_string()),
-        "vietnamese" | "tiếng việt" => Some("vi".to_string()),
-        "ukrainian" | "українська" => Some("uk".to_string()),
-        "catalan" | "català" => Some("ca".to_string()),
-        "bulgarian" | "български" => Some("bg".to_string()),
-        "croatian" | "hrvatski" => Some("hr".to_string()),
-        "serbian" | "српски" => Some("sr".to_string()),
-        "slovenian" | "slovenščina" => Some("sl".to_string()),
-        "lithuanian" | "lietuvių" => Some("lt".to_string()),
-        "latvian" | "latviešu" => Some("lv".to_string()),
-        "estonian" | "eesti" => Some("et".to_string()),
-        "indonesian" | "bahasa indonesia" => Some("id".to_string()),
-        "malay" | "bahasa melayu" => Some("ms".to_string()),
-        "persian" | "فارسی" => Some("fa".to_string()),
-        "urdu" | "اردو" => Some("ur".to_string()),
-        _ => {
-            // If the name is already a 2-letter code, return it.
-            let trimmed = name.trim().to_lowercase();
-            if trimmed.len() == 2 && trimmed.chars().all(|c| c.is_ascii_alphabetic()) {
-                Some(trimmed)
-            } else {
-                None
-            }
-        }
-    }
-}
-
 /// Build a search string from a `MetadataQuery`.
 fn build_search_string(query: &MetadataQuery) -> String {
     let mut parts = Vec::new();
@@ -1376,33 +1325,37 @@ mod tests {
         assert_eq!(provider.name(), "hardcover");
     }
 
-    // ── Language normalization ───────────────────────────────────────
+    // ── Language normalization (via shared normalize_language) ──────
 
     #[test]
     fn language_normalization_common() {
-        assert_eq!(normalize_language("English"), Some("en".to_string()));
-        assert_eq!(normalize_language("French"), Some("fr".to_string()));
-        assert_eq!(normalize_language("German"), Some("de".to_string()));
-        assert_eq!(normalize_language("Spanish"), Some("es".to_string()));
-        assert_eq!(normalize_language("Japanese"), Some("ja".to_string()));
-        assert_eq!(normalize_language("Chinese"), Some("zh".to_string()));
+        use archivis_core::language::normalize_language;
+        assert_eq!(normalize_language("English"), Some("en"));
+        assert_eq!(normalize_language("French"), Some("fr"));
+        assert_eq!(normalize_language("German"), Some("de"));
+        assert_eq!(normalize_language("Spanish"), Some("es"));
+        assert_eq!(normalize_language("Japanese"), Some("ja"));
+        assert_eq!(normalize_language("Chinese"), Some("zh"));
     }
 
     #[test]
     fn language_normalization_case_insensitive() {
-        assert_eq!(normalize_language("english"), Some("en".to_string()));
-        assert_eq!(normalize_language("ENGLISH"), Some("en".to_string()));
-        assert_eq!(normalize_language("English"), Some("en".to_string()));
+        use archivis_core::language::normalize_language;
+        assert_eq!(normalize_language("english"), Some("en"));
+        assert_eq!(normalize_language("ENGLISH"), Some("en"));
+        assert_eq!(normalize_language("English"), Some("en"));
     }
 
     #[test]
     fn language_normalization_two_letter_code() {
-        assert_eq!(normalize_language("en"), Some("en".to_string()));
-        assert_eq!(normalize_language("fr"), Some("fr".to_string()));
+        use archivis_core::language::normalize_language;
+        assert_eq!(normalize_language("en"), Some("en"));
+        assert_eq!(normalize_language("fr"), Some("fr"));
     }
 
     #[test]
     fn language_normalization_unknown() {
+        use archivis_core::language::normalize_language;
         assert_eq!(normalize_language("Klingon"), None);
         assert_eq!(normalize_language(""), None);
     }

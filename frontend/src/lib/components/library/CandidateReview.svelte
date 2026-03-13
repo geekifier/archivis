@@ -14,6 +14,8 @@
     tierColorClass,
     tierLabel,
     extractErrorMessage,
+    isWarningReason,
+    warningFields,
     type CandidateFieldName
   } from './candidate-utils.js';
 
@@ -37,6 +39,9 @@
   let actionError = $state<string | null>(null);
   let coverCompare = $state<{ currentUrl: string | null; candidateUrl: string | null } | null>(null);
   let confirmApplyId = $state<string | null>(null);
+
+  /** Tracks which candidates have their description expanded. */
+  let expandedDescs = $state<Record<string, boolean>>({});
 
   /** Per-candidate field selections: candidateId -> fieldName -> included. */
   let fieldSelections = $state<Record<string, Partial<Record<CandidateFieldName, boolean>>>>({});
@@ -63,6 +68,8 @@
         if (candidate.subtitle != null) sel.subtitle = true;
         if (candidate.authors.length > 0) sel.authors = true;
         if (candidate.publication_year != null) sel.publication_year = true;
+        if (candidate.language != null) sel.language = true;
+        if (candidate.page_count != null) sel.page_count = true;
         if (candidate.isbn != null) sel.identifiers = true;
         if (candidate.series != null) sel.series = true;
         if (candidate.publisher != null) sel.publisher = true;
@@ -163,6 +170,7 @@
   {:else}
     <!-- Pending candidates -->
     {#each pendingCandidates as candidate (candidate.id)}
+      {@const warned = warningFields(candidate.match_reasons)}
       <div
         class="rounded-lg border border-border bg-card shadow-sm"
       >
@@ -230,7 +238,7 @@
             <div class="mb-3 flex flex-wrap gap-1.5">
               {#each candidate.match_reasons.filter((r) => !r.startsWith('Tier: ')) as reason, i (i)}
                 <span
-                  class="inline-flex rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary"
+                  class="inline-flex rounded-full px-2 py-0.5 text-xs font-medium {isWarningReason(reason) ? 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400' : 'bg-primary/10 text-primary'}"
                 >
                   {reason}
                 </span>
@@ -257,8 +265,8 @@
                 <tr class="border-b border-border text-left text-xs text-muted-foreground">
                   <th class="w-6 pb-2 pr-1"></th>
                   <th class="pb-2 pr-3 font-medium">Field</th>
-                  <th class="pb-2 pr-3 font-medium">Current</th>
-                  <th class="pb-2 font-medium">Candidate</th>
+                  <th class="w-[40%] pb-2 pr-3 font-medium">Current</th>
+                  <th class="w-[40%] pb-2 font-medium">Candidate</th>
                 </tr>
               </thead>
               <tbody class="divide-y divide-border/50">
@@ -266,7 +274,8 @@
                 {#if candidate.title != null}
                   {@const titleMatch = !hasChange(candidate.title, book.title)}
                   {@const titleIncluded = isFieldIncluded(candidate.id, 'title')}
-                  <tr class={titleMatch ? 'opacity-40' : !titleIncluded ? 'opacity-40' : ''}>
+                  {@const titleWarned = warned.has('title')}
+                  <tr class="{titleMatch ? 'opacity-40' : !titleIncluded ? 'opacity-40' : ''} {titleWarned ? 'bg-amber-50 dark:bg-amber-900/10' : ''}">
                     <td class="py-1.5 pr-1">
                       {#if !titleMatch}
                         <input
@@ -277,9 +286,9 @@
                         />
                       {/if}
                     </td>
-                    <td class="py-1.5 pr-3 text-xs font-medium text-muted-foreground">Title</td>
+                    <td class="py-1.5 pr-3 text-xs font-medium {titleWarned ? 'text-amber-700 dark:text-amber-400' : 'text-muted-foreground'}">Title</td>
                     <td class="py-1.5 pr-3 text-xs">{book.title}</td>
-                    <td class="py-1.5 text-xs {titleMatch ? 'text-muted-foreground' : 'font-medium text-primary'}">
+                    <td class="py-1.5 text-xs {titleMatch ? 'text-muted-foreground' : titleWarned ? 'font-medium text-amber-700 dark:text-amber-400' : 'font-medium text-primary'}">
                       {candidate.title}
                     </td>
                   </tr>
@@ -406,6 +415,52 @@
                     </td>
                   </tr>
                 {/if}
+                <!-- Language -->
+                {#if candidate.language != null || book.language != null}
+                  {@const bookLangDisplay = book.language_label ?? book.language ?? '--'}
+                  {@const candLangDisplay = candidate.language_label ?? candidate.language ?? '--'}
+                  {@const langMatch = (candidate.language ?? null) === (book.language ?? null)}
+                  {@const langIncluded = isFieldIncluded(candidate.id, 'language')}
+                  <tr class={langMatch ? 'opacity-40' : candidate.language != null && !langIncluded ? 'opacity-40' : ''}>
+                    <td class="py-1.5 pr-1">
+                      {#if candidate.language != null && !langMatch}
+                        <input
+                          type="checkbox"
+                          checked={langIncluded}
+                          onchange={() => toggleField(candidate.id, 'language')}
+                          class="h-3.5 w-3.5 rounded border-border"
+                        />
+                      {/if}
+                    </td>
+                    <td class="py-1.5 pr-3 text-xs font-medium text-muted-foreground">Language</td>
+                    <td class="py-1.5 pr-3 text-xs">{bookLangDisplay}</td>
+                    <td class="py-1.5 text-xs {langMatch ? 'text-muted-foreground' : 'font-medium text-primary'}">
+                      {candLangDisplay}
+                    </td>
+                  </tr>
+                {/if}
+                <!-- Page Count -->
+                {#if candidate.page_count != null || book.page_count != null}
+                  {@const pageMatch = candidate.page_count === book.page_count}
+                  {@const pageIncluded = isFieldIncluded(candidate.id, 'page_count')}
+                  <tr class={pageMatch ? 'opacity-40' : candidate.page_count != null && !pageIncluded ? 'opacity-40' : ''}>
+                    <td class="py-1.5 pr-1">
+                      {#if candidate.page_count != null && !pageMatch}
+                        <input
+                          type="checkbox"
+                          checked={pageIncluded}
+                          onchange={() => toggleField(candidate.id, 'page_count')}
+                          class="h-3.5 w-3.5 rounded border-border"
+                        />
+                      {/if}
+                    </td>
+                    <td class="py-1.5 pr-3 text-xs font-medium text-muted-foreground">Pages</td>
+                    <td class="py-1.5 pr-3 text-xs">{book.page_count ?? '--'}</td>
+                    <td class="py-1.5 text-xs {pageMatch ? 'text-muted-foreground' : 'font-medium text-primary'}">
+                      {candidate.page_count ?? '--'}
+                    </td>
+                  </tr>
+                {/if}
                 <!-- ISBN (additive — backend merges, never replaces) -->
                 {#if candidate.isbn}
                   {@const existingIsbns = book.identifiers.filter(
@@ -426,7 +481,13 @@
                     </td>
                     <td class="py-1.5 pr-3 text-xs font-medium text-muted-foreground">ISBN</td>
                     <td class="py-1.5 pr-3 font-mono text-xs">
-                      {existingIsbns.map((i) => i.value).join(', ') || '--'}
+                      {#if existingIsbns.length > 0}
+                        {#each existingIsbns as ident, i (i)}
+                          {ident.value}{#if i < existingIsbns.length - 1}<br />{/if}
+                        {/each}
+                      {:else}
+                        --
+                      {/if}
                     </td>
                     <td class="py-1.5 font-mono text-xs {alreadyHas ? 'text-muted-foreground' : 'font-medium text-primary'}">
                       {#if alreadyHas}
@@ -465,11 +526,13 @@
                     </td>
                   </tr>
                 {/if}
-                <!-- Description (show truncated if present) -->
+                <!-- Description (expandable) -->
                 {#if candidate.description}
                   {@const descMatch = !hasChange(candidate.description, book.description)}
                   {@const descIncluded = isFieldIncluded(candidate.id, 'description')}
-                  <tr class={descMatch ? 'opacity-40' : !descIncluded ? 'opacity-40' : ''}>
+                  {@const descWarned = warned.has('description')}
+                  {@const descExpanded = expandedDescs[candidate.id] ?? false}
+                  <tr class="{descMatch ? 'opacity-40' : !descIncluded ? 'opacity-40' : ''} {descWarned ? 'bg-amber-50 dark:bg-amber-900/10' : ''}">
                     <td class="py-1.5 pr-1 align-top">
                       {#if !descMatch}
                         <input
@@ -480,18 +543,24 @@
                         />
                       {/if}
                     </td>
-                    <td class="py-1.5 pr-3 align-top text-xs font-medium text-muted-foreground"
+                    <td class="py-1.5 pr-3 align-top text-xs font-medium {descWarned ? 'text-amber-700 dark:text-amber-400' : 'text-muted-foreground'}"
                       >Description</td
                     >
-                    <td class="py-1.5 pr-3 text-xs">
+                    <td
+                      class="cursor-pointer py-1.5 pr-3 align-top text-xs"
+                      onclick={() => expandedDescs[candidate.id] = !descExpanded}
+                    >
                       {#if book.description}
-                        <span class="line-clamp-2">{book.description}</span>
+                        <span class={descExpanded ? '' : 'line-clamp-2'}>{book.description}</span>
                       {:else}
                         --
                       {/if}
                     </td>
-                    <td class="py-1.5 text-xs {descMatch ? 'text-muted-foreground' : 'font-medium text-primary'}">
-                      <span class="line-clamp-2">{candidate.description}</span>
+                    <td
+                      class="cursor-pointer py-1.5 align-top text-xs {descMatch ? 'text-muted-foreground' : descWarned ? 'font-medium text-amber-700 dark:text-amber-400' : 'font-medium text-primary'}"
+                      onclick={() => expandedDescs[candidate.id] = !descExpanded}
+                    >
+                      <span class={descExpanded ? '' : 'line-clamp-2'}>{candidate.description}</span>
                     </td>
                   </tr>
                 {/if}

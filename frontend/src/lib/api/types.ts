@@ -110,6 +110,7 @@ export interface BookSummary {
   sort_title: string;
   description: string | null;
   language: string | null;
+  language_label: string | null;
   publication_year: number | null;
   added_at: string;
   updated_at: string;
@@ -169,6 +170,7 @@ export interface BookDetail {
   sort_title: string;
   description: string | null;
   language: string | null;
+  language_label: string | null;
   publication_year: number | null;
   publisher_id: string | null;
   publisher_name: string | null;
@@ -520,6 +522,9 @@ export interface CandidateResponse {
   description?: string;
   publisher?: string;
   publication_year?: number;
+  language?: string;
+  language_label?: string;
+  page_count?: number;
   isbn?: string;
   series?: CandidateSeriesInfo;
   cover_url?: string;

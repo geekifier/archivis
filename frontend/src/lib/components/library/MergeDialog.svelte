@@ -357,7 +357,7 @@
 
       <div class={diffClass(book.language, otherBook.language)}>
         <dt class="text-xs font-medium text-muted-foreground">Language</dt>
-        <dd>{book.language ?? '--'}</dd>
+        <dd>{book.language_label ?? book.language ?? '--'}</dd>
       </div>
 
       {#if book.series.length > 0 || otherBook.series.length > 0}

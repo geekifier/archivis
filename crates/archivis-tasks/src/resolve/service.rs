@@ -2949,14 +2949,18 @@ fn merge_book_fields(
     if !exclude_fields.contains("language")
         && (manual || (book.language.is_none() && !is_protected(provenance.language.as_ref())))
     {
-        book.language.clone_from(&provider_meta.language);
+        if let Some(ref lang) = provider_meta.language {
+            book.language = Some(lang.clone());
+        }
     }
 
     // Page count
     if !exclude_fields.contains("page_count")
         && (manual || (book.page_count.is_none() && !is_protected(provenance.page_count.as_ref())))
     {
-        book.page_count = provider_meta.page_count;
+        if let Some(pc) = provider_meta.page_count {
+            book.page_count = Some(pc);
+        }
     }
 
     // Publication year
@@ -2965,7 +2969,9 @@ fn merge_book_fields(
             || (book.publication_year.is_none()
                 && !is_protected(provenance.publication_year.as_ref())))
     {
-        book.publication_year = provider_meta.publication_year;
+        if let Some(py) = provider_meta.publication_year {
+            book.publication_year = Some(py);
+        }
     }
 }
 
@@ -4681,6 +4687,65 @@ mod tests {
         assert_eq!(book.language.as_deref(), Some("de"));
         assert_eq!(book.page_count, Some(100));
         assert_eq!(book.publication_year, Some(2010));
+    }
+
+    #[test]
+    fn merge_book_fields_none_provider_preserves_existing_values() {
+        // When provider returns `None` for language, page_count, publication_year,
+        // existing book values must be preserved (not wiped).
+        let mut book = Book::new("My Book");
+        book.language = Some("fr".to_string());
+        book.page_count = Some(250);
+        book.publication_year = Some(1999);
+
+        let provider = ProviderMetadata {
+            provider_name: "test_provider".to_string(),
+            title: Some("My Book".to_string()),
+            subtitle: None,
+            authors: vec![],
+            description: None,
+            language: None,
+            publisher: None,
+            publication_year: None,
+            identifiers: vec![],
+            subjects: Vec::new(),
+            series: None,
+            page_count: None,
+            cover_url: None,
+            rating: None,
+            physical_format: None,
+            confidence: 0.9,
+        };
+
+        let ctx = FieldApplyContext {
+            is_auto_apply: false,
+            has_strong_id_proof: false,
+            has_title_contradiction: false,
+        };
+
+        merge_book_fields(
+            &mut book,
+            &provider,
+            &HashSet::new(),
+            &ctx,
+            &MetadataProvenance::default(),
+        );
+
+        assert_eq!(
+            book.language.as_deref(),
+            Some("fr"),
+            "language must not be wiped by None provider value"
+        );
+        assert_eq!(
+            book.page_count,
+            Some(250),
+            "page_count must not be wiped by None provider value"
+        );
+        assert_eq!(
+            book.publication_year,
+            Some(1999),
+            "publication_year must not be wiped by None provider value"
+        );
     }
 
     // ── Contradiction blocks ALL core identity fields ──

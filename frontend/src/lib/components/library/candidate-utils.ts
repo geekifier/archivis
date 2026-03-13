@@ -7,6 +7,8 @@ export type CandidateFieldName =
   | 'authors'
   | 'publisher'
   | 'publication_year'
+  | 'language'
+  | 'page_count'
   | 'identifiers'
   | 'series'
   | 'description'
@@ -76,6 +78,23 @@ export function tierLabel(tier: string | undefined): string {
         default:
             return tier ?? '';
     }
+}
+
+/** True when a match reason represents a warning (mismatch / penalty). */
+export function isWarningReason(reason: string): boolean {
+  const lower = reason.toLowerCase();
+  return lower.includes('mismatch') || lower.includes('contradiction');
+}
+
+/** Map warning-type match reasons to the field they affect. */
+export function warningFields(reasons: string[]): Set<CandidateFieldName> {
+  const fields = new Set<CandidateFieldName>();
+  for (const r of reasons) {
+    const lower = r.toLowerCase();
+    if (lower.includes('title contradiction')) fields.add('title');
+    if (lower.includes('description language mismatch')) fields.add('description');
+  }
+  return fields;
 }
 
 /** Collect field names the user has deselected (unchecked). */

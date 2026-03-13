@@ -353,6 +353,32 @@ describe('CandidateReview', () => {
     expect(screen.getByText('David French')).toBeInTheDocument();
   });
 
+  it('renders Language and Page Count rows when candidate has values', () => {
+    const candidate = createCandidateResponse({
+      id: 'c1',
+      status: 'pending',
+      title: 'Candidate Title',
+      language: 'fr',
+      language_label: 'French',
+      page_count: 412
+    });
+    render(CandidateReview, {
+      props: {
+        book: createBookDetail({ language: 'en', language_label: 'English', page_count: 300 }),
+        candidates: [candidate],
+        onapply: vi.fn<ApplyFn>(),
+        onreject: vi.fn<RejectFn>(),
+        onundo: vi.fn<UndoFn>(),
+      }
+    });
+    expect(screen.getByText('Language')).toBeInTheDocument();
+    expect(screen.getByText('English')).toBeInTheDocument();
+    expect(screen.getByText('French')).toBeInTheDocument();
+    expect(screen.getByText('Pages')).toBeInTheDocument();
+    expect(screen.getByText('300')).toBeInTheDocument();
+    expect(screen.getByText('412')).toBeInTheDocument();
+  });
+
   it('when a candidate is applied, pending candidates still show Apply/Reject buttons', () => {
     const applied = createCandidateResponse({
       id: 'c1',

@@ -16,6 +16,7 @@
   import AutocompleteInput from './AutocompleteInput.svelte';
   import CoverUploadDialog from './CoverUploadDialog.svelte';
   import FieldProtectionToggle from './FieldProtectionToggle.svelte';
+  import LanguageCombobox from './LanguageCombobox.svelte';
 
   interface PublisherInfo {
     id: string;
@@ -831,7 +832,7 @@
           ontoggle={handleProtectionToggle}
         />
       </div>
-      <Input id="edit-language" type="text" bind:value={language} placeholder="en" />
+      <LanguageCombobox id="edit-language" bind:value={language} onchange={(code) => (language = code)} />
     </div>
     <div class="space-y-1.5">
       <div class="flex items-center gap-1">

@@ -20,6 +20,7 @@ url.workspace = true
 uuid.workspace = true
 quick-xml.workspace = true
 regex.workspace = true
+whatlang.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time"] }

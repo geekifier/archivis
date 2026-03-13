@@ -119,6 +119,12 @@ quick-xml = "0.37"
 # Regex
 regex = "1"
 
+# Language detection
+whatlang = "0.16"
+
+# Language normalization (ISO 639)
+isolang = { version = "2.4", features = ["english_names", "lowercase_names"] }
+
 # Filesystem watching
 notify = "8.2"
 notify-debouncer-full = "0.7"

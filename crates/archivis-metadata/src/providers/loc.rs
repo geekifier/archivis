@@ -251,8 +251,8 @@ impl LocProvider {
         let language = record
             .language_code
             .as_deref()
-            .and_then(iso639_2b_to_1)
-            .map(ToString::to_string);
+            .and_then(archivis_core::language::normalize_language)
+            .map(String::from);
 
         // Combine LCC and DDC classifications into subjects along with topics
         let mut subjects = record.topics;
@@ -751,58 +751,6 @@ pub(crate) fn parse_loc_date(date: &str) -> String {
         .to_string()
 }
 
-/// Convert ISO 639-2/B language codes to ISO 639-1 (2-letter) codes.
-///
-/// LOC uses 3-letter bibliographic codes; we normalize to 2-letter for
-/// consistency with other providers.
-pub(crate) fn iso639_2b_to_1(code: &str) -> Option<&'static str> {
-    match code.to_lowercase().as_str() {
-        "eng" => Some("en"),
-        "fre" | "fra" => Some("fr"),
-        "ger" | "deu" => Some("de"),
-        "spa" => Some("es"),
-        "ita" => Some("it"),
-        "por" => Some("pt"),
-        "rus" => Some("ru"),
-        "jpn" => Some("ja"),
-        "chi" | "zho" => Some("zh"),
-        "kor" => Some("ko"),
-        "ara" => Some("ar"),
-        "hin" => Some("hi"),
-        "pol" => Some("pl"),
-        "dut" | "nld" => Some("nl"),
-        "swe" => Some("sv"),
-        "nor" | "nob" | "nno" => Some("no"),
-        "dan" => Some("da"),
-        "fin" => Some("fi"),
-        "cze" | "ces" => Some("cs"),
-        "hun" => Some("hu"),
-        "rum" | "ron" => Some("ro"),
-        "tur" => Some("tr"),
-        "gre" | "ell" => Some("el"),
-        "heb" => Some("he"),
-        "tha" => Some("th"),
-        "vie" => Some("vi"),
-        "ukr" => Some("uk"),
-        "cat" => Some("ca"),
-        "hrv" => Some("hr"),
-        "srp" => Some("sr"),
-        "bul" => Some("bg"),
-        "lit" => Some("lt"),
-        "lav" => Some("lv"),
-        "est" => Some("et"),
-        "slk" | "slo" => Some("sk"),
-        "slv" => Some("sl"),
-        "ind" => Some("id"),
-        "mal" | "msa" => Some("ms"),
-        "per" | "fas" => Some("fa"),
-        "lat" => Some("la"),
-        "wel" | "cym" => Some("cy"),
-        "gle" | "iri" => Some("ga"),
-        _ => None,
-    }
-}
-
 /// Normalize MARC relator codes and abbreviations to human-readable roles.
 ///
 /// Strips trailing `.` before matching. Unknown roles pass through lowercased.
@@ -919,31 +867,43 @@ mod tests {
         assert_eq!(parse_loc_date("2023"), "2023");
     }
 
-    // ── Language code conversion ────────────────────────────────────
+    // ── Language code conversion (via shared normalize_language) ───
 
     #[test]
     fn iso639_english() {
-        assert_eq!(iso639_2b_to_1("eng"), Some("en"));
+        assert_eq!(
+            archivis_core::language::normalize_language("eng"),
+            Some("en")
+        );
     }
 
     #[test]
     fn iso639_french_bibliographic() {
-        assert_eq!(iso639_2b_to_1("fre"), Some("fr"));
+        assert_eq!(
+            archivis_core::language::normalize_language("fre"),
+            Some("fr")
+        );
     }
 
     #[test]
     fn iso639_french_terminological() {
-        assert_eq!(iso639_2b_to_1("fra"), Some("fr"));
+        assert_eq!(
+            archivis_core::language::normalize_language("fra"),
+            Some("fr")
+        );
     }
 
     #[test]
     fn iso639_case_insensitive() {
-        assert_eq!(iso639_2b_to_1("ENG"), Some("en"));
+        assert_eq!(
+            archivis_core::language::normalize_language("ENG"),
+            Some("en")
+        );
     }
 
     #[test]
     fn iso639_unknown() {
-        assert_eq!(iso639_2b_to_1("xxx"), None);
+        assert_eq!(archivis_core::language::normalize_language("xxx"), None);
     }
 
     // ── MODS XML parsing ────────────────────────────────────────────

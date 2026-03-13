@@ -253,6 +253,7 @@ pub struct BookSummary {
     pub sort_title: String,
     pub description: Option<String>,
     pub language: Option<String>,
+    pub language_label: Option<String>,
     pub publication_year: Option<i32>,
     pub added_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -290,6 +291,7 @@ pub struct BookDetail {
     pub sort_title: String,
     pub description: Option<String>,
     pub language: Option<String>,
+    pub language_label: Option<String>,
     pub publication_year: Option<i32>,
     pub publisher_id: Option<Uuid>,
     pub publisher_name: Option<String>,
@@ -411,6 +413,12 @@ impl From<BookWithRelations> for BookDetail {
             subtitle: bwr.book.subtitle,
             sort_title: bwr.book.sort_title,
             description: bwr.book.description,
+            language_label: bwr
+                .book
+                .language
+                .as_deref()
+                .and_then(archivis_core::language::language_label)
+                .map(String::from),
             language: bwr.book.language,
             publication_year: bwr.book.publication_year,
             publisher_id: bwr.book.publisher_id,
@@ -447,6 +455,11 @@ impl From<Book> for BookSummary {
             subtitle: book.subtitle,
             sort_title: book.sort_title,
             description: book.description,
+            language_label: book
+                .language
+                .as_deref()
+                .and_then(archivis_core::language::language_label)
+                .map(String::from),
             language: book.language,
             publication_year: book.publication_year,
             added_at: book.added_at,

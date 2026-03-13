@@ -223,8 +223,9 @@ impl OpenLibraryProvider {
     ) -> ProviderMetadata {
         let title = edition
             .title
-            .clone()
-            .or_else(|| work.and_then(|w| w.title.clone()));
+            .as_deref()
+            .or_else(|| work.and_then(|w| w.title.as_deref()))
+            .map(titlecase_title);
 
         let description = work
             .and_then(|w| extract_text_value(w.description.as_ref()))
@@ -244,18 +245,24 @@ impl OpenLibraryProvider {
         let series = edition
             .series
             .as_ref()
-            .and_then(|s| s.first().map(|name| parse_series_string(name)));
+            .and_then(|s| s.first().map(|name| parse_series_string(name)))
+            .filter(|s| !is_likely_publisher_imprint(&s.name, edition.publishers.as_deref()));
 
         let cover_url = edition
             .covers
             .as_ref()
-            .and_then(|covers| covers.first().map(|id| cover_url_from_id(*id)));
+            .and_then(|covers| covers.first().copied())
+            .or_else(|| work.and_then(|w| w.covers.as_ref().and_then(|c| c.first().copied())))
+            .map(cover_url_from_id);
 
         let language = edition
             .languages
             .as_ref()
             .and_then(|langs| langs.first())
-            .and_then(|lang| ol_language_to_iso(&lang.key));
+            .and_then(|lang| {
+                let code = lang.key.trim_start_matches("/languages/");
+                archivis_core::language::normalize_language(code).map(String::from)
+            });
 
         let mut identifiers = Vec::new();
 
@@ -299,7 +306,7 @@ impl OpenLibraryProvider {
             });
         }
 
-        let subtitle = edition.subtitle.clone();
+        let subtitle = edition.subtitle.as_deref().map(titlecase_title);
 
         let mut all_authors = authors.to_vec();
         if let Some(contributors) = &edition.contributors {
@@ -358,7 +365,7 @@ impl OpenLibraryProvider {
                 dominated
             })
             .map(|doc| {
-                let title = doc.title.clone();
+                let title = doc.title.as_deref().map(titlecase_title);
 
                 let authors: Vec<ProviderAuthor> = doc
                     .author_name
@@ -431,7 +438,7 @@ impl OpenLibraryProvider {
                 ProviderMetadata {
                     provider_name: PROVIDER_NAME.to_string(),
                     title,
-                    subtitle: doc.subtitle.clone(),
+                    subtitle: doc.subtitle.as_deref().map(titlecase_title),
                     authors,
                     description: None, // Search results don't include descriptions.
                     language: None,    // Search results don't include language reliably.
@@ -603,6 +610,7 @@ struct OlWork {
     title: Option<String>,
     description: Option<serde_json::Value>,
     subjects: Option<Vec<String>>,
+    covers: Option<Vec<i64>>,
 }
 
 /// Open Library search response (from `/search.json`).
@@ -679,6 +687,33 @@ fn parse_series_string(raw: &str) -> ProviderSeries {
     }
 }
 
+/// Returns `true` when `series_name` appears to be a publisher imprint
+/// rather than a literary series.  Checks for case-insensitive word
+/// overlap between the series name and any of the edition's publishers.
+fn is_likely_publisher_imprint(series_name: &str, publishers: Option<&[String]>) -> bool {
+    let Some(publishers) = publishers else {
+        return false;
+    };
+
+    let series_words: Vec<String> = series_name
+        .split_whitespace()
+        .map(str::to_lowercase)
+        .collect();
+
+    for publisher in publishers {
+        let pub_words: Vec<String> = publisher
+            .split_whitespace()
+            .map(str::to_lowercase)
+            .collect();
+
+        if series_words.iter().any(|sw| pub_words.contains(sw)) {
+            return true;
+        }
+    }
+
+    false
+}
+
 /// Find the byte offset where a trailing numeric position starts.
 ///
 /// Looks for patterns like `, #6`, ` #12`, `, 3`, ` 3.5` at the end
@@ -734,63 +769,6 @@ fn find_trailing_position(s: &str) -> Option<usize> {
     }
 
     Some(num_start)
-}
-
-/// Map an Open Library language key to an ISO 639-1 code.
-///
-/// OL language keys look like `/languages/eng`. This maps common
-/// three-letter codes to two-letter ISO 639-1 codes.
-fn ol_language_to_iso(key: &str) -> Option<String> {
-    let code = key.trim_start_matches("/languages/");
-    match code {
-        "eng" => Some("en".to_string()),
-        "fre" | "fra" => Some("fr".to_string()),
-        "ger" | "deu" => Some("de".to_string()),
-        "spa" => Some("es".to_string()),
-        "ita" => Some("it".to_string()),
-        "por" => Some("pt".to_string()),
-        "rus" => Some("ru".to_string()),
-        "jpn" => Some("ja".to_string()),
-        "chi" | "zho" => Some("zh".to_string()),
-        "kor" => Some("ko".to_string()),
-        "ara" => Some("ar".to_string()),
-        "hin" => Some("hi".to_string()),
-        "dut" | "nld" => Some("nl".to_string()),
-        "pol" => Some("pl".to_string()),
-        "swe" => Some("sv".to_string()),
-        "nor" | "nob" | "nno" => Some("no".to_string()),
-        "dan" => Some("da".to_string()),
-        "fin" => Some("fi".to_string()),
-        "tur" => Some("tr".to_string()),
-        "cze" | "ces" => Some("cs".to_string()),
-        "hun" => Some("hu".to_string()),
-        "rum" | "ron" => Some("ro".to_string()),
-        "gre" | "ell" => Some("el".to_string()),
-        "heb" => Some("he".to_string()),
-        "tha" => Some("th".to_string()),
-        "vie" => Some("vi".to_string()),
-        "ukr" => Some("uk".to_string()),
-        "cat" => Some("ca".to_string()),
-        "bul" => Some("bg".to_string()),
-        "hrv" => Some("hr".to_string()),
-        "srp" => Some("sr".to_string()),
-        "slv" => Some("sl".to_string()),
-        "lit" => Some("lt".to_string()),
-        "lav" => Some("lv".to_string()),
-        "est" => Some("et".to_string()),
-        "ind" => Some("id".to_string()),
-        "may" | "msa" => Some("ms".to_string()),
-        "per" | "fas" => Some("fa".to_string()),
-        "urd" => Some("ur".to_string()),
-        _ => {
-            // For unknown codes, return the raw three-letter code.
-            if code.len() <= 3 && !code.is_empty() {
-                Some(code.to_string())
-            } else {
-                None
-            }
-        }
-    }
 }
 
 /// Extract text from an OL description field which may be either a
@@ -956,30 +934,28 @@ mod tests {
         assert_eq!(url, "https://covers.openlibrary.org/b/id/-1-L.jpg");
     }
 
-    // ── Language mapping ─────────────────────────────────────────────
+    // ── Language mapping (via shared normalize_language) ────────────
 
     #[test]
     fn language_key_to_iso_common() {
-        assert_eq!(ol_language_to_iso("/languages/eng"), Some("en".to_string()));
-        assert_eq!(ol_language_to_iso("/languages/fre"), Some("fr".to_string()));
-        assert_eq!(ol_language_to_iso("/languages/ger"), Some("de".to_string()));
-        assert_eq!(ol_language_to_iso("/languages/spa"), Some("es".to_string()));
-        assert_eq!(ol_language_to_iso("/languages/jpn"), Some("ja".to_string()));
-        assert_eq!(ol_language_to_iso("/languages/chi"), Some("zh".to_string()));
+        use archivis_core::language::normalize_language;
+        assert_eq!(normalize_language("eng"), Some("en"));
+        assert_eq!(normalize_language("fre"), Some("fr"));
+        assert_eq!(normalize_language("ger"), Some("de"));
+        assert_eq!(normalize_language("spa"), Some("es"));
+        assert_eq!(normalize_language("jpn"), Some("ja"));
+        assert_eq!(normalize_language("chi"), Some("zh"));
     }
 
     #[test]
     fn language_key_unknown_code() {
-        // Unknown three-letter codes are returned as-is.
-        assert_eq!(
-            ol_language_to_iso("/languages/xyz"),
-            Some("xyz".to_string())
-        );
+        // Unknown three-letter codes now return None (no raw pass-through).
+        assert_eq!(archivis_core::language::normalize_language("xyz"), None);
     }
 
     #[test]
     fn language_key_empty() {
-        assert_eq!(ol_language_to_iso("/languages/"), None);
+        assert_eq!(archivis_core::language::normalize_language(""), None);
     }
 
     // ── Text extraction ──────────────────────────────────────────────
@@ -1441,6 +1417,7 @@ mod tests {
                 "A science fiction classic.".to_string(),
             )),
             subjects: Some(vec!["Science Fiction".to_string(), "Ecology".to_string()]),
+            covers: None,
         };
 
         let authors = vec![ProviderAuthor {
@@ -1918,6 +1895,250 @@ mod tests {
         let results = OpenLibraryProvider::parse_search_results(&response, &query);
         assert_eq!(results.len(), 1, "audio-only work should be filtered");
         assert_eq!(results[0].title.as_deref(), Some("Dune"));
+    }
+
+    // ── Titlecase tests ──────────────────────────────────────────────
+
+    #[test]
+    fn build_metadata_titlecases_lowercase_title() {
+        let edition = OlEdition {
+            key: None,
+            title: Some("blood of elves".into()),
+            subtitle: Some("a witcher novel".into()),
+            authors: None,
+            publishers: None,
+            publish_date: None,
+            isbn_13: Some(vec!["9780316029193".into()]),
+            isbn_10: None,
+            number_of_pages: None,
+            covers: None,
+            languages: None,
+            series: None,
+            works: None,
+            description: None,
+            contributors: None,
+            physical_format: None,
+        };
+
+        let metadata =
+            OpenLibraryProvider::build_metadata_from_edition(&edition, None, &[], "9780316029193");
+
+        assert_eq!(
+            metadata.title.as_deref(),
+            Some("Blood of Elves"),
+            "title should be titlecased"
+        );
+        assert_eq!(
+            metadata.subtitle.as_deref(),
+            Some("A Witcher Novel"),
+            "subtitle should be titlecased"
+        );
+    }
+
+    #[test]
+    fn build_metadata_titlecase_falls_back_to_work_title() {
+        let edition = OlEdition {
+            key: None,
+            title: None,
+            subtitle: None,
+            authors: None,
+            publishers: None,
+            publish_date: None,
+            isbn_13: Some(vec!["9780316029193".into()]),
+            isbn_10: None,
+            number_of_pages: None,
+            covers: None,
+            languages: None,
+            series: None,
+            works: None,
+            description: None,
+            contributors: None,
+            physical_format: None,
+        };
+
+        let work = OlWork {
+            title: Some("blood of elves".into()),
+            description: None,
+            subjects: None,
+            covers: None,
+        };
+
+        let metadata = OpenLibraryProvider::build_metadata_from_edition(
+            &edition,
+            Some(&work),
+            &[],
+            "9780316029193",
+        );
+
+        assert_eq!(
+            metadata.title.as_deref(),
+            Some("Blood of Elves"),
+            "work title fallback should be titlecased"
+        );
+    }
+
+    // ── Publisher imprint filter tests ────────────────────────────────
+
+    #[test]
+    fn imprint_filter_detects_publisher_word_overlap() {
+        assert!(
+            is_likely_publisher_imprint("Fantasy Orbit", Some(&["Orbit".into()])),
+            "\"Fantasy Orbit\" with publisher \"Orbit\" should be detected as imprint"
+        );
+    }
+
+    #[test]
+    fn imprint_filter_passes_real_series() {
+        assert!(
+            !is_likely_publisher_imprint("The Witcher Saga", Some(&["Orbit".into()])),
+            "\"The Witcher Saga\" should not be flagged as imprint"
+        );
+    }
+
+    #[test]
+    fn imprint_filter_multi_word_publisher() {
+        assert!(
+            is_likely_publisher_imprint("Penguin Classics", Some(&["Penguin Books".into()])),
+            "\"Penguin Classics\" with publisher \"Penguin Books\" should overlap on \"penguin\""
+        );
+    }
+
+    #[test]
+    fn imprint_filter_no_publishers() {
+        assert!(
+            !is_likely_publisher_imprint("Fantasy Orbit", None),
+            "no publishers should not flag imprint"
+        );
+    }
+
+    #[test]
+    fn build_metadata_filters_imprint_series() {
+        let edition = OlEdition {
+            key: None,
+            title: Some("Blood of Elves".into()),
+            subtitle: None,
+            authors: None,
+            publishers: Some(vec!["Orbit".into()]),
+            publish_date: None,
+            isbn_13: Some(vec!["9780316029193".into()]),
+            isbn_10: None,
+            number_of_pages: None,
+            covers: None,
+            languages: None,
+            series: Some(vec!["Fantasy Orbit".into()]),
+            works: None,
+            description: None,
+            contributors: None,
+            physical_format: None,
+        };
+
+        let metadata =
+            OpenLibraryProvider::build_metadata_from_edition(&edition, None, &[], "9780316029193");
+
+        assert!(
+            metadata.series.is_none(),
+            "\"Fantasy Orbit\" should be filtered as publisher imprint"
+        );
+    }
+
+    // ── Work cover fallback tests ────────────────────────────────────
+
+    #[test]
+    fn build_metadata_cover_falls_back_to_work() {
+        let edition = OlEdition {
+            key: None,
+            title: Some("Blood of Elves".into()),
+            subtitle: None,
+            authors: None,
+            publishers: None,
+            publish_date: None,
+            isbn_13: Some(vec!["9780316029193".into()]),
+            isbn_10: None,
+            number_of_pages: None,
+            covers: None, // no edition covers
+            languages: None,
+            series: None,
+            works: None,
+            description: None,
+            contributors: None,
+            physical_format: None,
+        };
+
+        let work = OlWork {
+            title: Some("Blood of Elves".into()),
+            description: None,
+            subjects: None,
+            covers: Some(vec![111_222]),
+        };
+
+        let metadata = OpenLibraryProvider::build_metadata_from_edition(
+            &edition,
+            Some(&work),
+            &[],
+            "9780316029193",
+        );
+
+        assert_eq!(
+            metadata.cover_url.as_deref(),
+            Some("https://covers.openlibrary.org/b/id/111222-L.jpg"),
+            "cover should fall back to work covers"
+        );
+    }
+
+    #[test]
+    fn build_metadata_edition_cover_takes_precedence_over_work() {
+        let edition = OlEdition {
+            key: None,
+            title: Some("Blood of Elves".into()),
+            subtitle: None,
+            authors: None,
+            publishers: None,
+            publish_date: None,
+            isbn_13: Some(vec!["9780316029193".into()]),
+            isbn_10: None,
+            number_of_pages: None,
+            covers: Some(vec![999_888]),
+            languages: None,
+            series: None,
+            works: None,
+            description: None,
+            contributors: None,
+            physical_format: None,
+        };
+
+        let work = OlWork {
+            title: Some("Blood of Elves".into()),
+            description: None,
+            subjects: None,
+            covers: Some(vec![111_222]),
+        };
+
+        let metadata = OpenLibraryProvider::build_metadata_from_edition(
+            &edition,
+            Some(&work),
+            &[],
+            "9780316029193",
+        );
+
+        assert_eq!(
+            metadata.cover_url.as_deref(),
+            Some("https://covers.openlibrary.org/b/id/999888-L.jpg"),
+            "edition cover should take precedence over work cover"
+        );
+    }
+
+    #[test]
+    fn parse_work_with_covers() {
+        let json = r#"{
+            "title": "Blood of Elves",
+            "description": "A Witcher novel.",
+            "subjects": ["Fantasy"],
+            "covers": [111222, 333444, 555666]
+        }"#;
+
+        let work: OlWork = serde_json::from_str(json).unwrap();
+        assert_eq!(work.covers.as_ref().unwrap().len(), 3);
+        assert_eq!(work.covers.as_ref().unwrap()[0], 111_222);
     }
 
     #[tokio::test]

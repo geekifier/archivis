@@ -355,8 +355,18 @@ pub async fn update_book(
             book_changed = true;
         }
     }
-    if let Some(language) = body.language {
-        let new_language = Some(language).filter(|s| !s.is_empty());
+    if let Some(ref language) = body.language {
+        let new_language = if language.is_empty() {
+            None
+        } else {
+            Some(
+                archivis_core::language::normalize_language(language)
+                    .ok_or_else(|| {
+                        ApiError::Validation(format!("unrecognized language: {language:?}"))
+                    })?
+                    .to_string(),
+            )
+        };
         if new_language != book.language {
             book.language = new_language;
             book.metadata_provenance.language = Some(user_field_provenance());
@@ -1383,14 +1393,23 @@ async fn apply_batch_fields(
     pool: &archivis_db::DbPool,
     book_id: Uuid,
     fields: &BatchBookFields,
-    sanitize_opts: &SanitizeOptions,
+    _sanitize_opts: &SanitizeOptions,
 ) -> Result<(), ApiError> {
     let mut book = BookRepository::get_by_id(pool, book_id).await?;
     let mut book_changed = false;
 
     if let Some(ref language) = fields.language {
-        let clean = sanitize_text(language, sanitize_opts).unwrap_or_default();
-        let new_language = Some(clean).filter(|s| !s.is_empty());
+        let new_language = if language.is_empty() {
+            None
+        } else {
+            Some(
+                archivis_core::language::normalize_language(language)
+                    .ok_or_else(|| {
+                        ApiError::Validation(format!("unrecognized language: {language:?}"))
+                    })?
+                    .to_string(),
+            )
+        };
         if new_language != book.language {
             book.language = new_language;
             book.metadata_provenance.language = Some(user_field_provenance());

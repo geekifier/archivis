@@ -1259,7 +1259,7 @@
               {#if book.language}
                 <div>
                   <dt class="text-muted-foreground">Language</dt>
-                  <dd class="font-medium">{book.language}</dd>
+                  <dd class="font-medium">{book.language_label ?? book.language}</dd>
                 </div>
               {/if}
               {#if book.page_count != null}

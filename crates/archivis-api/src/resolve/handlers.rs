@@ -30,6 +30,8 @@ const VALID_EXCLUDE_FIELDS: &[&str] = &[
     "series",
     "cover",
     "publisher",
+    "language",
+    "page_count",
 ];
 
 fn parse_exclude_fields(body: Option<ApplyCandidateBody>) -> Result<HashSet<String>, ApiError> {
@@ -492,11 +494,29 @@ fn candidate_to_response(candidate: IdentificationCandidate) -> CandidateRespons
         description,
         publisher,
         publication_year,
+        language,
+        language_label,
+        page_count,
         isbn,
         series,
         cover_url,
     ) = provider_meta.as_ref().map_or_else(
-        || (None, None, vec![], None, None, None, None, None, None),
+        || {
+            (
+                None,
+                None,
+                vec![],
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+        },
         |meta| {
             (
                 meta.title.clone(),
@@ -511,6 +531,12 @@ fn candidate_to_response(candidate: IdentificationCandidate) -> CandidateRespons
                 meta.description.clone(),
                 meta.publisher.clone(),
                 meta.publication_year,
+                meta.language.clone(),
+                meta.language
+                    .as_deref()
+                    .and_then(archivis_core::language::language_label)
+                    .map(String::from),
+                meta.page_count,
                 meta.identifiers
                     .iter()
                     .find(|id| {
@@ -538,6 +564,9 @@ fn candidate_to_response(candidate: IdentificationCandidate) -> CandidateRespons
         description,
         publisher,
         publication_year,
+        language,
+        language_label,
+        page_count,
         isbn,
         series,
         cover_url,
@@ -893,5 +922,58 @@ mod tests {
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].id, applied.id);
         assert_eq!(candidates[0].status, "applied");
+    }
+
+    #[test]
+    fn valid_exclude_fields_covers_all_merge_fields() {
+        // If a field is handled by `merge_book_fields()`, it must appear in
+        // `VALID_EXCLUDE_FIELDS` so the user can exclude it via the API.
+        let expected: HashSet<&str> = [
+            "title",
+            "subtitle",
+            "description",
+            "publication_year",
+            "authors",
+            "identifiers",
+            "series",
+            "cover",
+            "publisher",
+            "language",
+            "page_count",
+        ]
+        .into_iter()
+        .collect();
+        let actual: HashSet<&str> = VALID_EXCLUDE_FIELDS.iter().copied().collect();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn candidate_to_response_extracts_language_and_page_count() {
+        let candidate = IdentificationCandidate::new(
+            Uuid::new_v4(),
+            "test_provider",
+            0.88,
+            serde_json::json!({
+                "provider_name": "test_provider",
+                "title": "Test Book",
+                "authors": [],
+                "identifiers": [],
+                "subjects": [],
+                "confidence": 0.88,
+                "language": "en",
+                "page_count": 320
+            }),
+            vec!["isbn_match".into()],
+        );
+
+        let response = candidate_to_response(candidate);
+
+        assert_eq!(response.language.as_deref(), Some("en"));
+        assert_eq!(
+            response.language_label.as_deref(),
+            Some("English"),
+            "language_label should be computed from the ISO code"
+        );
+        assert_eq!(response.page_count, Some(320));
     }
 }

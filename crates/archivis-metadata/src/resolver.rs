@@ -76,6 +76,9 @@ const CONTRADICTION_PENALTY: f32 = 0.15;
 /// Title similarity below which a contradiction penalty is applied.
 const CONTRADICTION_THRESHOLD: f32 = 0.3;
 
+/// Penalty when candidate description language doesn't match declared language.
+const LANGUAGE_MISMATCH_PENALTY: f32 = 0.15;
+
 /// Default auto-apply threshold.
 pub const DEFAULT_AUTO_APPLY_THRESHOLD: f32 = 0.85;
 
@@ -110,6 +113,7 @@ enum MatchSignal {
     PublisherMatch,
     CrossProvider,
     Contradiction,
+    LanguageMismatch,
 }
 
 // ── Public types ────────────────────────────────────────────────────
@@ -414,6 +418,11 @@ impl MetadataResolver {
                 ResolverDecision::BlockedLowTier
             };
             return (false, decision);
+        }
+
+        // Language mismatch blocks auto-apply regardless of tier.
+        if best.signals.contains(&MatchSignal::LanguageMismatch) {
+            return (false, ResolverDecision::BlockedContradiction);
         }
 
         // Score must exceed threshold.
@@ -733,6 +742,23 @@ fn cmp_candidates(a: &ScoredCandidate, b: &ScoredCandidate) -> std::cmp::Orderin
         .then_with(|| b.field_count.cmp(&a.field_count))
 }
 
+/// Check whether `text` appears to be written in the language identified by
+/// the ISO 639-1 `lang` code. Returns `true` (match) when detection is
+/// unreliable or the language is unmapped — only reject on confident mismatch.
+fn text_matches_language(text: &str, lang: &str) -> bool {
+    let Some(info) = whatlang::detect(text) else {
+        return true; // too short / ambiguous
+    };
+    if !info.is_reliable() {
+        return true; // low confidence
+    }
+    let detected_639_3 = info.lang().code(); // e.g. "pol", "eng"
+    let Some(detected_639_1) = archivis_core::language::normalize_language(detected_639_3) else {
+        return true; // unmapped language
+    };
+    detected_639_1 == lang
+}
+
 /// Score an individual candidate based on the query and existing metadata.
 fn score_candidate(
     candidate: &mut ScoredCandidate,
@@ -826,7 +852,24 @@ fn score_candidate(
     candidate.field_count = counts.present;
     score += counts.ratio() * FIELD_COMPLETENESS_MAX_BONUS;
 
-    // Clamp to 0.0-1.0.
+    // Clamp to 0.0-1.0 before penalties so that bonuses don't absorb
+    // the penalty via headroom above 1.0.
+    score = score.clamp(0.0, 1.0);
+
+    // ── Description language mismatch penalty ──
+    // Applied after clamping so the penalty always reduces the visible score.
+    if let (Some(lang), Some(desc)) = (
+        &candidate.metadata.language,
+        &candidate.metadata.description,
+    ) {
+        if !text_matches_language(desc, lang) {
+            score -= LANGUAGE_MISMATCH_PENALTY;
+            reasons.push(format!("Description language mismatch (expected: {lang})"));
+            signals.insert(MatchSignal::LanguageMismatch);
+        }
+    }
+
+    // Re-clamp after penalty (score could go negative with stacked penalties).
     score = score.clamp(0.0, 1.0);
 
     candidate.score = score;
@@ -2848,6 +2891,46 @@ mod tests {
             decision,
             ResolverDecision::BlockedContradiction,
             "contradiction reason present without ID signal → BlockedContradiction"
+        );
+    }
+
+    #[test]
+    fn should_auto_apply_unit_blocked_language_mismatch() {
+        // Even with StrongIdMatch tier, a LanguageMismatch signal must block
+        // auto-apply to prevent applying descriptions in the wrong language.
+        let registry = make_registry(vec![]);
+        let resolver = MetadataResolver::with_defaults(registry);
+
+        let best = make_scored(
+            "open_library",
+            "Dune",
+            &["Frank Herbert"],
+            Some("9780441172719"),
+            0.95,
+            0.85,
+            vec![
+                "ISBN exact match".to_string(),
+                "Title fuzzy match (100%)".to_string(),
+                "Description language mismatch (expected: en)".to_string(),
+            ],
+            HashSet::from([
+                MatchSignal::IsbnMatch,
+                MatchSignal::TitleMatch,
+                MatchSignal::LanguageMismatch,
+            ]),
+            CandidateMatchTier::StrongIdMatch,
+        );
+        let candidates = vec![best.clone()];
+
+        let (auto, decision) = resolver.should_auto_apply(Some(&best), &candidates);
+        assert!(
+            !auto,
+            "should NOT auto-apply when LanguageMismatch signal is present"
+        );
+        assert_eq!(
+            decision,
+            ResolverDecision::BlockedContradiction,
+            "LanguageMismatch should produce BlockedContradiction decision"
         );
     }
 
@@ -5194,6 +5277,106 @@ mod tests {
             "first candidate score ({:.4}) should be >= second ({:.4})",
             result.candidates[0].score,
             result.candidates[1].score,
+        );
+    }
+
+    // ── Language mismatch tests ──────────────────────────────────────
+
+    #[test]
+    fn text_matches_language_polish_text_english_declared() {
+        // Polish description but declared as English should mismatch.
+        let polish_text = "Andrzej Sapkowski, arcymistrz polskiej fantastyki, \
+            stworzył niezwykły świat pełen magii, elfów i intryg politycznych. \
+            Krew elfów to pierwsza część sagi o Wiedźminie, w której Geralt z Rivii \
+            musi stawić czoła nowym zagrożeniom.";
+        assert!(
+            !text_matches_language(polish_text, "en"),
+            "Polish text should not match English"
+        );
+    }
+
+    #[test]
+    fn text_matches_language_english_text_english_declared() {
+        let english_text = "A science fiction classic exploring the politics and ecology \
+            of a desert planet. Set on the planet Arrakis, the story follows the young \
+            Paul Atreides as he navigates dangerous political intrigue.";
+        assert!(
+            text_matches_language(english_text, "en"),
+            "English text should match English"
+        );
+    }
+
+    #[test]
+    fn text_matches_language_short_text_returns_true() {
+        // Very short text should be unreliable → return true (benefit of doubt).
+        assert!(
+            text_matches_language("Hello", "en"),
+            "short text should default to match"
+        );
+    }
+
+    #[test]
+    fn normalize_language_common_codes() {
+        use archivis_core::language::normalize_language;
+        assert_eq!(normalize_language("eng"), Some("en"));
+        assert_eq!(normalize_language("pol"), Some("pl"));
+        assert_eq!(normalize_language("fra"), Some("fr"));
+        assert_eq!(normalize_language("deu"), Some("de"));
+        assert_eq!(normalize_language("jpn"), Some("ja"));
+    }
+
+    #[test]
+    fn normalize_language_unknown_code() {
+        assert_eq!(archivis_core::language::normalize_language("zzz"), None);
+    }
+
+    #[tokio::test]
+    async fn language_mismatch_deboosted_and_flagged() {
+        // Candidate with Polish description declared as English.
+        let mut meta = make_metadata(
+            "open_library",
+            "Blood of Elves",
+            &["Andrzej Sapkowski"],
+            Some("9780316029193"),
+            0.95,
+        );
+        meta.language = Some("en".to_string());
+        meta.description = Some(
+            "Andrzej Sapkowski, arcymistrz polskiej fantastyki, \
+            stworzył niezwykły świat pełen magii, elfów i intryg politycznych. \
+            Krew elfów to pierwsza część sagi o Wiedźminie, w której Geralt z Rivii \
+            musi stawić czoła nowym zagrożeniom."
+                .to_string(),
+        );
+
+        let ol = StubProvider::new("open_library").with_isbn_results(vec![meta]);
+
+        let registry = make_registry(vec![Arc::new(ol)]);
+        let resolver = MetadataResolver::with_defaults(registry);
+
+        let query = MetadataQuery {
+            isbn: Some("9780316029193".to_string()),
+            ..Default::default()
+        };
+        let existing = ExistingBookMetadata {
+            title: Some("Blood of Elves".to_string()),
+            authors: vec!["Andrzej Sapkowski".to_string()],
+            ..Default::default()
+        };
+
+        let result = resolver.resolve(&query, Some(&existing)).await;
+        let best = result.best_match.as_ref().unwrap();
+
+        assert!(
+            best.match_reasons
+                .iter()
+                .any(|r| r.contains("Description language mismatch")),
+            "expected language mismatch reason, got: {:?}",
+            best.match_reasons
+        );
+        assert!(
+            best.signals.contains(&MatchSignal::LanguageMismatch),
+            "expected LanguageMismatch signal"
         );
     }
 }

@@ -6,6 +6,7 @@
   import { Label } from '$lib/components/ui/label/index.js';
   import * as Dialog from '$lib/components/ui/dialog/index.js';
   import AutocompleteInput from './AutocompleteInput.svelte';
+  import LanguageCombobox from './LanguageCombobox.svelte';
 
   interface Props {
     bookIds: string[];
@@ -228,11 +229,10 @@
           <Label for="batch-language">Language</Label>
         </div>
         {#if includeLanguage}
-          <Input
+          <LanguageCombobox
             id="batch-language"
-            type="text"
             bind:value={language}
-            placeholder="en"
+            onchange={(code) => (language = code)}
             class="h-8 text-sm"
           />
         {/if}
