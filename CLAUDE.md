@@ -2,6 +2,8 @@
 
 Self-hosted ebook collection manager. Rust (Axum) backend + Svelte 5 frontend, single binary, embedded SQLite.
 
+THIS IS PRERELEASE SOFTWARE. Sound architecture, clean code, and good UX are the top priorities. Do not worry about backwards compatibility when evaluating solutions. Call out gaps you happen to notice incidentally during your work, even if not related to your specific task.
+
 ## Architectural Constraints
 
 1. API server, background workers, and frontend are separate concerns with well-defined interfaces
