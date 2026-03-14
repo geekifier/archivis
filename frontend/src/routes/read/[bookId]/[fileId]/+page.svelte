@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { goto } from '$app/navigation';
   import { page } from '$app/state';
   import { onMount } from 'svelte';
   import { api, ApiError } from '$lib/api/index.js';
@@ -497,8 +498,11 @@
             </a>
           {/if}
 
-          <a
-            href="/books/{bookId}"
+          <button
+            onclick={() => {
+              window.close();
+              goto(`/books/${bookId}`);
+            }}
             class="inline-flex items-center gap-1.5 rounded-md border border-border px-4 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted"
           >
             <svg
@@ -513,7 +517,7 @@
               <path d="m15 18-6-6 6-6" />
             </svg>
             Back to Book
-          </a>
+          </button>
         </div>
       </div>
     </div>

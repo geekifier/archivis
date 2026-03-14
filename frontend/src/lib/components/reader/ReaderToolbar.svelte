@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { goto } from '$app/navigation';
   import { reader } from '$lib/stores/reader.svelte.js';
 
   interface Props {
@@ -27,8 +28,11 @@
     class="absolute inset-x-0 top-0 z-30 flex items-center gap-3 border-b border-border bg-background/90 px-4 py-2 backdrop-blur-sm transition-transform duration-300"
   >
     <!-- Left section: back button + title -->
-    <a
-      href="/books/{bookId}"
+    <button
+      onclick={() => {
+        window.close();
+        goto(`/books/${bookId}`);
+      }}
       class="flex size-11 shrink-0 items-center justify-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground sm:size-auto sm:justify-start"
     >
       <svg
@@ -43,7 +47,7 @@
         <path d="m15 18-6-6 6-6" />
       </svg>
       <span class="hidden sm:inline">Back</span>
-    </a>
+    </button>
     <span class="min-w-0 truncate text-sm font-medium">{bookTitle}</span>
 
     <!-- Center section: current chapter (hidden on mobile) -->

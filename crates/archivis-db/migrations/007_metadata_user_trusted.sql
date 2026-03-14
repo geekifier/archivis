@@ -1,0 +1,1 @@
+ALTER TABLE books ADD COLUMN metadata_user_trusted INTEGER NOT NULL DEFAULT 0;

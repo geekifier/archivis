@@ -61,6 +61,7 @@
   // We intentionally capture initial values (not reactive) for editing.
   function snapshotBook(b: BookDetail) {
     return {
+      trusted: b.metadata_user_trusted,
       title: b.title,
       subtitle: b.subtitle ?? '',
       description: b.description ?? '',
@@ -80,6 +81,7 @@
   const snapshot = untrack(() => snapshotBook(book));
 
   // --- Editable state ---
+  let editTrusted = $state(snapshot.trusted);
   let title = $state(snapshot.title);
   let subtitle = $state(snapshot.subtitle);
   let description = $state(snapshot.description);
@@ -328,6 +330,11 @@
       updateData.publisher_id = newPublisherId;
     }
 
+    // Include trust change if it differs from current state
+    if (editTrusted !== book.metadata_user_trusted) {
+      updateData.metadata_user_trusted = editTrusted;
+    }
+
     const hasScalarChanges = Object.keys(updateData).length > 0;
 
     // Check if authors changed
@@ -394,14 +401,16 @@
 
       onsave(latestBook);
     } catch (err) {
-      saveError =
-        err instanceof ApiError
-          ? err.message
-          : err instanceof Error
+      if (err instanceof ApiError && err.status === 409) {
+        saveError = 'A metadata refresh started. Save again after it completes.';
+      } else {
+        saveError =
+          err instanceof ApiError
             ? err.message
-            : 'Failed to save changes';
-      // Rollback: restore original book in parent
-      onsave(originalBook);
+            : err instanceof Error
+              ? err.message
+              : 'Failed to save changes';
+      }
     } finally {
       saving = false;
     }
@@ -417,6 +426,36 @@
     <Button size="sm" variant="outline" onclick={oncancel} disabled={saving}>Cancel</Button>
     {#if saveError}
       <span class="text-sm text-destructive">{saveError}</span>
+    {/if}
+  </div>
+
+  <!-- Trust toggle -->
+  <div class="flex items-center gap-3 rounded-lg border px-3 py-2 {editTrusted ? 'border-emerald-500/40 bg-emerald-500/5' : 'border-border bg-muted/30'}">
+    <button
+      type="button"
+      class="inline-flex items-center gap-1.5 text-sm font-medium transition-colors {editTrusted ? 'text-emerald-600 dark:text-emerald-400' : 'text-muted-foreground hover:text-foreground'}"
+      disabled={book.resolution_state === 'running'}
+      title={book.resolution_state === 'running' ? 'Wait for metadata refresh to complete' : editTrusted ? 'Click to remove trust' : 'Click to trust this metadata'}
+      onclick={() => (editTrusted = !editTrusted)}
+    >
+      <svg
+        class="size-4"
+        viewBox="0 0 24 24"
+        fill={editTrusted ? 'currentColor' : 'none'}
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+      >
+        <path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z" />
+        {#if editTrusted}
+          <path d="m9 12 2 2 4-4" stroke="white" fill="none" />
+        {/if}
+      </svg>
+      {editTrusted ? 'Metadata trusted' : 'Trust this metadata'}
+    </button>
+    {#if editTrusted !== book.metadata_user_trusted}
+      <span class="text-xs text-amber-600 dark:text-amber-400">(unsaved)</span>
     {/if}
   </div>
 

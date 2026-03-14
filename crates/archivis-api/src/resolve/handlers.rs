@@ -10,6 +10,7 @@ use archivis_db::{BookRepository, CandidateRepository};
 use archivis_metadata::ProviderMetadata;
 
 use crate::auth::AuthUser;
+use crate::books::handlers::stamp_quality_score;
 use crate::books::types::BookDetail;
 use crate::errors::ApiError;
 use crate::state::AppState;
@@ -295,20 +296,21 @@ pub async fn batch_reject_candidates(
     Ok(Json(bwr.into()))
 }
 
-/// `POST /api/books/{id}/keep-metadata` -- keep current metadata and stop resolution.
+/// `POST /api/books/{id}/trust-metadata` -- trust current metadata as correct.
 #[utoipa::path(
     post,
-    path = "/api/books/{id}/keep-metadata",
+    path = "/api/books/{id}/trust-metadata",
     tag = "resolution",
     params(("id" = Uuid, Path, description = "Book ID")),
     responses(
-        (status = 200, description = "Metadata kept, resolution stopped", body = BookDetail),
+        (status = 200, description = "Metadata trusted", body = BookDetail),
         (status = 404, description = "Book not found"),
+        (status = 409, description = "Book has a metadata refresh in progress"),
         (status = 401, description = "Not authenticated"),
     ),
     security(("bearer" = []))
 )]
-pub async fn keep_metadata(
+pub async fn trust_metadata(
     State(state): State<AppState>,
     AuthUser(_user): AuthUser,
     Path(book_id): Path<Uuid>,
@@ -318,13 +320,59 @@ pub async fn keep_metadata(
     // Verify book exists
     BookRepository::get_by_id(pool, book_id).await?;
 
-    state
+    let ok = state
         .resolve_service()
-        .keep_current_metadata(book_id)
+        .trust_metadata(book_id)
         .await
-        .map_err(|e| ApiError::Internal(format!("failed to keep metadata: {e}")))?;
+        .map_err(|e| ApiError::Internal(format!("trust failed: {e}")))?;
+    if !ok {
+        return Err(ApiError::Conflict(
+            "Cannot trust metadata while a refresh is in progress".into(),
+        ));
+    }
 
-    let bwr = BookRepository::get_with_relations(pool, book_id).await?;
+    let mut bwr = BookRepository::get_with_relations(pool, book_id).await?;
+    stamp_quality_score(pool, &mut bwr).await;
+    Ok(Json(bwr.into()))
+}
+
+/// `POST /api/books/{id}/untrust-metadata` -- remove trust from current metadata.
+#[utoipa::path(
+    post,
+    path = "/api/books/{id}/untrust-metadata",
+    tag = "resolution",
+    params(("id" = Uuid, Path, description = "Book ID")),
+    responses(
+        (status = 200, description = "Metadata untrusted", body = BookDetail),
+        (status = 404, description = "Book not found"),
+        (status = 409, description = "Book has a metadata refresh in progress"),
+        (status = 401, description = "Not authenticated"),
+    ),
+    security(("bearer" = []))
+)]
+pub async fn untrust_metadata(
+    State(state): State<AppState>,
+    AuthUser(_user): AuthUser,
+    Path(book_id): Path<Uuid>,
+) -> Result<Json<BookDetail>, ApiError> {
+    let pool = state.db_pool();
+
+    // Verify book exists
+    BookRepository::get_by_id(pool, book_id).await?;
+
+    let result = state
+        .resolve_service()
+        .untrust_metadata(book_id)
+        .await
+        .map_err(|e| ApiError::Internal(format!("untrust failed: {e}")))?;
+    if result.is_none() {
+        return Err(ApiError::Conflict(
+            "Cannot untrust metadata while a refresh is in progress".into(),
+        ));
+    }
+
+    let mut bwr = BookRepository::get_with_relations(pool, book_id).await?;
+    stamp_quality_score(pool, &mut bwr).await;
     Ok(Json(bwr.into()))
 }
 
@@ -484,92 +532,50 @@ async fn enqueue_resolution_backlog(
 
 /// Convert a persisted resolution candidate into an API response.
 fn candidate_to_response(candidate: IdentificationCandidate) -> CandidateResponse {
-    // Try to deserialize the stored JSON into ProviderMetadata for structured fields
     let provider_meta: Option<ProviderMetadata> = serde_json::from_value(candidate.metadata).ok();
-
-    let (
-        title,
-        subtitle,
-        authors,
-        description,
-        publisher,
-        publication_year,
-        language,
-        language_label,
-        page_count,
-        isbn,
-        series,
-        cover_url,
-    ) = provider_meta.as_ref().map_or_else(
-        || {
-            (
-                None,
-                None,
-                vec![],
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-            )
-        },
-        |meta| {
-            (
-                meta.title.clone(),
-                meta.subtitle.clone(),
-                meta.authors
-                    .iter()
-                    .map(|a| CandidateAuthor {
-                        name: a.name.clone(),
-                        role: a.role.clone(),
-                    })
-                    .collect(),
-                meta.description.clone(),
-                meta.publisher.clone(),
-                meta.publication_year,
-                meta.language.clone(),
-                meta.language
-                    .as_deref()
-                    .and_then(archivis_core::language::language_label)
-                    .map(String::from),
-                meta.page_count,
-                meta.identifiers
-                    .iter()
-                    .find(|id| {
-                        id.identifier_type == archivis_core::models::IdentifierType::Isbn13
-                            || id.identifier_type == archivis_core::models::IdentifierType::Isbn10
-                    })
-                    .map(|id| id.value.clone()),
-                meta.series.as_ref().map(|s| SeriesInfo {
-                    name: s.name.clone(),
-                    position: s.position,
-                }),
-                meta.cover_url.clone(),
-            )
-        },
-    );
+    let meta = provider_meta.as_ref();
 
     CandidateResponse {
         id: candidate.id,
         run_id: candidate.run_id,
         provider_name: candidate.provider_name,
         score: candidate.score,
-        title,
-        subtitle,
-        authors,
-        description,
-        publisher,
-        publication_year,
-        language,
-        language_label,
-        page_count,
-        isbn,
-        series,
-        cover_url,
+        title: meta.and_then(|m| m.title.clone()),
+        subtitle: meta.and_then(|m| m.subtitle.clone()),
+        authors: meta.map_or_else(Vec::new, |m| {
+            m.authors
+                .iter()
+                .map(|a| CandidateAuthor {
+                    name: a.name.clone(),
+                    role: a.role.clone(),
+                })
+                .collect()
+        }),
+        description: meta.and_then(|m| m.description.clone()),
+        publisher: meta.and_then(|m| m.publisher.clone()),
+        publication_year: meta.and_then(|m| m.publication_year),
+        language: meta.and_then(|m| m.language.clone()),
+        language_label: meta
+            .and_then(|m| m.language.as_deref())
+            .and_then(archivis_core::language::language_label)
+            .map(String::from),
+        page_count: meta.and_then(|m| m.page_count),
+        isbn: meta.and_then(|m| {
+            m.identifiers
+                .iter()
+                .find(|id| {
+                    id.identifier_type == archivis_core::models::IdentifierType::Isbn13
+                        || id.identifier_type == archivis_core::models::IdentifierType::Isbn10
+                })
+                .map(|id| id.value.clone())
+        }),
+        series: meta.and_then(|m| {
+            m.series.as_ref().map(|s| SeriesInfo {
+                name: s.name.clone(),
+                position: s.position,
+            })
+        }),
+        cover_url: meta.and_then(|m| m.cover_url.clone()),
         match_reasons: candidate.match_reasons,
         disputes: candidate.disputes,
         status: candidate.status.to_string(),

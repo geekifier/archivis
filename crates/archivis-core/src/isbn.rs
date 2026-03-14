@@ -143,20 +143,18 @@ pub fn validate_isbn(input: &str) -> IsbnValidation {
 
 /// Validate an ISBN-13 checksum.
 /// Sum of (digit x alternating 1,3,1,3...) mod 10 == 0.
-fn validate_isbn13_checksum(digits: &str) -> bool {
-    debug_assert!(digits.len() == 13);
-    let sum: u32 = digits
-        .chars()
-        .enumerate()
-        .map(|(i, c)| {
-            let d = c.to_digit(10).unwrap_or(0);
-            if i % 2 == 0 {
-                d
-            } else {
-                d * 3
-            }
-        })
-        .sum();
+pub(crate) fn validate_isbn13_checksum(isbn: &str) -> bool {
+    let chars: Vec<char> = isbn.chars().collect();
+    if chars.len() != 13 {
+        return false;
+    }
+    let mut sum = 0u32;
+    for (i, &ch) in chars.iter().enumerate() {
+        let Some(d) = ch.to_digit(10) else {
+            return false;
+        };
+        sum += if i % 2 == 0 { d } else { d * 3 };
+    }
     sum % 10 == 0
 }
 
@@ -181,21 +179,27 @@ fn compute_isbn13_check_digit(first_12: &str) -> char {
 
 /// Validate an ISBN-10 checksum.
 /// Sum of (digit x position 10..1) mod 11 == 0, where 'X' = 10.
-#[allow(clippy::cast_possible_truncation)] // index max 9, always fits in u32
-fn validate_isbn10_checksum(digits: &str) -> bool {
-    debug_assert!(digits.len() == 10);
-    let sum: u32 = digits
-        .chars()
-        .enumerate()
-        .map(|(i, c)| {
-            let d = if c == 'X' || c == 'x' {
-                10
-            } else {
-                c.to_digit(10).unwrap_or(0)
+pub(crate) fn validate_isbn10_checksum(isbn: &str) -> bool {
+    let chars: Vec<char> = isbn.chars().collect();
+    if chars.len() != 10 {
+        return false;
+    }
+    let mut sum = 0u32;
+    for (i, &ch) in chars.iter().enumerate() {
+        let val = if ch == 'X' || ch == 'x' {
+            if i != 9 {
+                return false;
+            }
+            10
+        } else {
+            let Some(d) = ch.to_digit(10) else {
+                return false;
             };
-            d * (10 - i as u32)
-        })
-        .sum();
+            d
+        };
+        let weight = 10 - u32::try_from(i).expect("index <= 9");
+        sum += val * weight;
+    }
     sum % 11 == 0
 }
 

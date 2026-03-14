@@ -56,8 +56,27 @@ export function createMockApi() {
       applyCandidate: vi.fn(),
       rejectCandidate: vi.fn(),
       undoCandidate: vi.fn(),
+      rejectCandidates: vi.fn(),
+      trustMetadata: vi.fn(),
+      untrustMetadata: vi.fn(),
       refreshBatch: vi.fn(),
       refreshAll: vi.fn()
+    },
+    duplicates: {
+      list: vi.fn(),
+      get: vi.fn(),
+      merge: vi.fn(),
+      dismiss: vi.fn(),
+      flag: vi.fn(),
+      count: vi.fn(),
+      forBook: vi.fn()
+    },
+    isbnScan: {
+      scanBook: vi.fn(),
+      scanBatch: vi.fn()
+    },
+    ui: {
+      sidebarCounts: vi.fn()
     },
     reader: {
       getProgress: vi.fn(),

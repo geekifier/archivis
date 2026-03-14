@@ -45,7 +45,7 @@
   let candidates = $state<CandidateResponse[]>([]);
   let candidatesError = $state<string | null>(null);
   let candidatesExpanded = $state(false);
-  let keepingMetadata = $state(false);
+  let trustingMetadata = $state(false);
   let rejectingAllFromBanner = $state(false);
 
   // --- ISBN content scan state ---
@@ -119,8 +119,19 @@
   }
 
   function handleSave(updated: BookDetail) {
+    const wasTrusted = book?.metadata_user_trusted;
     book = updated;
     editing = false;
+
+    // Trust via edit-form rejects all pending candidates server-side;
+    // core-identity edits supersede them. Sync local state.
+    if (updated.metadata_user_trusted && !wasTrusted) {
+      candidates = [];
+      candidatesExpanded = false;
+      candidatesError = null;
+    } else {
+      loadCandidates();
+    }
   }
 
   async function handleDelete() {
@@ -338,6 +349,7 @@
   }
 
   function handleCandidateRejected(candidateId: string) {
+    candidatesError = null;
     candidates = candidates.map((c) =>
       c.id === candidateId ? { ...c, status: 'rejected' as const } : c
     );
@@ -349,23 +361,46 @@
     loadCandidates();
   }
 
-  async function handleKeepMetadata() {
-    keepingMetadata = true;
+  async function handleTrustMetadata() {
+    trustingMetadata = true;
+    candidatesError = null;
     try {
-      const updated = await api.resolution.keepMetadata(bookId);
+      const updated = await api.resolution.trustMetadata(bookId);
       book = updated;
       candidates = [];
       candidatesExpanded = false;
     } catch (err) {
-      candidatesError = err instanceof Error ? err.message : 'Failed to keep metadata';
+      if (err instanceof ApiError && err.status === 409) {
+        candidatesError = 'Cannot trust while a metadata refresh is in progress';
+      } else {
+        candidatesError = err instanceof Error ? err.message : 'Failed to trust metadata';
+      }
     } finally {
-      keepingMetadata = false;
+      trustingMetadata = false;
+    }
+  }
+
+  async function handleUntrustMetadata() {
+    trustingMetadata = true;
+    candidatesError = null;
+    try {
+      const updated = await api.resolution.untrustMetadata(bookId);
+      book = updated;
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409) {
+        candidatesError = 'Cannot untrust while a metadata refresh is in progress';
+      } else {
+        candidatesError = err instanceof Error ? err.message : 'Failed to untrust metadata';
+      }
+    } finally {
+      trustingMetadata = false;
     }
   }
 
   async function handleRejectAllFromBanner() {
     if (pendingCandidates.length === 0) return;
     rejectingAllFromBanner = true;
+    candidatesError = null;
     try {
       const ids = pendingCandidates.map((c) => c.id);
       const updated = await api.resolution.rejectCandidates(bookId, ids);
@@ -379,7 +414,6 @@
       rejectingAllFromBanner = false;
     }
   }
-
 
   function handleIdentifierUpdate(updated: BookDetail) {
     book = updated;
@@ -506,6 +540,11 @@
       return 'Refreshing metadata';
     }
 
+    // Trusted + identified takes priority over generic outcomes
+    if (detail.metadata_user_trusted && detail.metadata_status === 'identified') {
+      return 'Metadata trusted';
+    }
+
     // Review states
     if (detail.metadata_status === 'needs_review' || detail.resolution_outcome === 'disputed') {
       return 'Review needed';
@@ -542,6 +581,11 @@
     // Active work always takes priority
     if (detail.resolution_state === 'running') {
       return 'bg-sky-100 text-sky-800 dark:bg-sky-900/30 dark:text-sky-400';
+    }
+
+    // Trusted + identified
+    if (detail.metadata_user_trusted && detail.metadata_status === 'identified') {
+      return 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400';
     }
 
     // Review states
@@ -852,6 +896,7 @@
                   {#if isReadableFormat(file.format)}
                     <a
                       href="/read/{book.id}/{file.id}"
+                      target="_blank"
                       class="inline-flex shrink-0 items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90"
                     >
                       <svg
@@ -936,6 +981,8 @@
                   variant="outline"
                   onclick={() => (flagDialogOpen = !flagDialogOpen)}
                   disabled={flagging}
+                  aria-label="Flag as duplicate"
+                  title="Flag as duplicate"
                 >
                   <svg
                     class="size-4"
@@ -949,7 +996,7 @@
                     <path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z" />
                     <line x1="4" x2="4" y1="22" y2="15" />
                   </svg>
-                  Flag Duplicate
+                  Duplicate
                 </Button>
                 <Button size="sm" variant="destructive" onclick={() => (deleteDialogOpen = true)}>
                   <svg
@@ -1029,12 +1076,51 @@
                     {/if}
                   </svg>
                 </button>
+                {#if !editing}
+                  <button
+                    type="button"
+                    class="inline-flex items-center rounded p-1 transition-colors {book.metadata_user_trusted
+                      ? 'text-emerald-600 dark:text-emerald-400'
+                      : 'text-muted-foreground/50 hover:text-muted-foreground'} disabled:opacity-40"
+                    title={book.metadata_user_trusted
+                      ? 'Metadata trusted — click to remove trust'
+                      : 'Click to trust this metadata'}
+                    disabled={trustingMetadata ||
+                      refreshingMetadata ||
+                      book.resolution_state === 'running'}
+                    onclick={book.metadata_user_trusted
+                      ? handleUntrustMetadata
+                      : handleTrustMetadata}
+                  >
+                    <svg
+                      class="size-4"
+                      viewBox="0 0 24 24"
+                      fill={book.metadata_user_trusted ? 'currentColor' : 'none'}
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    >
+                      <path
+                        d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"
+                      />
+                      {#if book.metadata_user_trusted}
+                        <path d="m9 12 2 2 4-4" stroke="white" fill="none" />
+                      {/if}
+                    </svg>
+                  </button>
+                {/if}
                 <div class="flex items-center gap-1.5 text-xs text-muted-foreground">
-                  <span>{Math.round((book.metadata_quality_score ?? book.ingest_quality_score) * 100)}%</span>
+                  <span
+                    >{Math.round(
+                      (book.metadata_quality_score ?? book.ingest_quality_score) * 100
+                    )}%</span
+                  >
                   <div class="h-1.5 w-10 overflow-hidden rounded-full bg-muted">
                     <div
                       class="h-full rounded-full bg-primary transition-all"
-                      style="width: {(book.metadata_quality_score ?? book.ingest_quality_score) * 100}%"
+                      style="width: {(book.metadata_quality_score ?? book.ingest_quality_score) *
+                        100}%"
                     ></div>
                   </div>
                 </div>
@@ -1143,10 +1229,10 @@
                         size="sm"
                         variant="outline"
                         class="h-7 px-2 text-xs"
-                        disabled={keepingMetadata}
-                        onclick={handleKeepMetadata}
+                        disabled={trustingMetadata || refreshingMetadata || book.resolution_state === 'running'}
+                        onclick={handleTrustMetadata}
                       >
-                        {keepingMetadata ? 'Keeping...' : 'Keep Current Metadata'}
+                        {trustingMetadata ? 'Trusting...' : 'Trust Metadata'}
                       </Button>
                     {:else if candidatesExpanded && pendingCandidates.length > 0}
                       {#if pendingCandidates.length > 1}
@@ -1164,10 +1250,10 @@
                         size="sm"
                         variant="outline"
                         class="h-7 px-2 text-xs"
-                        disabled={keepingMetadata}
-                        onclick={handleKeepMetadata}
+                        disabled={trustingMetadata || refreshingMetadata || book.resolution_state === 'running'}
+                        onclick={handleTrustMetadata}
                       >
-                        {keepingMetadata ? 'Keeping...' : 'Keep Current Metadata'}
+                        {trustingMetadata ? 'Trusting...' : 'Trust Metadata'}
                       </Button>
                       <Button
                         size="sm"
@@ -1182,10 +1268,10 @@
                         size="sm"
                         variant="outline"
                         class="h-7 px-2 text-xs"
-                        disabled={keepingMetadata}
-                        onclick={handleKeepMetadata}
+                        disabled={trustingMetadata || refreshingMetadata || book.resolution_state === 'running'}
+                        onclick={handleTrustMetadata}
                       >
-                        {keepingMetadata ? 'Keeping...' : 'Keep Current Metadata'}
+                        {trustingMetadata ? 'Trusting...' : 'Trust Metadata'}
                       </Button>
                       <Button
                         size="sm"

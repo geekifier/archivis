@@ -8,8 +8,7 @@ use archivis_core::models::metadata_rule::is_trusted_publisher;
 use archivis_core::models::{
     ApplyChangeset, Book, CandidateStatus, ChangesetAuthor, ChangesetEntry, ChangesetSeries,
     FieldProvenance, IdentificationCandidate, Identifier, IdentifierType, MetadataProvenance,
-    MetadataRule, MetadataSource, MetadataStatus, ResolutionOutcome as BookResolutionOutcome,
-    ResolutionRunState, ResolutionState,
+    MetadataRule, MetadataSource, ResolutionOutcome as BookResolutionOutcome, ResolutionRunState,
 };
 use archivis_db::{
     AuthorRepository, BookFileRepository, BookRepository, CandidateRepository, DbPool,
@@ -34,7 +33,8 @@ use crate::resolve::planner::{
     PlannedField, ReconciliationInput, ReconciliationPlan,
 };
 use crate::resolve::state::{
-    persist_recomputed_status, update_status_with_floor, BookSnapshot, StatusContext,
+    persist_recomputed_status, persist_recomputed_status_conn, update_status_with_floor,
+    BookSnapshot, StatusContext,
 };
 
 // ── Field-category policy for apply merges ──────────────────────────
@@ -227,10 +227,25 @@ impl<S: StorageBackend> ResolutionService<S> {
             return Ok(None);
         }
 
-        // Check metadata rules before running full resolution.
-        // Manual refresh always bypasses rules so the user can force a provider query.
+        // Check trust and metadata rules before running full resolution.
+        // Manual refresh always bypasses both so the user can force a provider query.
         if !manual_refresh {
-            if let Some(skip_reason) = self.check_metadata_rules(book_id, metadata_rules).await? {
+            let book = BookRepository::get_by_id(&self.db_pool, book_id)
+                .await
+                .map_err(|e| TaskError::Failed(format!("failed to load book: {e}")))?;
+
+            if book.metadata_user_trusted {
+                BookRepository::mark_resolution_skipped(&self.db_pool, book_id, "user_trusted")
+                    .await
+                    .map_err(|e| TaskError::Failed(format!("failed to skip trusted book: {e}")))?;
+                info!(book_id = %book_id, "resolution skipped: user-trusted metadata");
+                return Ok(None);
+            }
+
+            if let Some(skip_reason) = self
+                .check_metadata_rules_for_book(&book, metadata_rules)
+                .await?
+            {
                 BookRepository::mark_resolution_skipped(&self.db_pool, book_id, &skip_reason)
                     .await
                     .map_err(|e| {
@@ -244,13 +259,37 @@ impl<S: StorageBackend> ResolutionService<S> {
         match self.resolve_book(book_id, manual_refresh).await {
             Ok(outcome) => {
                 if outcome.superseded {
-                    BookRepository::mark_resolution_superseded(&self.db_pool, book_id)
+                    // If the book is now trusted, go straight to Done rather than
+                    // requeueing to Pending — the next pickup would skip it anyway,
+                    // and the transient Pending state is incorrect for trusted books.
+                    let book = BookRepository::get_by_id(&self.db_pool, book_id)
                         .await
                         .map_err(|e| {
                             TaskError::Failed(format!(
-                                "failed to requeue superseded resolution: {e}"
+                                "failed to reload book for supersession handling: {e}"
                             ))
                         })?;
+                    if book.metadata_user_trusted {
+                        BookRepository::mark_resolution_skipped(
+                            &self.db_pool,
+                            book_id,
+                            "superseded_trusted",
+                        )
+                        .await
+                        .map_err(|e| {
+                            TaskError::Failed(format!(
+                                "failed to skip superseded trusted resolution: {e}"
+                            ))
+                        })?;
+                    } else {
+                        BookRepository::mark_resolution_superseded(&self.db_pool, book_id)
+                            .await
+                            .map_err(|e| {
+                                TaskError::Failed(format!(
+                                    "failed to requeue superseded resolution: {e}"
+                                ))
+                            })?;
+                    }
                 } else {
                     BookRepository::mark_resolution_done(&self.db_pool, book_id)
                         .await
@@ -278,18 +317,14 @@ impl<S: StorageBackend> ResolutionService<S> {
     /// Check whether metadata rules indicate this book should skip resolution.
     ///
     /// Returns `Some(reason)` if a rule matches, `None` otherwise.
-    async fn check_metadata_rules(
+    async fn check_metadata_rules_for_book(
         &self,
-        book_id: Uuid,
+        book: &Book,
         metadata_rules: &[MetadataRule],
     ) -> Result<Option<String>, TaskError> {
         if metadata_rules.is_empty() {
             return Ok(None);
         }
-
-        let book = BookRepository::get_by_id(&self.db_pool, book_id)
-            .await
-            .map_err(|e| TaskError::Failed(format!("failed to load book: {e}")))?;
 
         let Some(pub_id) = book.publisher_id else {
             return Ok(None);
@@ -620,8 +655,12 @@ impl<S: StorageBackend> ResolutionService<S> {
                 decision_reason = "auto_apply_failed: no best match".into();
             }
         } else if result.candidates.is_empty() {
-            // 0 candidates: skip `persist_recomputed_status` to avoid
-            // downgrading `metadata_status` via the simplified heuristic.
+            // Skip `persist_recomputed_status` for the zero-candidate branch:
+            // - Trusted: older runs are not yet superseded, so recompute would
+            //   see stale pending candidates → incorrectly compute NeedsReview.
+            //   Deferred to post-supersession window below.
+            // - Non-trusted: avoids downgrading `metadata_status` via the
+            //   simplified heuristic.
             self.run_step(
                 run.id,
                 candidate_count,
@@ -710,6 +749,25 @@ impl<S: StorageBackend> ResolutionService<S> {
                 .map_err(|e| TaskError::Failed(format!("failed to supersede older runs: {e}"))),
         )
         .await?;
+
+        // For trusted books where the refresh found zero candidates, recompute
+        // status now that older runs are legitimately superseded.  Placed here
+        // (before run finalization) so `run_step` can still mark the run as
+        // Failed if the recompute errors — no already-finalized run is at risk.
+        if book.metadata_user_trusted && stored_candidates.is_empty() {
+            self.run_step(
+                run.id,
+                candidate_count,
+                best_candidate_id,
+                best_score,
+                best_tier_text.as_deref(),
+                persist_recomputed_status(&self.db_pool, book_id)
+                    .await
+                    .map(|_| ()),
+            )
+            .await?;
+        }
+
         run.state = ResolutionRunState::Done;
         run.outcome = Some(run_outcome);
         run.decision_code = decision_code(&decision_reason).into();
@@ -884,6 +942,12 @@ impl<S: StorageBackend> ResolutionService<S> {
             })?;
 
         if book.resolution_outcome == Some(outcome) {
+            return Ok(());
+        }
+
+        // Do not write Unmatched to a trusted book. Manual refresh → 0 candidates
+        // means "no provider knows this book", not evidence against the user's trust.
+        if book.metadata_user_trusted && outcome == BookResolutionOutcome::Unmatched {
             return Ok(());
         }
 
@@ -1294,6 +1358,7 @@ impl<S: StorageBackend> ResolutionService<S> {
             has_authors: !relations.authors.is_empty(),
             has_identifiers: !relations.identifiers.is_empty(),
             has_applied_candidate: has_applied,
+            metadata_user_trusted: book.metadata_user_trusted,
         };
         update_status_with_floor(&mut book, &snapshot, &ctx);
 
@@ -1390,6 +1455,7 @@ impl<S: StorageBackend> ResolutionService<S> {
             has_authors: !relations.authors.is_empty(),
             has_identifiers: !relations.identifiers.is_empty(),
             has_applied_candidate: has_applied,
+            metadata_user_trusted: book.metadata_user_trusted,
         };
         update_status_with_floor(&mut book, &snapshot, &ctx);
 
@@ -1418,27 +1484,23 @@ impl<S: StorageBackend> ResolutionService<S> {
 
     /// Keep the current metadata for a book: reject all pending candidates and
     /// mark resolution as done with a `Confirmed` outcome.
-    pub async fn keep_current_metadata(&self, book_id: Uuid) -> Result<(), TaskError> {
-        let mut book = BookRepository::get_by_id(&self.db_pool, book_id)
-            .await
-            .map_err(|e| TaskError::Failed(format!("failed to load book: {e}")))?;
-
-        // Load all current reviewable candidates to reject any pending ones
+    /// Mark a book as user-trusted. Sets `metadata_user_trusted = true`,
+    /// `metadata_status = Identified`, `resolution_outcome = Confirmed`,
+    /// `resolution_state = Done`, clears review baselines, and rejects all
+    /// pending candidates.
+    ///
+    /// Returns `Ok(true)` on success, `Ok(false)` if the book is currently
+    /// Running (caller should return 409 Conflict).
+    pub async fn trust_metadata(&self, book_id: Uuid) -> Result<bool, TaskError> {
+        // Load pending candidate IDs before the transaction
         let candidates = CandidateRepository::list_by_book(&self.db_pool, book_id)
             .await
             .map_err(|e| TaskError::Failed(format!("failed to load candidates: {e}")))?;
-
         let pending_ids: Vec<Uuid> = candidates
             .iter()
             .filter(|c| c.status == CandidateStatus::Pending)
             .map(|c| c.id)
             .collect();
-
-        book.review_baseline_metadata_status = None;
-        book.review_baseline_resolution_outcome = None;
-        book.metadata_status = MetadataStatus::Identified;
-        book.resolution_outcome = Some(BookResolutionOutcome::Confirmed);
-        book.resolution_state = ResolutionState::Done;
 
         let mut tx = self
             .db_pool
@@ -1446,21 +1508,65 @@ impl<S: StorageBackend> ResolutionService<S> {
             .await
             .map_err(|e| TaskError::Failed(format!("failed to open transaction: {e}")))?;
 
+        // Atomic: sets trusted+Identified+Confirmed+Done+clear baselines
+        // WHERE resolution_state != 'running'. Returns false if Running.
+        let updated = BookRepository::set_trusted_atomic(tx.as_mut(), book_id)
+            .await
+            .map_err(|e| TaskError::Failed(format!("failed to set trusted: {e}")))?;
+        if !updated {
+            return Ok(false); // Running → caller returns 409
+        }
+
         for cid in &pending_ids {
             CandidateRepository::update_status_conn(tx.as_mut(), *cid, CandidateStatus::Rejected)
                 .await
                 .map_err(|e| TaskError::Failed(format!("failed to reject candidate: {e}")))?;
         }
 
-        BookRepository::update_conn(tx.as_mut(), &book)
-            .await
-            .map_err(|e| TaskError::Failed(format!("failed to update book: {e}")))?;
+        // Supersede any active review run so `latest_reviewable_run_id` no
+        // longer returns it (prevents stale review state from leaking).
+        if let Some(run_id) =
+            CandidateRepository::latest_reviewable_run_id_conn(tx.as_mut(), book_id)
+                .await
+                .map_err(|e| TaskError::Failed(format!("failed to find review run: {e}")))?
+        {
+            ResolutionRunRepository::supersede_run_conn(tx.as_mut(), run_id)
+                .await
+                .map_err(|e| TaskError::Failed(format!("failed to supersede run: {e}")))?;
+        }
 
         tx.commit()
             .await
-            .map_err(|e| TaskError::Failed(format!("failed to commit keep-metadata: {e}")))?;
+            .map_err(|e| TaskError::Failed(format!("failed to commit trust: {e}")))?;
+        Ok(true)
+    }
 
-        Ok(())
+    /// Remove user-trust from a book. Clears `metadata_user_trusted`,
+    /// `resolution_outcome`, and review baselines, then recomputes
+    /// `metadata_status` from current data.
+    ///
+    /// Returns `Ok(Some(book))` on success, `Ok(None)` if the book is
+    /// currently Running (caller should return 409 Conflict).
+    pub async fn untrust_metadata(&self, book_id: Uuid) -> Result<Option<Book>, TaskError> {
+        let mut tx = self
+            .db_pool
+            .begin()
+            .await
+            .map_err(|e| TaskError::Failed(format!("begin tx: {e}")))?;
+
+        let updated = BookRepository::set_untrusted_atomic(tx.as_mut(), book_id)
+            .await
+            .map_err(|e| TaskError::Failed(format!("failed to set untrusted: {e}")))?;
+        if !updated {
+            return Ok(None); // Running → caller returns 409
+        }
+
+        let book = persist_recomputed_status_conn(tx.as_mut(), book_id).await?;
+
+        tx.commit()
+            .await
+            .map_err(|e| TaskError::Failed(format!("commit: {e}")))?;
+        Ok(Some(book))
     }
 
     #[allow(clippy::too_many_lines)]
@@ -1699,6 +1805,7 @@ impl<S: StorageBackend> ResolutionService<S> {
                 should_update_identifiers,
             ),
             has_applied_candidate: has_applied,
+            metadata_user_trusted: book.metadata_user_trusted,
         };
         update_status_with_floor(&mut book, &snapshot, &ctx);
         book.resolution_outcome = Some(BookResolutionOutcome::Enriched);
@@ -5586,6 +5693,196 @@ mod tests {
         assert!(
             trusted_multi.is_empty(),
             "multiple scan ISBNs must not be trusted"
+        );
+    }
+
+    /// Trusted book in review (prior refresh left pending candidates) +
+    /// manual refresh returning 0 candidates → exits review cleanly.
+    #[tokio::test]
+    async fn trusted_zero_candidate_refresh_exits_review() {
+        use archivis_core::models::{
+            CandidateStatus, MetadataStatus, ResolutionOutcome as BookResolutionOutcome,
+            ResolutionRun, ResolutionRunState,
+        };
+
+        let (pool, dir) = test_pool().await;
+        let storage_dir = dir.path().join("storage");
+        let data_dir = dir.path().join("data");
+
+        // 1. Create book and trust it
+        let mut book = Book::new("Trusted Zero Candidate");
+        BookRepository::create(&pool, &book).await.unwrap();
+        let service_for_trust = make_service(
+            pool.clone(),
+            &storage_dir,
+            &data_dir,
+            "provider_trust",
+            vec![],
+        )
+        .await;
+        service_for_trust.trust_metadata(book.id).await.unwrap();
+        book = BookRepository::get_by_id(&pool, book.id).await.unwrap();
+        assert!(book.metadata_user_trusted);
+
+        // 2. Simulate a completed prior resolution run with pending candidates
+        //    (as if a previous manual refresh found candidates)
+        let mut prior_run = ResolutionRun::new(book.id, "manual_refresh", serde_json::json!({}));
+        prior_run.state = ResolutionRunState::Done;
+        prior_run.outcome = Some(BookResolutionOutcome::Ambiguous);
+        prior_run.decision_code = "manual_refresh_review".into();
+        prior_run.finished_at = Some(chrono::Utc::now());
+        ResolutionRunRepository::create(&pool, &prior_run)
+            .await
+            .unwrap();
+
+        let mut candidate = IdentificationCandidate::new(
+            book.id,
+            "provider_prior",
+            0.8,
+            serde_json::json!({"title": "Some Match"}),
+            vec!["title_match".into()],
+        );
+        candidate.run_id = Some(prior_run.id);
+        candidate.status = CandidateStatus::Pending;
+        CandidateRepository::create(&pool, &candidate)
+            .await
+            .unwrap();
+
+        // Set review baselines (as if the book entered review)
+        BookRepository::set_review_baseline(
+            &pool,
+            book.id,
+            Some(MetadataStatus::Identified),
+            Some(BookResolutionOutcome::Confirmed),
+        )
+        .await
+        .unwrap();
+
+        // 3. Run a manual refresh returning 0 candidates
+        let service = make_service(
+            pool.clone(),
+            &storage_dir,
+            &data_dir,
+            "provider_empty",
+            vec![], // zero results
+        )
+        .await;
+        let outcome = service.resolve_book(book.id, true).await.unwrap();
+        assert!(!outcome.superseded);
+
+        // 4. Assert: exits review cleanly
+        let final_book = BookRepository::get_by_id(&pool, book.id).await.unwrap();
+        assert_eq!(
+            final_book.metadata_status,
+            MetadataStatus::Identified,
+            "trusted book should stay Identified"
+        );
+        assert_eq!(
+            final_book.resolution_outcome,
+            Some(BookResolutionOutcome::Confirmed),
+            "trusted book should stay Confirmed (not Unmatched)"
+        );
+        assert_eq!(
+            final_book.resolution_state,
+            ResolutionState::Done,
+            "resolution should be Done"
+        );
+        assert!(
+            final_book.review_baseline_metadata_status.is_none(),
+            "review baselines should be cleared"
+        );
+        assert!(
+            final_book.review_baseline_resolution_outcome.is_none(),
+            "review baselines should be cleared"
+        );
+
+        // Old candidate should be superseded
+        let all_candidates = CandidateRepository::list_all_by_book(&pool, book.id)
+            .await
+            .unwrap();
+        for c in &all_candidates {
+            assert_eq!(
+                c.status,
+                CandidateStatus::Superseded,
+                "old candidate should be superseded"
+            );
+        }
+    }
+
+    /// Regression: a trusted book with a Running manual refresh that gets a
+    /// core edit (bumping `resolution_requested_at`) should transition directly
+    /// to Done when the in-flight resolver detects supersession — never passing
+    /// through the Pending state.
+    #[tokio::test]
+    async fn trusted_core_edit_during_running_refresh_no_pending() {
+        let (pool, dir) = test_pool().await;
+        let storage_dir = dir.path().join("storage");
+        let data_dir = dir.path().join("data");
+
+        // 1. Create book, trust it
+        let book = Book::new("Trusted Superseded Edit");
+        BookRepository::create(&pool, &book).await.unwrap();
+        let service = Arc::new(
+            make_service(
+                pool.clone(),
+                &storage_dir,
+                &data_dir,
+                "provider_trusted_edit",
+                vec![search_candidate(
+                    "provider_trusted_edit",
+                    "Trusted Superseded Edit",
+                )],
+            )
+            .await,
+        );
+        service.trust_metadata(book.id).await.unwrap();
+
+        // 2. Queue a manual refresh (sets Pending, then claim will set Running)
+        BookRepository::mark_resolution_pending(&pool, book.id, "manual_refresh")
+            .await
+            .unwrap();
+
+        // 3. Pause resolution just before the supersession check
+        let reached = Arc::new(Notify::new());
+        let release = Arc::new(Notify::new());
+        service.set_resolution_pause(
+            ResolutionPausePoint::BeforeFinalizeSupersessionCheck,
+            Arc::clone(&reached),
+            Arc::clone(&release),
+        );
+
+        // 4. Start the resolver
+        let service_for_run = Arc::clone(&service);
+        let book_id = book.id;
+        let run = tokio::spawn(async move {
+            service_for_run
+                .resolve_queued_book(book_id, true, &[])
+                .await
+                .unwrap()
+                .unwrap()
+        });
+
+        // 5. While paused: simulate a core edit on the trusted book
+        reached.notified().await;
+        BookRepository::normalize_trusted_resolution_state(&pool, book_id, "user_edit")
+            .await
+            .unwrap();
+
+        // 6. Release the resolver — it should detect supersession
+        release.notify_waiters();
+        let outcome = run.await.unwrap();
+        assert!(outcome.superseded);
+
+        // 7. Assert: book goes to Done (not Pending), stays trusted
+        let final_book = BookRepository::get_by_id(&pool, book_id).await.unwrap();
+        assert_eq!(
+            final_book.resolution_state,
+            ResolutionState::Done,
+            "trusted superseded book should go to Done, not Pending"
+        );
+        assert!(
+            final_book.metadata_user_trusted,
+            "book should remain trusted"
         );
     }
 }

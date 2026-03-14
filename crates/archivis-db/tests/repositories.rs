@@ -198,6 +198,7 @@ async fn book_list_filter_by_status() {
 
     let filter = BookFilter {
         status: Some(MetadataStatus::Identified),
+        trusted: None,
         ..BookFilter::default()
     };
     let result = BookRepository::list(&pool, &PaginationParams::default(), &filter)
@@ -730,6 +731,7 @@ async fn book_list_filter_by_author() {
 
     let filter = BookFilter {
         author_id: Some(author1.id.to_string()),
+        trusted: None,
         ..BookFilter::default()
     };
     let result = BookRepository::list(&pool, &PaginationParams::default(), &filter)
@@ -756,6 +758,7 @@ async fn book_list_filter_by_format() {
 
     let filter = BookFilter {
         format: Some(BookFormat::Epub),
+        trusted: None,
         ..BookFilter::default()
     };
     let result = BookRepository::list(&pool, &PaginationParams::default(), &filter)

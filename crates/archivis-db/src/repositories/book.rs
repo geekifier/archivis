@@ -142,6 +142,7 @@ impl BookRepository {
         let last_resolved_at = book.last_resolved_at.map(|value| value.to_rfc3339());
         let last_resolution_run_id = book.last_resolution_run_id.map(|value| value.to_string());
         let metadata_locked = i64::from(book.metadata_locked);
+        let metadata_user_trusted = i64::from(book.metadata_user_trusted);
         let metadata_provenance = serialize_json(&book.metadata_provenance, "metadata provenance")?;
         let norm_title = archivis_core::models::normalize_title(&book.title);
         let review_baseline = book
@@ -153,8 +154,8 @@ impl BookRepository {
         let metadata_quality_score = book.metadata_quality_score.map(f64::from);
 
         sqlx::query!(
-            "INSERT INTO books (id, title, subtitle, sort_title, description, language, publication_year, publisher_id, added_at, updated_at, rating, page_count, metadata_status, review_baseline_metadata_status, review_baseline_resolution_outcome, ingest_quality_score, metadata_quality_score, resolution_state, resolution_outcome, resolution_requested_at, resolution_requested_reason, last_resolved_at, last_resolution_run_id, metadata_locked, metadata_provenance, cover_path, norm_title)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO books (id, title, subtitle, sort_title, description, language, publication_year, publisher_id, added_at, updated_at, rating, page_count, metadata_status, review_baseline_metadata_status, review_baseline_resolution_outcome, ingest_quality_score, metadata_quality_score, resolution_state, resolution_outcome, resolution_requested_at, resolution_requested_reason, last_resolved_at, last_resolution_run_id, metadata_locked, metadata_user_trusted, metadata_provenance, cover_path, norm_title)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             id,
             book.title,
             book.subtitle,
@@ -179,6 +180,7 @@ impl BookRepository {
             last_resolved_at,
             last_resolution_run_id,
             metadata_locked,
+            metadata_user_trusted,
             metadata_provenance,
             book.cover_path,
             norm_title,
@@ -194,10 +196,28 @@ impl BookRepository {
         let id_str = id.to_string();
         let row = sqlx::query_as!(
             BookRow,
-            "SELECT id, title, subtitle, sort_title, description, language, publication_year, publisher_id, added_at, updated_at, rating, page_count, metadata_status, review_baseline_metadata_status, review_baseline_resolution_outcome, ingest_quality_score, metadata_quality_score, resolution_state, resolution_outcome, resolution_requested_at, resolution_requested_reason, last_resolved_at, last_resolution_run_id, metadata_locked, metadata_provenance, cover_path FROM books WHERE id = ?",
+            "SELECT id, title, subtitle, sort_title, description, language, publication_year, publisher_id, added_at, updated_at, rating, page_count, metadata_status, review_baseline_metadata_status, review_baseline_resolution_outcome, ingest_quality_score, metadata_quality_score, resolution_state, resolution_outcome, resolution_requested_at, resolution_requested_reason, last_resolved_at, last_resolution_run_id, metadata_locked, metadata_user_trusted, metadata_provenance, cover_path FROM books WHERE id = ?",
             id_str,
         )
         .fetch_optional(pool)
+        .await
+        .map_err(|e| DbError::Query(e.to_string()))?
+        .ok_or(DbError::NotFound {
+            entity: "book",
+            id: id_str,
+        })?;
+
+        row.into_book()
+    }
+
+    pub async fn get_by_id_conn(conn: &mut SqliteConnection, id: Uuid) -> Result<Book, DbError> {
+        let id_str = id.to_string();
+        let row = sqlx::query_as!(
+            BookRow,
+            "SELECT id, title, subtitle, sort_title, description, language, publication_year, publisher_id, added_at, updated_at, rating, page_count, metadata_status, review_baseline_metadata_status, review_baseline_resolution_outcome, ingest_quality_score, metadata_quality_score, resolution_state, resolution_outcome, resolution_requested_at, resolution_requested_reason, last_resolved_at, last_resolution_run_id, metadata_locked, metadata_user_trusted, metadata_provenance, cover_path FROM books WHERE id = ?",
+            id_str,
+        )
+        .fetch_optional(&mut *conn)
         .await
         .map_err(|e| DbError::Query(e.to_string()))?
         .ok_or(DbError::NotFound {
@@ -266,60 +286,60 @@ impl BookRepository {
 
             let rows = match (params.sort_by.as_str(), params.sort_order) {
                 ("title" | "sort_title", SortOrder::Asc) => fetch_books_fts!(
-                    "SELECT b.id, b.title, b.subtitle, b.sort_title, b.description, b.language, b.publication_year, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.review_baseline_metadata_status, b.review_baseline_resolution_outcome, b.ingest_quality_score, b.metadata_quality_score, b.resolution_state, b.resolution_outcome, b.resolution_requested_at, b.resolution_requested_reason, b.last_resolved_at, b.last_resolution_run_id, b.metadata_locked, b.metadata_provenance, b.cover_path FROM books b JOIN books_fts ON books_fts.book_id = b.id WHERE books_fts MATCH ? AND (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) AND (? IS NULL OR b.publisher_id = ?) ORDER BY b.sort_title ASC LIMIT ? OFFSET ?",
+                    "SELECT b.id, b.title, b.subtitle, b.sort_title, b.description, b.language, b.publication_year, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.review_baseline_metadata_status, b.review_baseline_resolution_outcome, b.ingest_quality_score, b.metadata_quality_score, b.resolution_state, b.resolution_outcome, b.resolution_requested_at, b.resolution_requested_reason, b.last_resolved_at, b.last_resolution_run_id, b.metadata_locked, b.metadata_user_trusted, b.metadata_provenance, b.cover_path FROM books b JOIN books_fts ON books_fts.book_id = b.id WHERE books_fts MATCH ? AND (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) AND (? IS NULL OR b.publisher_id = ?) ORDER BY b.sort_title ASC LIMIT ? OFFSET ?",
                     pool, fts_q, fmt_filter, status_filter, author_filter, series_filter, tags_json, publisher_filter, limit, offset
                 ),
                 ("title" | "sort_title", SortOrder::Desc) => fetch_books_fts!(
-                    "SELECT b.id, b.title, b.subtitle, b.sort_title, b.description, b.language, b.publication_year, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.review_baseline_metadata_status, b.review_baseline_resolution_outcome, b.ingest_quality_score, b.metadata_quality_score, b.resolution_state, b.resolution_outcome, b.resolution_requested_at, b.resolution_requested_reason, b.last_resolved_at, b.last_resolution_run_id, b.metadata_locked, b.metadata_provenance, b.cover_path FROM books b JOIN books_fts ON books_fts.book_id = b.id WHERE books_fts MATCH ? AND (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) AND (? IS NULL OR b.publisher_id = ?) ORDER BY b.sort_title DESC LIMIT ? OFFSET ?",
+                    "SELECT b.id, b.title, b.subtitle, b.sort_title, b.description, b.language, b.publication_year, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.review_baseline_metadata_status, b.review_baseline_resolution_outcome, b.ingest_quality_score, b.metadata_quality_score, b.resolution_state, b.resolution_outcome, b.resolution_requested_at, b.resolution_requested_reason, b.last_resolved_at, b.last_resolution_run_id, b.metadata_locked, b.metadata_user_trusted, b.metadata_provenance, b.cover_path FROM books b JOIN books_fts ON books_fts.book_id = b.id WHERE books_fts MATCH ? AND (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) AND (? IS NULL OR b.publisher_id = ?) ORDER BY b.sort_title DESC LIMIT ? OFFSET ?",
                     pool, fts_q, fmt_filter, status_filter, author_filter, series_filter, tags_json, publisher_filter, limit, offset
                 ),
                 ("updated_at", SortOrder::Asc) => fetch_books_fts!(
-                    "SELECT b.id, b.title, b.subtitle, b.sort_title, b.description, b.language, b.publication_year, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.review_baseline_metadata_status, b.review_baseline_resolution_outcome, b.ingest_quality_score, b.metadata_quality_score, b.resolution_state, b.resolution_outcome, b.resolution_requested_at, b.resolution_requested_reason, b.last_resolved_at, b.last_resolution_run_id, b.metadata_locked, b.metadata_provenance, b.cover_path FROM books b JOIN books_fts ON books_fts.book_id = b.id WHERE books_fts MATCH ? AND (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) AND (? IS NULL OR b.publisher_id = ?) ORDER BY b.updated_at ASC LIMIT ? OFFSET ?",
+                    "SELECT b.id, b.title, b.subtitle, b.sort_title, b.description, b.language, b.publication_year, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.review_baseline_metadata_status, b.review_baseline_resolution_outcome, b.ingest_quality_score, b.metadata_quality_score, b.resolution_state, b.resolution_outcome, b.resolution_requested_at, b.resolution_requested_reason, b.last_resolved_at, b.last_resolution_run_id, b.metadata_locked, b.metadata_user_trusted, b.metadata_provenance, b.cover_path FROM books b JOIN books_fts ON books_fts.book_id = b.id WHERE books_fts MATCH ? AND (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) AND (? IS NULL OR b.publisher_id = ?) ORDER BY b.updated_at ASC LIMIT ? OFFSET ?",
                     pool, fts_q, fmt_filter, status_filter, author_filter, series_filter, tags_json, publisher_filter, limit, offset
                 ),
                 ("updated_at", SortOrder::Desc) => fetch_books_fts!(
-                    "SELECT b.id, b.title, b.subtitle, b.sort_title, b.description, b.language, b.publication_year, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.review_baseline_metadata_status, b.review_baseline_resolution_outcome, b.ingest_quality_score, b.metadata_quality_score, b.resolution_state, b.resolution_outcome, b.resolution_requested_at, b.resolution_requested_reason, b.last_resolved_at, b.last_resolution_run_id, b.metadata_locked, b.metadata_provenance, b.cover_path FROM books b JOIN books_fts ON books_fts.book_id = b.id WHERE books_fts MATCH ? AND (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) AND (? IS NULL OR b.publisher_id = ?) ORDER BY b.updated_at DESC LIMIT ? OFFSET ?",
+                    "SELECT b.id, b.title, b.subtitle, b.sort_title, b.description, b.language, b.publication_year, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.review_baseline_metadata_status, b.review_baseline_resolution_outcome, b.ingest_quality_score, b.metadata_quality_score, b.resolution_state, b.resolution_outcome, b.resolution_requested_at, b.resolution_requested_reason, b.last_resolved_at, b.last_resolution_run_id, b.metadata_locked, b.metadata_user_trusted, b.metadata_provenance, b.cover_path FROM books b JOIN books_fts ON books_fts.book_id = b.id WHERE books_fts MATCH ? AND (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) AND (? IS NULL OR b.publisher_id = ?) ORDER BY b.updated_at DESC LIMIT ? OFFSET ?",
                     pool, fts_q, fmt_filter, status_filter, author_filter, series_filter, tags_json, publisher_filter, limit, offset
                 ),
                 ("rating", SortOrder::Asc) => fetch_books_fts!(
-                    "SELECT b.id, b.title, b.subtitle, b.sort_title, b.description, b.language, b.publication_year, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.review_baseline_metadata_status, b.review_baseline_resolution_outcome, b.ingest_quality_score, b.metadata_quality_score, b.resolution_state, b.resolution_outcome, b.resolution_requested_at, b.resolution_requested_reason, b.last_resolved_at, b.last_resolution_run_id, b.metadata_locked, b.metadata_provenance, b.cover_path FROM books b JOIN books_fts ON books_fts.book_id = b.id WHERE books_fts MATCH ? AND (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) AND (? IS NULL OR b.publisher_id = ?) ORDER BY b.rating ASC LIMIT ? OFFSET ?",
+                    "SELECT b.id, b.title, b.subtitle, b.sort_title, b.description, b.language, b.publication_year, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.review_baseline_metadata_status, b.review_baseline_resolution_outcome, b.ingest_quality_score, b.metadata_quality_score, b.resolution_state, b.resolution_outcome, b.resolution_requested_at, b.resolution_requested_reason, b.last_resolved_at, b.last_resolution_run_id, b.metadata_locked, b.metadata_user_trusted, b.metadata_provenance, b.cover_path FROM books b JOIN books_fts ON books_fts.book_id = b.id WHERE books_fts MATCH ? AND (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) AND (? IS NULL OR b.publisher_id = ?) ORDER BY b.rating ASC LIMIT ? OFFSET ?",
                     pool, fts_q, fmt_filter, status_filter, author_filter, series_filter, tags_json, publisher_filter, limit, offset
                 ),
                 ("rating", SortOrder::Desc) => fetch_books_fts!(
-                    "SELECT b.id, b.title, b.subtitle, b.sort_title, b.description, b.language, b.publication_year, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.review_baseline_metadata_status, b.review_baseline_resolution_outcome, b.ingest_quality_score, b.metadata_quality_score, b.resolution_state, b.resolution_outcome, b.resolution_requested_at, b.resolution_requested_reason, b.last_resolved_at, b.last_resolution_run_id, b.metadata_locked, b.metadata_provenance, b.cover_path FROM books b JOIN books_fts ON books_fts.book_id = b.id WHERE books_fts MATCH ? AND (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) AND (? IS NULL OR b.publisher_id = ?) ORDER BY b.rating DESC LIMIT ? OFFSET ?",
+                    "SELECT b.id, b.title, b.subtitle, b.sort_title, b.description, b.language, b.publication_year, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.review_baseline_metadata_status, b.review_baseline_resolution_outcome, b.ingest_quality_score, b.metadata_quality_score, b.resolution_state, b.resolution_outcome, b.resolution_requested_at, b.resolution_requested_reason, b.last_resolved_at, b.last_resolution_run_id, b.metadata_locked, b.metadata_user_trusted, b.metadata_provenance, b.cover_path FROM books b JOIN books_fts ON books_fts.book_id = b.id WHERE books_fts MATCH ? AND (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) AND (? IS NULL OR b.publisher_id = ?) ORDER BY b.rating DESC LIMIT ? OFFSET ?",
                     pool, fts_q, fmt_filter, status_filter, author_filter, series_filter, tags_json, publisher_filter, limit, offset
                 ),
                 ("metadata_status", SortOrder::Asc) => fetch_books_fts!(
-                    "SELECT b.id, b.title, b.subtitle, b.sort_title, b.description, b.language, b.publication_year, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.review_baseline_metadata_status, b.review_baseline_resolution_outcome, b.ingest_quality_score, b.metadata_quality_score, b.resolution_state, b.resolution_outcome, b.resolution_requested_at, b.resolution_requested_reason, b.last_resolved_at, b.last_resolution_run_id, b.metadata_locked, b.metadata_provenance, b.cover_path FROM books b JOIN books_fts ON books_fts.book_id = b.id WHERE books_fts MATCH ? AND (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) AND (? IS NULL OR b.publisher_id = ?) ORDER BY b.metadata_status ASC LIMIT ? OFFSET ?",
+                    "SELECT b.id, b.title, b.subtitle, b.sort_title, b.description, b.language, b.publication_year, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.review_baseline_metadata_status, b.review_baseline_resolution_outcome, b.ingest_quality_score, b.metadata_quality_score, b.resolution_state, b.resolution_outcome, b.resolution_requested_at, b.resolution_requested_reason, b.last_resolved_at, b.last_resolution_run_id, b.metadata_locked, b.metadata_user_trusted, b.metadata_provenance, b.cover_path FROM books b JOIN books_fts ON books_fts.book_id = b.id WHERE books_fts MATCH ? AND (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) AND (? IS NULL OR b.publisher_id = ?) ORDER BY b.metadata_status ASC LIMIT ? OFFSET ?",
                     pool, fts_q, fmt_filter, status_filter, author_filter, series_filter, tags_json, publisher_filter, limit, offset
                 ),
                 ("metadata_status", SortOrder::Desc) => fetch_books_fts!(
-                    "SELECT b.id, b.title, b.subtitle, b.sort_title, b.description, b.language, b.publication_year, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.review_baseline_metadata_status, b.review_baseline_resolution_outcome, b.ingest_quality_score, b.metadata_quality_score, b.resolution_state, b.resolution_outcome, b.resolution_requested_at, b.resolution_requested_reason, b.last_resolved_at, b.last_resolution_run_id, b.metadata_locked, b.metadata_provenance, b.cover_path FROM books b JOIN books_fts ON books_fts.book_id = b.id WHERE books_fts MATCH ? AND (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) AND (? IS NULL OR b.publisher_id = ?) ORDER BY b.metadata_status DESC LIMIT ? OFFSET ?",
+                    "SELECT b.id, b.title, b.subtitle, b.sort_title, b.description, b.language, b.publication_year, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.review_baseline_metadata_status, b.review_baseline_resolution_outcome, b.ingest_quality_score, b.metadata_quality_score, b.resolution_state, b.resolution_outcome, b.resolution_requested_at, b.resolution_requested_reason, b.last_resolved_at, b.last_resolution_run_id, b.metadata_locked, b.metadata_user_trusted, b.metadata_provenance, b.cover_path FROM books b JOIN books_fts ON books_fts.book_id = b.id WHERE books_fts MATCH ? AND (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) AND (? IS NULL OR b.publisher_id = ?) ORDER BY b.metadata_status DESC LIMIT ? OFFSET ?",
                     pool, fts_q, fmt_filter, status_filter, author_filter, series_filter, tags_json, publisher_filter, limit, offset
                 ),
                 ("author", SortOrder::Asc) => fetch_books_fts!(
-                    "SELECT b.id, b.title, b.subtitle, b.sort_title, b.description, b.language, b.publication_year, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.review_baseline_metadata_status, b.review_baseline_resolution_outcome, b.ingest_quality_score, b.metadata_quality_score, b.resolution_state, b.resolution_outcome, b.resolution_requested_at, b.resolution_requested_reason, b.last_resolved_at, b.last_resolution_run_id, b.metadata_locked, b.metadata_provenance, b.cover_path FROM books b JOIN books_fts ON books_fts.book_id = b.id WHERE books_fts MATCH ? AND (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) AND (? IS NULL OR b.publisher_id = ?) ORDER BY (SELECT MIN(a.sort_name) FROM book_authors ba JOIN authors a ON a.id = ba.author_id WHERE ba.book_id = b.id) ASC LIMIT ? OFFSET ?",
+                    "SELECT b.id, b.title, b.subtitle, b.sort_title, b.description, b.language, b.publication_year, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.review_baseline_metadata_status, b.review_baseline_resolution_outcome, b.ingest_quality_score, b.metadata_quality_score, b.resolution_state, b.resolution_outcome, b.resolution_requested_at, b.resolution_requested_reason, b.last_resolved_at, b.last_resolution_run_id, b.metadata_locked, b.metadata_user_trusted, b.metadata_provenance, b.cover_path FROM books b JOIN books_fts ON books_fts.book_id = b.id WHERE books_fts MATCH ? AND (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) AND (? IS NULL OR b.publisher_id = ?) ORDER BY (SELECT MIN(a.sort_name) FROM book_authors ba JOIN authors a ON a.id = ba.author_id WHERE ba.book_id = b.id) ASC LIMIT ? OFFSET ?",
                     pool, fts_q, fmt_filter, status_filter, author_filter, series_filter, tags_json, publisher_filter, limit, offset
                 ),
                 ("author", SortOrder::Desc) => fetch_books_fts!(
-                    "SELECT b.id, b.title, b.subtitle, b.sort_title, b.description, b.language, b.publication_year, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.review_baseline_metadata_status, b.review_baseline_resolution_outcome, b.ingest_quality_score, b.metadata_quality_score, b.resolution_state, b.resolution_outcome, b.resolution_requested_at, b.resolution_requested_reason, b.last_resolved_at, b.last_resolution_run_id, b.metadata_locked, b.metadata_provenance, b.cover_path FROM books b JOIN books_fts ON books_fts.book_id = b.id WHERE books_fts MATCH ? AND (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) AND (? IS NULL OR b.publisher_id = ?) ORDER BY (SELECT MIN(a.sort_name) FROM book_authors ba JOIN authors a ON a.id = ba.author_id WHERE ba.book_id = b.id) DESC LIMIT ? OFFSET ?",
+                    "SELECT b.id, b.title, b.subtitle, b.sort_title, b.description, b.language, b.publication_year, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.review_baseline_metadata_status, b.review_baseline_resolution_outcome, b.ingest_quality_score, b.metadata_quality_score, b.resolution_state, b.resolution_outcome, b.resolution_requested_at, b.resolution_requested_reason, b.last_resolved_at, b.last_resolution_run_id, b.metadata_locked, b.metadata_user_trusted, b.metadata_provenance, b.cover_path FROM books b JOIN books_fts ON books_fts.book_id = b.id WHERE books_fts MATCH ? AND (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) AND (? IS NULL OR b.publisher_id = ?) ORDER BY (SELECT MIN(a.sort_name) FROM book_authors ba JOIN authors a ON a.id = ba.author_id WHERE ba.book_id = b.id) DESC LIMIT ? OFFSET ?",
                     pool, fts_q, fmt_filter, status_filter, author_filter, series_filter, tags_json, publisher_filter, limit, offset
                 ),
                 ("series", SortOrder::Asc) => fetch_books_fts!(
-                    "SELECT b.id, b.title, b.subtitle, b.sort_title, b.description, b.language, b.publication_year, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.review_baseline_metadata_status, b.review_baseline_resolution_outcome, b.ingest_quality_score, b.metadata_quality_score, b.resolution_state, b.resolution_outcome, b.resolution_requested_at, b.resolution_requested_reason, b.last_resolved_at, b.last_resolution_run_id, b.metadata_locked, b.metadata_provenance, b.cover_path FROM books b JOIN books_fts ON books_fts.book_id = b.id WHERE books_fts MATCH ? AND (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) AND (? IS NULL OR b.publisher_id = ?) ORDER BY (SELECT MIN(s.name) FROM book_series bs JOIN series s ON s.id = bs.series_id WHERE bs.book_id = b.id) ASC, (SELECT MIN(bs.position) FROM book_series bs WHERE bs.book_id = b.id) ASC LIMIT ? OFFSET ?",
+                    "SELECT b.id, b.title, b.subtitle, b.sort_title, b.description, b.language, b.publication_year, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.review_baseline_metadata_status, b.review_baseline_resolution_outcome, b.ingest_quality_score, b.metadata_quality_score, b.resolution_state, b.resolution_outcome, b.resolution_requested_at, b.resolution_requested_reason, b.last_resolved_at, b.last_resolution_run_id, b.metadata_locked, b.metadata_user_trusted, b.metadata_provenance, b.cover_path FROM books b JOIN books_fts ON books_fts.book_id = b.id WHERE books_fts MATCH ? AND (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) AND (? IS NULL OR b.publisher_id = ?) ORDER BY (SELECT MIN(s.name) FROM book_series bs JOIN series s ON s.id = bs.series_id WHERE bs.book_id = b.id) ASC, (SELECT MIN(bs.position) FROM book_series bs WHERE bs.book_id = b.id) ASC LIMIT ? OFFSET ?",
                     pool, fts_q, fmt_filter, status_filter, author_filter, series_filter, tags_json, publisher_filter, limit, offset
                 ),
                 ("series", SortOrder::Desc) => fetch_books_fts!(
-                    "SELECT b.id, b.title, b.subtitle, b.sort_title, b.description, b.language, b.publication_year, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.review_baseline_metadata_status, b.review_baseline_resolution_outcome, b.ingest_quality_score, b.metadata_quality_score, b.resolution_state, b.resolution_outcome, b.resolution_requested_at, b.resolution_requested_reason, b.last_resolved_at, b.last_resolution_run_id, b.metadata_locked, b.metadata_provenance, b.cover_path FROM books b JOIN books_fts ON books_fts.book_id = b.id WHERE books_fts MATCH ? AND (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) AND (? IS NULL OR b.publisher_id = ?) ORDER BY (SELECT MIN(s.name) FROM book_series bs JOIN series s ON s.id = bs.series_id WHERE bs.book_id = b.id) DESC, (SELECT MIN(bs.position) FROM book_series bs WHERE bs.book_id = b.id) DESC LIMIT ? OFFSET ?",
+                    "SELECT b.id, b.title, b.subtitle, b.sort_title, b.description, b.language, b.publication_year, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.review_baseline_metadata_status, b.review_baseline_resolution_outcome, b.ingest_quality_score, b.metadata_quality_score, b.resolution_state, b.resolution_outcome, b.resolution_requested_at, b.resolution_requested_reason, b.last_resolved_at, b.last_resolution_run_id, b.metadata_locked, b.metadata_user_trusted, b.metadata_provenance, b.cover_path FROM books b JOIN books_fts ON books_fts.book_id = b.id WHERE books_fts MATCH ? AND (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) AND (? IS NULL OR b.publisher_id = ?) ORDER BY (SELECT MIN(s.name) FROM book_series bs JOIN series s ON s.id = bs.series_id WHERE bs.book_id = b.id) DESC, (SELECT MIN(bs.position) FROM book_series bs WHERE bs.book_id = b.id) DESC LIMIT ? OFFSET ?",
                     pool, fts_q, fmt_filter, status_filter, author_filter, series_filter, tags_json, publisher_filter, limit, offset
                 ),
                 (_, SortOrder::Desc) => fetch_books_fts!(
-                    "SELECT b.id, b.title, b.subtitle, b.sort_title, b.description, b.language, b.publication_year, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.review_baseline_metadata_status, b.review_baseline_resolution_outcome, b.ingest_quality_score, b.metadata_quality_score, b.resolution_state, b.resolution_outcome, b.resolution_requested_at, b.resolution_requested_reason, b.last_resolved_at, b.last_resolution_run_id, b.metadata_locked, b.metadata_provenance, b.cover_path FROM books b JOIN books_fts ON books_fts.book_id = b.id WHERE books_fts MATCH ? AND (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) AND (? IS NULL OR b.publisher_id = ?) ORDER BY b.added_at DESC LIMIT ? OFFSET ?",
+                    "SELECT b.id, b.title, b.subtitle, b.sort_title, b.description, b.language, b.publication_year, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.review_baseline_metadata_status, b.review_baseline_resolution_outcome, b.ingest_quality_score, b.metadata_quality_score, b.resolution_state, b.resolution_outcome, b.resolution_requested_at, b.resolution_requested_reason, b.last_resolved_at, b.last_resolution_run_id, b.metadata_locked, b.metadata_user_trusted, b.metadata_provenance, b.cover_path FROM books b JOIN books_fts ON books_fts.book_id = b.id WHERE books_fts MATCH ? AND (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) AND (? IS NULL OR b.publisher_id = ?) ORDER BY b.added_at DESC LIMIT ? OFFSET ?",
                     pool, fts_q, fmt_filter, status_filter, author_filter, series_filter, tags_json, publisher_filter, limit, offset
                 ),
                 // Default: added_at ASC
                 _ => fetch_books_fts!(
-                    "SELECT b.id, b.title, b.subtitle, b.sort_title, b.description, b.language, b.publication_year, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.review_baseline_metadata_status, b.review_baseline_resolution_outcome, b.ingest_quality_score, b.metadata_quality_score, b.resolution_state, b.resolution_outcome, b.resolution_requested_at, b.resolution_requested_reason, b.last_resolved_at, b.last_resolution_run_id, b.metadata_locked, b.metadata_provenance, b.cover_path FROM books b JOIN books_fts ON books_fts.book_id = b.id WHERE books_fts MATCH ? AND (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) AND (? IS NULL OR b.publisher_id = ?) ORDER BY b.added_at ASC LIMIT ? OFFSET ?",
+                    "SELECT b.id, b.title, b.subtitle, b.sort_title, b.description, b.language, b.publication_year, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.review_baseline_metadata_status, b.review_baseline_resolution_outcome, b.ingest_quality_score, b.metadata_quality_score, b.resolution_state, b.resolution_outcome, b.resolution_requested_at, b.resolution_requested_reason, b.last_resolved_at, b.last_resolution_run_id, b.metadata_locked, b.metadata_user_trusted, b.metadata_provenance, b.cover_path FROM books b JOIN books_fts ON books_fts.book_id = b.id WHERE books_fts MATCH ? AND (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) AND (? IS NULL OR b.publisher_id = ?) ORDER BY b.added_at ASC LIMIT ? OFFSET ?",
                     pool, fts_q, fmt_filter, status_filter, author_filter, series_filter, tags_json, publisher_filter, limit, offset
                 ),
             };
@@ -342,60 +362,60 @@ impl BookRepository {
 
             let rows = match (params.sort_by.as_str(), params.sort_order) {
                 ("title" | "sort_title", SortOrder::Asc) => fetch_books!(
-                    "SELECT b.id, b.title, b.subtitle, b.sort_title, b.description, b.language, b.publication_year, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.review_baseline_metadata_status, b.review_baseline_resolution_outcome, b.ingest_quality_score, b.metadata_quality_score, b.resolution_state, b.resolution_outcome, b.resolution_requested_at, b.resolution_requested_reason, b.last_resolved_at, b.last_resolution_run_id, b.metadata_locked, b.metadata_provenance, b.cover_path FROM books b WHERE (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) AND (? IS NULL OR b.publisher_id = ?) ORDER BY b.sort_title ASC LIMIT ? OFFSET ?",
+                    "SELECT b.id, b.title, b.subtitle, b.sort_title, b.description, b.language, b.publication_year, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.review_baseline_metadata_status, b.review_baseline_resolution_outcome, b.ingest_quality_score, b.metadata_quality_score, b.resolution_state, b.resolution_outcome, b.resolution_requested_at, b.resolution_requested_reason, b.last_resolved_at, b.last_resolution_run_id, b.metadata_locked, b.metadata_user_trusted, b.metadata_provenance, b.cover_path FROM books b WHERE (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) AND (? IS NULL OR b.publisher_id = ?) ORDER BY b.sort_title ASC LIMIT ? OFFSET ?",
                     pool, fmt_filter, status_filter, author_filter, series_filter, tags_json, publisher_filter, limit, offset
                 ),
                 ("title" | "sort_title", SortOrder::Desc) => fetch_books!(
-                    "SELECT b.id, b.title, b.subtitle, b.sort_title, b.description, b.language, b.publication_year, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.review_baseline_metadata_status, b.review_baseline_resolution_outcome, b.ingest_quality_score, b.metadata_quality_score, b.resolution_state, b.resolution_outcome, b.resolution_requested_at, b.resolution_requested_reason, b.last_resolved_at, b.last_resolution_run_id, b.metadata_locked, b.metadata_provenance, b.cover_path FROM books b WHERE (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) AND (? IS NULL OR b.publisher_id = ?) ORDER BY b.sort_title DESC LIMIT ? OFFSET ?",
+                    "SELECT b.id, b.title, b.subtitle, b.sort_title, b.description, b.language, b.publication_year, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.review_baseline_metadata_status, b.review_baseline_resolution_outcome, b.ingest_quality_score, b.metadata_quality_score, b.resolution_state, b.resolution_outcome, b.resolution_requested_at, b.resolution_requested_reason, b.last_resolved_at, b.last_resolution_run_id, b.metadata_locked, b.metadata_user_trusted, b.metadata_provenance, b.cover_path FROM books b WHERE (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) AND (? IS NULL OR b.publisher_id = ?) ORDER BY b.sort_title DESC LIMIT ? OFFSET ?",
                     pool, fmt_filter, status_filter, author_filter, series_filter, tags_json, publisher_filter, limit, offset
                 ),
                 ("updated_at", SortOrder::Asc) => fetch_books!(
-                    "SELECT b.id, b.title, b.subtitle, b.sort_title, b.description, b.language, b.publication_year, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.review_baseline_metadata_status, b.review_baseline_resolution_outcome, b.ingest_quality_score, b.metadata_quality_score, b.resolution_state, b.resolution_outcome, b.resolution_requested_at, b.resolution_requested_reason, b.last_resolved_at, b.last_resolution_run_id, b.metadata_locked, b.metadata_provenance, b.cover_path FROM books b WHERE (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) AND (? IS NULL OR b.publisher_id = ?) ORDER BY b.updated_at ASC LIMIT ? OFFSET ?",
+                    "SELECT b.id, b.title, b.subtitle, b.sort_title, b.description, b.language, b.publication_year, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.review_baseline_metadata_status, b.review_baseline_resolution_outcome, b.ingest_quality_score, b.metadata_quality_score, b.resolution_state, b.resolution_outcome, b.resolution_requested_at, b.resolution_requested_reason, b.last_resolved_at, b.last_resolution_run_id, b.metadata_locked, b.metadata_user_trusted, b.metadata_provenance, b.cover_path FROM books b WHERE (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) AND (? IS NULL OR b.publisher_id = ?) ORDER BY b.updated_at ASC LIMIT ? OFFSET ?",
                     pool, fmt_filter, status_filter, author_filter, series_filter, tags_json, publisher_filter, limit, offset
                 ),
                 ("updated_at", SortOrder::Desc) => fetch_books!(
-                    "SELECT b.id, b.title, b.subtitle, b.sort_title, b.description, b.language, b.publication_year, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.review_baseline_metadata_status, b.review_baseline_resolution_outcome, b.ingest_quality_score, b.metadata_quality_score, b.resolution_state, b.resolution_outcome, b.resolution_requested_at, b.resolution_requested_reason, b.last_resolved_at, b.last_resolution_run_id, b.metadata_locked, b.metadata_provenance, b.cover_path FROM books b WHERE (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) AND (? IS NULL OR b.publisher_id = ?) ORDER BY b.updated_at DESC LIMIT ? OFFSET ?",
+                    "SELECT b.id, b.title, b.subtitle, b.sort_title, b.description, b.language, b.publication_year, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.review_baseline_metadata_status, b.review_baseline_resolution_outcome, b.ingest_quality_score, b.metadata_quality_score, b.resolution_state, b.resolution_outcome, b.resolution_requested_at, b.resolution_requested_reason, b.last_resolved_at, b.last_resolution_run_id, b.metadata_locked, b.metadata_user_trusted, b.metadata_provenance, b.cover_path FROM books b WHERE (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) AND (? IS NULL OR b.publisher_id = ?) ORDER BY b.updated_at DESC LIMIT ? OFFSET ?",
                     pool, fmt_filter, status_filter, author_filter, series_filter, tags_json, publisher_filter, limit, offset
                 ),
                 ("rating", SortOrder::Asc) => fetch_books!(
-                    "SELECT b.id, b.title, b.subtitle, b.sort_title, b.description, b.language, b.publication_year, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.review_baseline_metadata_status, b.review_baseline_resolution_outcome, b.ingest_quality_score, b.metadata_quality_score, b.resolution_state, b.resolution_outcome, b.resolution_requested_at, b.resolution_requested_reason, b.last_resolved_at, b.last_resolution_run_id, b.metadata_locked, b.metadata_provenance, b.cover_path FROM books b WHERE (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) AND (? IS NULL OR b.publisher_id = ?) ORDER BY b.rating ASC LIMIT ? OFFSET ?",
+                    "SELECT b.id, b.title, b.subtitle, b.sort_title, b.description, b.language, b.publication_year, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.review_baseline_metadata_status, b.review_baseline_resolution_outcome, b.ingest_quality_score, b.metadata_quality_score, b.resolution_state, b.resolution_outcome, b.resolution_requested_at, b.resolution_requested_reason, b.last_resolved_at, b.last_resolution_run_id, b.metadata_locked, b.metadata_user_trusted, b.metadata_provenance, b.cover_path FROM books b WHERE (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) AND (? IS NULL OR b.publisher_id = ?) ORDER BY b.rating ASC LIMIT ? OFFSET ?",
                     pool, fmt_filter, status_filter, author_filter, series_filter, tags_json, publisher_filter, limit, offset
                 ),
                 ("rating", SortOrder::Desc) => fetch_books!(
-                    "SELECT b.id, b.title, b.subtitle, b.sort_title, b.description, b.language, b.publication_year, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.review_baseline_metadata_status, b.review_baseline_resolution_outcome, b.ingest_quality_score, b.metadata_quality_score, b.resolution_state, b.resolution_outcome, b.resolution_requested_at, b.resolution_requested_reason, b.last_resolved_at, b.last_resolution_run_id, b.metadata_locked, b.metadata_provenance, b.cover_path FROM books b WHERE (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) AND (? IS NULL OR b.publisher_id = ?) ORDER BY b.rating DESC LIMIT ? OFFSET ?",
+                    "SELECT b.id, b.title, b.subtitle, b.sort_title, b.description, b.language, b.publication_year, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.review_baseline_metadata_status, b.review_baseline_resolution_outcome, b.ingest_quality_score, b.metadata_quality_score, b.resolution_state, b.resolution_outcome, b.resolution_requested_at, b.resolution_requested_reason, b.last_resolved_at, b.last_resolution_run_id, b.metadata_locked, b.metadata_user_trusted, b.metadata_provenance, b.cover_path FROM books b WHERE (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) AND (? IS NULL OR b.publisher_id = ?) ORDER BY b.rating DESC LIMIT ? OFFSET ?",
                     pool, fmt_filter, status_filter, author_filter, series_filter, tags_json, publisher_filter, limit, offset
                 ),
                 ("metadata_status", SortOrder::Asc) => fetch_books!(
-                    "SELECT b.id, b.title, b.subtitle, b.sort_title, b.description, b.language, b.publication_year, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.review_baseline_metadata_status, b.review_baseline_resolution_outcome, b.ingest_quality_score, b.metadata_quality_score, b.resolution_state, b.resolution_outcome, b.resolution_requested_at, b.resolution_requested_reason, b.last_resolved_at, b.last_resolution_run_id, b.metadata_locked, b.metadata_provenance, b.cover_path FROM books b WHERE (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) AND (? IS NULL OR b.publisher_id = ?) ORDER BY b.metadata_status ASC LIMIT ? OFFSET ?",
+                    "SELECT b.id, b.title, b.subtitle, b.sort_title, b.description, b.language, b.publication_year, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.review_baseline_metadata_status, b.review_baseline_resolution_outcome, b.ingest_quality_score, b.metadata_quality_score, b.resolution_state, b.resolution_outcome, b.resolution_requested_at, b.resolution_requested_reason, b.last_resolved_at, b.last_resolution_run_id, b.metadata_locked, b.metadata_user_trusted, b.metadata_provenance, b.cover_path FROM books b WHERE (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) AND (? IS NULL OR b.publisher_id = ?) ORDER BY b.metadata_status ASC LIMIT ? OFFSET ?",
                     pool, fmt_filter, status_filter, author_filter, series_filter, tags_json, publisher_filter, limit, offset
                 ),
                 ("metadata_status", SortOrder::Desc) => fetch_books!(
-                    "SELECT b.id, b.title, b.subtitle, b.sort_title, b.description, b.language, b.publication_year, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.review_baseline_metadata_status, b.review_baseline_resolution_outcome, b.ingest_quality_score, b.metadata_quality_score, b.resolution_state, b.resolution_outcome, b.resolution_requested_at, b.resolution_requested_reason, b.last_resolved_at, b.last_resolution_run_id, b.metadata_locked, b.metadata_provenance, b.cover_path FROM books b WHERE (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) AND (? IS NULL OR b.publisher_id = ?) ORDER BY b.metadata_status DESC LIMIT ? OFFSET ?",
+                    "SELECT b.id, b.title, b.subtitle, b.sort_title, b.description, b.language, b.publication_year, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.review_baseline_metadata_status, b.review_baseline_resolution_outcome, b.ingest_quality_score, b.metadata_quality_score, b.resolution_state, b.resolution_outcome, b.resolution_requested_at, b.resolution_requested_reason, b.last_resolved_at, b.last_resolution_run_id, b.metadata_locked, b.metadata_user_trusted, b.metadata_provenance, b.cover_path FROM books b WHERE (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) AND (? IS NULL OR b.publisher_id = ?) ORDER BY b.metadata_status DESC LIMIT ? OFFSET ?",
                     pool, fmt_filter, status_filter, author_filter, series_filter, tags_json, publisher_filter, limit, offset
                 ),
                 ("author", SortOrder::Asc) => fetch_books!(
-                    "SELECT b.id, b.title, b.subtitle, b.sort_title, b.description, b.language, b.publication_year, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.review_baseline_metadata_status, b.review_baseline_resolution_outcome, b.ingest_quality_score, b.metadata_quality_score, b.resolution_state, b.resolution_outcome, b.resolution_requested_at, b.resolution_requested_reason, b.last_resolved_at, b.last_resolution_run_id, b.metadata_locked, b.metadata_provenance, b.cover_path FROM books b WHERE (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) AND (? IS NULL OR b.publisher_id = ?) ORDER BY (SELECT MIN(a.sort_name) FROM book_authors ba JOIN authors a ON a.id = ba.author_id WHERE ba.book_id = b.id) ASC LIMIT ? OFFSET ?",
+                    "SELECT b.id, b.title, b.subtitle, b.sort_title, b.description, b.language, b.publication_year, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.review_baseline_metadata_status, b.review_baseline_resolution_outcome, b.ingest_quality_score, b.metadata_quality_score, b.resolution_state, b.resolution_outcome, b.resolution_requested_at, b.resolution_requested_reason, b.last_resolved_at, b.last_resolution_run_id, b.metadata_locked, b.metadata_user_trusted, b.metadata_provenance, b.cover_path FROM books b WHERE (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) AND (? IS NULL OR b.publisher_id = ?) ORDER BY (SELECT MIN(a.sort_name) FROM book_authors ba JOIN authors a ON a.id = ba.author_id WHERE ba.book_id = b.id) ASC LIMIT ? OFFSET ?",
                     pool, fmt_filter, status_filter, author_filter, series_filter, tags_json, publisher_filter, limit, offset
                 ),
                 ("author", SortOrder::Desc) => fetch_books!(
-                    "SELECT b.id, b.title, b.subtitle, b.sort_title, b.description, b.language, b.publication_year, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.review_baseline_metadata_status, b.review_baseline_resolution_outcome, b.ingest_quality_score, b.metadata_quality_score, b.resolution_state, b.resolution_outcome, b.resolution_requested_at, b.resolution_requested_reason, b.last_resolved_at, b.last_resolution_run_id, b.metadata_locked, b.metadata_provenance, b.cover_path FROM books b WHERE (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) AND (? IS NULL OR b.publisher_id = ?) ORDER BY (SELECT MIN(a.sort_name) FROM book_authors ba JOIN authors a ON a.id = ba.author_id WHERE ba.book_id = b.id) DESC LIMIT ? OFFSET ?",
+                    "SELECT b.id, b.title, b.subtitle, b.sort_title, b.description, b.language, b.publication_year, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.review_baseline_metadata_status, b.review_baseline_resolution_outcome, b.ingest_quality_score, b.metadata_quality_score, b.resolution_state, b.resolution_outcome, b.resolution_requested_at, b.resolution_requested_reason, b.last_resolved_at, b.last_resolution_run_id, b.metadata_locked, b.metadata_user_trusted, b.metadata_provenance, b.cover_path FROM books b WHERE (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) AND (? IS NULL OR b.publisher_id = ?) ORDER BY (SELECT MIN(a.sort_name) FROM book_authors ba JOIN authors a ON a.id = ba.author_id WHERE ba.book_id = b.id) DESC LIMIT ? OFFSET ?",
                     pool, fmt_filter, status_filter, author_filter, series_filter, tags_json, publisher_filter, limit, offset
                 ),
                 ("series", SortOrder::Asc) => fetch_books!(
-                    "SELECT b.id, b.title, b.subtitle, b.sort_title, b.description, b.language, b.publication_year, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.review_baseline_metadata_status, b.review_baseline_resolution_outcome, b.ingest_quality_score, b.metadata_quality_score, b.resolution_state, b.resolution_outcome, b.resolution_requested_at, b.resolution_requested_reason, b.last_resolved_at, b.last_resolution_run_id, b.metadata_locked, b.metadata_provenance, b.cover_path FROM books b WHERE (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) AND (? IS NULL OR b.publisher_id = ?) ORDER BY (SELECT MIN(s.name) FROM book_series bs JOIN series s ON s.id = bs.series_id WHERE bs.book_id = b.id) ASC, (SELECT MIN(bs.position) FROM book_series bs WHERE bs.book_id = b.id) ASC LIMIT ? OFFSET ?",
+                    "SELECT b.id, b.title, b.subtitle, b.sort_title, b.description, b.language, b.publication_year, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.review_baseline_metadata_status, b.review_baseline_resolution_outcome, b.ingest_quality_score, b.metadata_quality_score, b.resolution_state, b.resolution_outcome, b.resolution_requested_at, b.resolution_requested_reason, b.last_resolved_at, b.last_resolution_run_id, b.metadata_locked, b.metadata_user_trusted, b.metadata_provenance, b.cover_path FROM books b WHERE (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) AND (? IS NULL OR b.publisher_id = ?) ORDER BY (SELECT MIN(s.name) FROM book_series bs JOIN series s ON s.id = bs.series_id WHERE bs.book_id = b.id) ASC, (SELECT MIN(bs.position) FROM book_series bs WHERE bs.book_id = b.id) ASC LIMIT ? OFFSET ?",
                     pool, fmt_filter, status_filter, author_filter, series_filter, tags_json, publisher_filter, limit, offset
                 ),
                 ("series", SortOrder::Desc) => fetch_books!(
-                    "SELECT b.id, b.title, b.subtitle, b.sort_title, b.description, b.language, b.publication_year, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.review_baseline_metadata_status, b.review_baseline_resolution_outcome, b.ingest_quality_score, b.metadata_quality_score, b.resolution_state, b.resolution_outcome, b.resolution_requested_at, b.resolution_requested_reason, b.last_resolved_at, b.last_resolution_run_id, b.metadata_locked, b.metadata_provenance, b.cover_path FROM books b WHERE (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) AND (? IS NULL OR b.publisher_id = ?) ORDER BY (SELECT MIN(s.name) FROM book_series bs JOIN series s ON s.id = bs.series_id WHERE bs.book_id = b.id) DESC, (SELECT MIN(bs.position) FROM book_series bs WHERE bs.book_id = b.id) DESC LIMIT ? OFFSET ?",
+                    "SELECT b.id, b.title, b.subtitle, b.sort_title, b.description, b.language, b.publication_year, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.review_baseline_metadata_status, b.review_baseline_resolution_outcome, b.ingest_quality_score, b.metadata_quality_score, b.resolution_state, b.resolution_outcome, b.resolution_requested_at, b.resolution_requested_reason, b.last_resolved_at, b.last_resolution_run_id, b.metadata_locked, b.metadata_user_trusted, b.metadata_provenance, b.cover_path FROM books b WHERE (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) AND (? IS NULL OR b.publisher_id = ?) ORDER BY (SELECT MIN(s.name) FROM book_series bs JOIN series s ON s.id = bs.series_id WHERE bs.book_id = b.id) DESC, (SELECT MIN(bs.position) FROM book_series bs WHERE bs.book_id = b.id) DESC LIMIT ? OFFSET ?",
                     pool, fmt_filter, status_filter, author_filter, series_filter, tags_json, publisher_filter, limit, offset
                 ),
                 (_, SortOrder::Desc) => fetch_books!(
-                    "SELECT b.id, b.title, b.subtitle, b.sort_title, b.description, b.language, b.publication_year, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.review_baseline_metadata_status, b.review_baseline_resolution_outcome, b.ingest_quality_score, b.metadata_quality_score, b.resolution_state, b.resolution_outcome, b.resolution_requested_at, b.resolution_requested_reason, b.last_resolved_at, b.last_resolution_run_id, b.metadata_locked, b.metadata_provenance, b.cover_path FROM books b WHERE (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) AND (? IS NULL OR b.publisher_id = ?) ORDER BY b.added_at DESC LIMIT ? OFFSET ?",
+                    "SELECT b.id, b.title, b.subtitle, b.sort_title, b.description, b.language, b.publication_year, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.review_baseline_metadata_status, b.review_baseline_resolution_outcome, b.ingest_quality_score, b.metadata_quality_score, b.resolution_state, b.resolution_outcome, b.resolution_requested_at, b.resolution_requested_reason, b.last_resolved_at, b.last_resolution_run_id, b.metadata_locked, b.metadata_user_trusted, b.metadata_provenance, b.cover_path FROM books b WHERE (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) AND (? IS NULL OR b.publisher_id = ?) ORDER BY b.added_at DESC LIMIT ? OFFSET ?",
                     pool, fmt_filter, status_filter, author_filter, series_filter, tags_json, publisher_filter, limit, offset
                 ),
                 // Default: added_at ASC
                 _ => fetch_books!(
-                    "SELECT b.id, b.title, b.subtitle, b.sort_title, b.description, b.language, b.publication_year, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.review_baseline_metadata_status, b.review_baseline_resolution_outcome, b.ingest_quality_score, b.metadata_quality_score, b.resolution_state, b.resolution_outcome, b.resolution_requested_at, b.resolution_requested_reason, b.last_resolved_at, b.last_resolution_run_id, b.metadata_locked, b.metadata_provenance, b.cover_path FROM books b WHERE (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) AND (? IS NULL OR b.publisher_id = ?) ORDER BY b.added_at ASC LIMIT ? OFFSET ?",
+                    "SELECT b.id, b.title, b.subtitle, b.sort_title, b.description, b.language, b.publication_year, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.review_baseline_metadata_status, b.review_baseline_resolution_outcome, b.ingest_quality_score, b.metadata_quality_score, b.resolution_state, b.resolution_outcome, b.resolution_requested_at, b.resolution_requested_reason, b.last_resolved_at, b.last_resolution_run_id, b.metadata_locked, b.metadata_user_trusted, b.metadata_provenance, b.cover_path FROM books b WHERE (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) AND (? IS NULL OR b.publisher_id = ?) ORDER BY b.added_at ASC LIMIT ? OFFSET ?",
                     pool, fmt_filter, status_filter, author_filter, series_filter, tags_json, publisher_filter, limit, offset
                 ),
             };
@@ -429,11 +449,12 @@ impl BookRepository {
         let last_resolved_at = book.last_resolved_at.map(|value| value.to_rfc3339());
         let last_resolution_run_id = book.last_resolution_run_id.map(|value| value.to_string());
         let metadata_locked = i64::from(book.metadata_locked);
+        let metadata_user_trusted = i64::from(book.metadata_user_trusted);
         let metadata_provenance = serialize_json(&book.metadata_provenance, "metadata provenance")?;
         let norm_title = archivis_core::models::normalize_title(&book.title);
 
         let result = sqlx::query!(
-            "UPDATE books SET title = ?, subtitle = ?, sort_title = ?, description = ?, language = ?, publication_year = ?, publisher_id = ?, updated_at = ?, rating = ?, page_count = ?, metadata_status = ?, review_baseline_metadata_status = ?, review_baseline_resolution_outcome = ?, ingest_quality_score = ?, resolution_state = ?, resolution_outcome = ?, resolution_requested_at = ?, resolution_requested_reason = ?, last_resolved_at = ?, last_resolution_run_id = ?, metadata_locked = ?, metadata_provenance = ?, cover_path = ?, norm_title = ? WHERE id = ?",
+            "UPDATE books SET title = ?, subtitle = ?, sort_title = ?, description = ?, language = ?, publication_year = ?, publisher_id = ?, updated_at = ?, rating = ?, page_count = ?, metadata_status = ?, review_baseline_metadata_status = ?, review_baseline_resolution_outcome = ?, ingest_quality_score = ?, resolution_state = ?, resolution_outcome = ?, resolution_requested_at = ?, resolution_requested_reason = ?, last_resolved_at = ?, last_resolution_run_id = ?, metadata_locked = ?, metadata_user_trusted = ?, metadata_provenance = ?, cover_path = ?, norm_title = ? WHERE id = ?",
             book.title,
             book.subtitle,
             book.sort_title,
@@ -455,6 +476,7 @@ impl BookRepository {
             last_resolved_at,
             last_resolution_run_id,
             metadata_locked,
+            metadata_user_trusted,
             metadata_provenance,
             book.cover_path,
             norm_title,
@@ -488,11 +510,12 @@ impl BookRepository {
         let last_resolved_at = book.last_resolved_at.map(|value| value.to_rfc3339());
         let last_resolution_run_id = book.last_resolution_run_id.map(|value| value.to_string());
         let metadata_locked = i64::from(book.metadata_locked);
+        let metadata_user_trusted = i64::from(book.metadata_user_trusted);
         let metadata_provenance = serialize_json(&book.metadata_provenance, "metadata provenance")?;
         let norm_title = archivis_core::models::normalize_title(&book.title);
 
         let result = sqlx::query!(
-            "UPDATE books SET title = ?, subtitle = ?, sort_title = ?, description = ?, language = ?, publication_year = ?, publisher_id = ?, updated_at = ?, rating = ?, page_count = ?, metadata_status = ?, review_baseline_metadata_status = ?, review_baseline_resolution_outcome = ?, ingest_quality_score = ?, resolution_state = ?, resolution_outcome = ?, resolution_requested_at = ?, resolution_requested_reason = ?, last_resolved_at = ?, last_resolution_run_id = ?, metadata_locked = ?, metadata_provenance = ?, cover_path = ?, norm_title = ? WHERE id = ?",
+            "UPDATE books SET title = ?, subtitle = ?, sort_title = ?, description = ?, language = ?, publication_year = ?, publisher_id = ?, updated_at = ?, rating = ?, page_count = ?, metadata_status = ?, review_baseline_metadata_status = ?, review_baseline_resolution_outcome = ?, ingest_quality_score = ?, resolution_state = ?, resolution_outcome = ?, resolution_requested_at = ?, resolution_requested_reason = ?, last_resolved_at = ?, last_resolution_run_id = ?, metadata_locked = ?, metadata_user_trusted = ?, metadata_provenance = ?, cover_path = ?, norm_title = ? WHERE id = ?",
             book.title,
             book.subtitle,
             book.sort_title,
@@ -514,6 +537,7 @@ impl BookRepository {
             last_resolved_at,
             last_resolution_run_id,
             metadata_locked,
+            metadata_user_trusted,
             metadata_provenance,
             book.cover_path,
             norm_title,
@@ -554,6 +578,7 @@ impl BookRepository {
     ) -> Result<PaginatedResult<Book>, DbError> {
         let filter = BookFilter {
             query: Some(query.into()),
+            trusted: None,
             ..BookFilter::default()
         };
         Self::list(pool, params, &filter).await
@@ -668,6 +693,126 @@ impl BookRepository {
             let pid_str = pid.to_string();
             sqlx::query_scalar!("SELECT name FROM publishers WHERE id = ?", pid_str)
                 .fetch_optional(pool)
+                .await
+                .map_err(|e| DbError::Query(e.to_string()))?
+        } else {
+            None
+        };
+
+        Ok(BookWithRelations {
+            book,
+            authors,
+            series,
+            files,
+            identifiers,
+            tags,
+            publisher_name,
+        })
+    }
+
+    #[allow(clippy::too_many_lines)] // mirrors `get_with_relations` but uses a connection
+    pub async fn get_with_relations_conn(
+        conn: &mut SqliteConnection,
+        id: Uuid,
+    ) -> Result<BookWithRelations, DbError> {
+        let book = Self::get_by_id_conn(&mut *conn, id).await?;
+        let id_str = id.to_string();
+
+        let author_rows = sqlx::query_as!(
+            BookAuthorRow,
+            "SELECT a.id, a.name, a.sort_name, ba.role, ba.position FROM authors a JOIN book_authors ba ON ba.author_id = a.id WHERE ba.book_id = ? ORDER BY ba.position",
+            id_str,
+        )
+        .fetch_all(&mut *conn)
+        .await
+        .map_err(|e| DbError::Query(e.to_string()))?;
+
+        let authors = author_rows
+            .into_iter()
+            .map(|r| {
+                Ok(BookAuthorEntry {
+                    author: Author {
+                        id: Uuid::parse_str(&r.id)
+                            .map_err(|e| DbError::Query(format!("invalid author UUID: {e}")))?,
+                        name: r.name,
+                        sort_name: r.sort_name,
+                    },
+                    role: r.role,
+                    position: r.position,
+                })
+            })
+            .collect::<Result<Vec<_>, DbError>>()?;
+
+        let series_rows = sqlx::query_as!(
+            BookSeriesRow,
+            "SELECT s.id, s.name, s.description, bs.position FROM series s JOIN book_series bs ON bs.series_id = s.id WHERE bs.book_id = ? ORDER BY bs.position",
+            id_str,
+        )
+        .fetch_all(&mut *conn)
+        .await
+        .map_err(|e| DbError::Query(e.to_string()))?;
+
+        let series = series_rows
+            .into_iter()
+            .map(|r| {
+                Ok(BookSeriesEntry {
+                    series: Series {
+                        id: Uuid::parse_str(&r.id)
+                            .map_err(|e| DbError::Query(format!("invalid series UUID: {e}")))?,
+                        name: r.name,
+                        description: r.description,
+                    },
+                    position: r.position,
+                })
+            })
+            .collect::<Result<Vec<_>, DbError>>()?;
+
+        let file_rows = sqlx::query_as!(
+            BookFileRow,
+            "SELECT id, book_id, format, format_version, storage_path, file_size, hash, added_at FROM book_files WHERE book_id = ?",
+            id_str,
+        )
+        .fetch_all(&mut *conn)
+        .await
+        .map_err(|e| DbError::Query(e.to_string()))?;
+
+        let files = file_rows
+            .into_iter()
+            .map(BookFileRow::into_book_file)
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let ident_rows = sqlx::query_as!(
+            IdentifierRow,
+            "SELECT id, book_id, identifier_type, value, source_type, source_name, confidence FROM identifiers WHERE book_id = ?",
+            id_str,
+        )
+        .fetch_all(&mut *conn)
+        .await
+        .map_err(|e| DbError::Query(e.to_string()))?;
+
+        let identifiers = ident_rows
+            .into_iter()
+            .map(IdentifierRow::into_identifier)
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let tag_rows = sqlx::query_as!(
+            TagRow,
+            "SELECT t.id, t.name, t.category FROM tags t JOIN book_tags bt ON bt.tag_id = t.id WHERE bt.book_id = ?",
+            id_str,
+        )
+        .fetch_all(&mut *conn)
+        .await
+        .map_err(|e| DbError::Query(e.to_string()))?;
+
+        let tags = tag_rows
+            .into_iter()
+            .map(TagRow::into_tag)
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let publisher_name: Option<String> = if let Some(pid) = book.publisher_id {
+            let pid_str = pid.to_string();
+            sqlx::query_scalar!("SELECT name FROM publishers WHERE id = ?", pid_str)
+                .fetch_optional(&mut *conn)
                 .await
                 .map_err(|e| DbError::Query(e.to_string()))?
         } else {
@@ -914,7 +1059,7 @@ impl BookRepository {
                       b.metadata_quality_score,
                       b.resolution_state, b.resolution_outcome, b.resolution_requested_at,
                       b.resolution_requested_reason, b.last_resolved_at, b.last_resolution_run_id,
-                      b.metadata_locked, b.metadata_provenance,
+                      b.metadata_locked, b.metadata_user_trusted, b.metadata_provenance,
                       b.cover_path,
                       GROUP_CONCAT(a.name, '||') as "author_names: String"
                FROM books b
@@ -957,6 +1102,7 @@ impl BookRepository {
                     last_resolved_at: r.last_resolved_at,
                     last_resolution_run_id: r.last_resolution_run_id,
                     metadata_locked: r.metadata_locked,
+                    metadata_user_trusted: r.metadata_user_trusted,
                     metadata_provenance: r.metadata_provenance,
                     cover_path: r.cover_path,
                 }
@@ -1121,6 +1267,7 @@ struct DuplicateCandidateRow {
     last_resolved_at: Option<String>,
     last_resolution_run_id: Option<String>,
     metadata_locked: i64,
+    metadata_user_trusted: i64,
     metadata_provenance: String,
     cover_path: Option<String>,
     author_names: Option<String>,
@@ -1152,6 +1299,7 @@ struct BookRow {
     last_resolved_at: Option<String>,
     last_resolution_run_id: Option<String>,
     metadata_locked: i64,
+    metadata_user_trusted: i64,
     metadata_provenance: String,
     cover_path: Option<String>,
 }
@@ -1234,6 +1382,7 @@ impl BookRow {
             last_resolved_at,
             last_resolution_run_id,
             metadata_locked: self.metadata_locked != 0,
+            metadata_user_trusted: self.metadata_user_trusted != 0,
             metadata_provenance,
             cover_path: self.cover_path,
         })
@@ -1408,16 +1557,62 @@ impl BookRepository {
         Ok(())
     }
 
+    /// Normalize `resolution_state` for a trusted book after a core-identity edit.
+    ///
+    /// - If the book is `Running` (manual refresh in flight): stamp
+    ///   `resolution_requested_at` so the resolver self-supersedes, keep
+    ///   state as `Running`.  The auto-resolver will later skip (trusted) → Done.
+    /// - Otherwise: set `resolution_state = Done` directly.  A trusted book
+    ///   should not re-enter the automatic resolution pipeline.
+    ///
+    /// Does NOT touch `last_resolved_at` (no resolution actually ran).
+    pub async fn normalize_trusted_resolution_state(
+        pool: &SqlitePool,
+        book_id: Uuid,
+        trigger: &str,
+    ) -> Result<(), DbError> {
+        let now = Utc::now().to_rfc3339();
+        let running = serialize_resolution_state(ResolutionState::Running);
+        let done = serialize_resolution_state(ResolutionState::Done);
+
+        sqlx::query(
+            "UPDATE books
+             SET resolution_state = CASE
+                     WHEN resolution_state = ? THEN resolution_state
+                     ELSE ?
+                 END,
+                 resolution_requested_at = CASE
+                     WHEN resolution_state = ? THEN ?
+                     ELSE resolution_requested_at
+                 END,
+                 resolution_requested_reason = ?,
+                 updated_at = ?
+             WHERE id = ?",
+        )
+        .bind(&running) // CASE 1: keep Running
+        .bind(&done) // CASE 1: else → Done
+        .bind(&running) // CASE 2: stamp only if Running
+        .bind(&now) // CASE 2: new timestamp
+        .bind(trigger)
+        .bind(&now)
+        .bind(book_id.to_string())
+        .execute(pool)
+        .await
+        .map_err(|e| DbError::Query(e.to_string()))?;
+
+        Ok(())
+    }
+
     pub async fn list_pending_resolution(
         pool: &SqlitePool,
         limit: i64,
     ) -> Result<Vec<Book>, DbError> {
         let pending = serialize_resolution_state(ResolutionState::Pending);
         let rows = sqlx::query_as::<_, BookRow>(
-            "SELECT id, title, subtitle, sort_title, description, language, publication_year, publisher_id, added_at, updated_at, rating, page_count, metadata_status, review_baseline_metadata_status, review_baseline_resolution_outcome, ingest_quality_score, metadata_quality_score, resolution_state, resolution_outcome, resolution_requested_at, resolution_requested_reason, last_resolved_at, last_resolution_run_id, metadata_locked, metadata_provenance, cover_path
+            "SELECT id, title, subtitle, sort_title, description, language, publication_year, publisher_id, added_at, updated_at, rating, page_count, metadata_status, review_baseline_metadata_status, review_baseline_resolution_outcome, ingest_quality_score, metadata_quality_score, resolution_state, resolution_outcome, resolution_requested_at, resolution_requested_reason, last_resolved_at, last_resolution_run_id, metadata_locked, metadata_user_trusted, metadata_provenance, cover_path
              FROM books
              WHERE resolution_state = ?
-               AND metadata_locked = 0
+               AND (metadata_locked = 0 OR metadata_user_trusted = 1)
              ORDER BY resolution_requested_at ASC
              LIMIT ?",
         )
@@ -1445,7 +1640,7 @@ impl BookRepository {
                  updated_at = ?
              WHERE id = ?
                AND resolution_state = ?
-               AND metadata_locked = 0",
+               AND (metadata_locked = 0 OR metadata_user_trusted = 1)",
         )
         .bind(&running)
         .bind(&now)
@@ -1488,7 +1683,7 @@ impl BookRepository {
     pub async fn list_running_resolution(pool: &SqlitePool) -> Result<Vec<Book>, DbError> {
         let running = serialize_resolution_state(ResolutionState::Running);
         let rows = sqlx::query_as::<_, BookRow>(
-            "SELECT id, title, subtitle, sort_title, description, language, publication_year, publisher_id, added_at, updated_at, rating, page_count, metadata_status, review_baseline_metadata_status, review_baseline_resolution_outcome, ingest_quality_score, metadata_quality_score, resolution_state, resolution_outcome, resolution_requested_at, resolution_requested_reason, last_resolved_at, last_resolution_run_id, metadata_locked, metadata_provenance, cover_path
+            "SELECT id, title, subtitle, sort_title, description, language, publication_year, publisher_id, added_at, updated_at, rating, page_count, metadata_status, review_baseline_metadata_status, review_baseline_resolution_outcome, ingest_quality_score, metadata_quality_score, resolution_state, resolution_outcome, resolution_requested_at, resolution_requested_reason, last_resolved_at, last_resolution_run_id, metadata_locked, metadata_user_trusted, metadata_provenance, cover_path
              FROM books
              WHERE resolution_state = ?",
         )
@@ -1658,5 +1853,98 @@ impl BookRepository {
         }
 
         Ok(())
+    }
+
+    /// Atomically set `metadata_user_trusted = true` and transition to
+    /// Identified/Confirmed/Done, clearing review baselines.
+    /// Returns `Ok(true)` if the row was updated, `Ok(false)` if the book
+    /// is currently Running (0 rows affected).
+    pub async fn set_trusted_atomic(
+        conn: &mut SqliteConnection,
+        book_id: Uuid,
+    ) -> Result<bool, DbError> {
+        let now = Utc::now().to_rfc3339();
+        let id_str = book_id.to_string();
+        let identified = serialize_metadata_status(MetadataStatus::Identified);
+        let confirmed =
+            serialize_resolution_outcome(Some(archivis_core::models::ResolutionOutcome::Confirmed));
+        let done = serialize_resolution_state(ResolutionState::Done);
+        let running = serialize_resolution_state(ResolutionState::Running);
+
+        let result = sqlx::query(
+            "UPDATE books
+             SET metadata_user_trusted = 1,
+                 metadata_status = ?,
+                 resolution_outcome = ?,
+                 resolution_state = ?,
+                 review_baseline_metadata_status = NULL,
+                 review_baseline_resolution_outcome = NULL,
+                 updated_at = ?
+             WHERE id = ? AND resolution_state != ?",
+        )
+        .bind(&identified)
+        .bind(&confirmed)
+        .bind(&done)
+        .bind(&now)
+        .bind(&id_str)
+        .bind(&running)
+        .execute(conn)
+        .await
+        .map_err(|e| DbError::Query(e.to_string()))?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
+    /// Atomically set `metadata_user_trusted = false`, clear
+    /// `resolution_outcome` to NULL (re-evaluate, not undo), clear review
+    /// baselines, and cancel any pending resolution (Pending → Done).
+    /// Returns `Ok(true)` if the row was updated, `Ok(false)` if the book
+    /// is currently Running (0 rows affected).
+    pub async fn set_untrusted_atomic(
+        conn: &mut SqliteConnection,
+        book_id: Uuid,
+    ) -> Result<bool, DbError> {
+        let now = Utc::now().to_rfc3339();
+        let id_str = book_id.to_string();
+        let done = serialize_resolution_state(ResolutionState::Done);
+        let pending = serialize_resolution_state(ResolutionState::Pending);
+        let running = serialize_resolution_state(ResolutionState::Running);
+
+        let result = sqlx::query(
+            "UPDATE books
+             SET metadata_user_trusted = 0,
+                 resolution_outcome = NULL,
+                 review_baseline_metadata_status = NULL,
+                 review_baseline_resolution_outcome = NULL,
+                 resolution_state = CASE
+                     WHEN resolution_state = ? THEN ?
+                     ELSE resolution_state
+                 END,
+                 updated_at = ?
+             WHERE id = ? AND resolution_state != ?",
+        )
+        .bind(&pending)
+        .bind(&done)
+        .bind(&now)
+        .bind(&id_str)
+        .bind(&running)
+        .execute(conn)
+        .await
+        .map_err(|e| DbError::Query(e.to_string()))?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
+    /// Pool-based version of [`set_untrusted_atomic`](Self::set_untrusted_atomic)
+    /// for callers that don't need a transaction.
+    pub async fn set_untrusted_atomic_pool(
+        pool: &SqlitePool,
+        book_id: Uuid,
+    ) -> Result<bool, DbError> {
+        let mut conn = pool
+            .acquire()
+            .await
+            .map_err(|e| DbError::Connection(e.to_string()))?;
+        Self::set_untrusted_atomic(&mut conn, book_id).await
     }
 }

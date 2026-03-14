@@ -62,6 +62,8 @@ pub struct BookFilter {
     pub series_id: Option<String>,
     /// Filter by publisher ID (direct column on books table).
     pub publisher_id: Option<String>,
+    /// Filter by `metadata_user_trusted` flag.
+    pub trusted: Option<bool>,
 }
 
 /// Paginated query result.

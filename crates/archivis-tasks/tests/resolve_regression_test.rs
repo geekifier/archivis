@@ -16,7 +16,10 @@ use archivis_core::models::{
     MetadataSource, MetadataStatus, ResolutionOutcome as BookResolutionOutcome,
 };
 use archivis_core::settings::SettingsReader;
-use archivis_db::{AuthorRepository, BookRepository, CandidateRepository, IdentifierRepository};
+use archivis_db::{
+    AuthorRepository, BookRepository, CandidateRepository, IdentifierRepository,
+    ResolutionRunRepository,
+};
 use archivis_metadata::{
     MetadataProvider, MetadataQuery, MetadataResolver, ProviderAuthor, ProviderIdentifier,
     ProviderMetadata, ProviderRegistry,
@@ -843,13 +846,14 @@ async fn reject_all_restores_confirmed_outcome() {
     let outcome1 = service.resolve_book(book.id, false).await.unwrap();
     assert!(outcome1.auto_applied, "precondition: should auto-apply");
 
-    // 2. Keep current metadata to set Confirmed outcome
-    service.keep_current_metadata(book.id).await.unwrap();
+    // 2. Trust metadata to set Confirmed outcome
+    let trusted = service.trust_metadata(book.id).await.unwrap();
+    assert!(trusted, "trust should succeed when not Running");
     let confirmed_book = BookRepository::get_by_id(&pool, book.id).await.unwrap();
     assert_eq!(
         confirmed_book.resolution_outcome,
         Some(BookResolutionOutcome::Confirmed),
-        "precondition: should be Confirmed after keep_current_metadata"
+        "precondition: should be Confirmed after trust_metadata"
     );
 
     // 3. Second resolve → enters review (manual refresh)
@@ -1095,5 +1099,738 @@ async fn apply_then_undo_restores_baseline_resolution_outcome() {
         undone_book.review_baseline_resolution_outcome,
         review_book.review_baseline_resolution_outcome,
         "baseline outcome should be restored after undo"
+    );
+}
+
+// ── Trust/untrust roundtrip regression tests ─────────────────────
+
+/// Helper: resolve a book with a strong ISBN match, returning the auto-applied
+/// outcome for use in trust/untrust tests.
+async fn resolve_to_outcome(
+    service: &ResolutionService<LocalStorage>,
+    pool: &archivis_db::DbPool,
+    title: &str,
+    isbn: &str,
+    provider_meta: ProviderMetadata,
+) -> (uuid::Uuid, BookResolutionOutcome) {
+    let book = Book::new(title);
+    BookRepository::create(pool, &book).await.unwrap();
+
+    let author_name = provider_meta
+        .authors
+        .first()
+        .map_or("Test Author", |a| a.name.as_str());
+    let author = archivis_core::models::Author::new(author_name);
+    AuthorRepository::create(pool, &author).await.unwrap();
+    BookRepository::add_author(pool, book.id, author.id, "author", 0)
+        .await
+        .unwrap();
+
+    let id = Identifier::new(
+        book.id,
+        IdentifierType::Isbn13,
+        isbn,
+        MetadataSource::Embedded,
+        0.9,
+    );
+    IdentifierRepository::create(pool, &id).await.unwrap();
+
+    let outcome = service.resolve_book(book.id, false).await.unwrap();
+    assert!(
+        outcome.auto_applied,
+        "precondition: should auto-apply strong ISBN match"
+    );
+
+    let updated = BookRepository::get_by_id(pool, book.id).await.unwrap();
+    let resolution_outcome = updated
+        .resolution_outcome
+        .expect("precondition: should have resolution outcome after auto-apply");
+    (book.id, resolution_outcome)
+}
+
+/// Untrust re-evaluates: book with applied candidate recomputes to
+/// `Identified` with `resolution_outcome = None`.
+#[tokio::test]
+async fn trust_untrust_recomputes_from_applied_candidate() {
+    let tmp = TempDir::new().unwrap();
+
+    let provider = Arc::new(FlexibleStubProvider {
+        isbn_results: vec![ProviderMetadata {
+            provider_name: "test_provider".into(),
+            title: Some("Enriched Book".into()),
+            subtitle: None,
+            authors: vec![ProviderAuthor {
+                name: "Author A".into(),
+                role: Some("author".into()),
+            }],
+            description: Some("New description.".into()),
+            language: Some("en".into()),
+            publisher: None,
+            publication_year: None,
+            identifiers: vec![ProviderIdentifier {
+                identifier_type: IdentifierType::Isbn13,
+                value: "9780000000001".into(),
+            }],
+            subjects: vec![],
+            series: None,
+            page_count: None,
+            cover_url: None,
+            rating: None,
+            physical_format: None,
+            confidence: 0.95,
+        }],
+        search_results: vec![],
+    });
+
+    let (service, pool) = setup_with_provider(&tmp, provider).await;
+    let (book_id, pre_trust_outcome) = resolve_to_outcome(
+        &service,
+        &pool,
+        "Enriched Book",
+        "9780000000001",
+        ProviderMetadata {
+            provider_name: "test_provider".into(),
+            title: Some("Enriched Book".into()),
+            subtitle: None,
+            authors: vec![ProviderAuthor {
+                name: "Author A".into(),
+                role: Some("author".into()),
+            }],
+            description: Some("New description.".into()),
+            language: Some("en".into()),
+            publisher: None,
+            publication_year: None,
+            identifiers: vec![ProviderIdentifier {
+                identifier_type: IdentifierType::Isbn13,
+                value: "9780000000001".into(),
+            }],
+            subjects: vec![],
+            series: None,
+            page_count: None,
+            cover_url: None,
+            rating: None,
+            physical_format: None,
+            confidence: 0.95,
+        },
+    )
+    .await;
+    assert_eq!(
+        pre_trust_outcome,
+        BookResolutionOutcome::Enriched,
+        "precondition: auto-apply with new fields should produce Enriched"
+    );
+
+    // Trust
+    let trusted = service.trust_metadata(book_id).await.unwrap();
+    assert!(trusted, "trust should succeed");
+    let trusted_book = BookRepository::get_by_id(&pool, book_id).await.unwrap();
+    assert_eq!(
+        trusted_book.resolution_outcome,
+        Some(BookResolutionOutcome::Confirmed)
+    );
+
+    // Untrust — re-evaluate semantics: outcome cleared, status recomputed
+    let untrusted_book = service.untrust_metadata(book_id).await.unwrap().unwrap();
+    assert_eq!(
+        untrusted_book.resolution_outcome, None,
+        "untrust should clear outcome to None; got {:?}",
+        untrusted_book.resolution_outcome
+    );
+    assert_eq!(
+        untrusted_book.metadata_status,
+        MetadataStatus::Identified,
+        "book with applied candidate should recompute to Identified"
+    );
+}
+
+/// Untrust re-evaluates: author-only book (no identifiers) recomputes to
+/// `NeedsReview` with `resolution_outcome = None`.
+#[tokio::test]
+async fn trust_untrust_recomputes_author_only_to_needs_review() {
+    let tmp = TempDir::new().unwrap();
+    let (service, pool) = setup_no_provider(&tmp).await;
+
+    let book = Book::new("Confirmed Book");
+    BookRepository::create(&pool, &book).await.unwrap();
+
+    let author = archivis_core::models::Author::new("Author B");
+    AuthorRepository::create(&pool, &author).await.unwrap();
+    BookRepository::add_author(&pool, book.id, author.id, "author", 0)
+        .await
+        .unwrap();
+
+    // Manually set outcome to Confirmed (simulating a prior trust or apply)
+    let mut confirmed_book = BookRepository::get_by_id(&pool, book.id).await.unwrap();
+    confirmed_book.resolution_outcome = Some(BookResolutionOutcome::Confirmed);
+    confirmed_book.metadata_status = MetadataStatus::Identified;
+    confirmed_book.resolution_state = archivis_core::models::ResolutionState::Done;
+    BookRepository::update(&pool, &confirmed_book)
+        .await
+        .unwrap();
+
+    // Trust
+    let trusted = service.trust_metadata(book.id).await.unwrap();
+    assert!(trusted, "trust should succeed");
+
+    // Untrust — re-evaluate: outcome cleared, status recomputed from data
+    let untrusted_book = service.untrust_metadata(book.id).await.unwrap().unwrap();
+    assert_eq!(
+        untrusted_book.resolution_outcome, None,
+        "untrust should clear outcome to None; got {:?}",
+        untrusted_book.resolution_outcome
+    );
+    assert_eq!(
+        untrusted_book.metadata_status,
+        MetadataStatus::NeedsReview,
+        "author-only book (no identifiers) should recompute to NeedsReview"
+    );
+}
+
+/// Untrust re-evaluates: empty book (no authors, no identifiers) recomputes
+/// to `Unidentified` with `resolution_outcome = None`.
+#[tokio::test]
+async fn trust_untrust_recomputes_empty_to_unidentified() {
+    let tmp = TempDir::new().unwrap();
+    let (service, pool) = setup_no_provider(&tmp).await;
+
+    let book = Book::new("Unmatched Book");
+    BookRepository::create(&pool, &book).await.unwrap();
+
+    // Set outcome to Unmatched (simulating a failed resolution)
+    let mut unmatched_book = BookRepository::get_by_id(&pool, book.id).await.unwrap();
+    unmatched_book.resolution_outcome = Some(BookResolutionOutcome::Unmatched);
+    unmatched_book.metadata_status = MetadataStatus::Unidentified;
+    unmatched_book.resolution_state = archivis_core::models::ResolutionState::Done;
+    BookRepository::update(&pool, &unmatched_book)
+        .await
+        .unwrap();
+
+    // Trust
+    let trusted = service.trust_metadata(book.id).await.unwrap();
+    assert!(trusted, "trust should succeed");
+    let trusted_book = BookRepository::get_by_id(&pool, book.id).await.unwrap();
+    assert_eq!(
+        trusted_book.resolution_outcome,
+        Some(BookResolutionOutcome::Confirmed),
+        "trust sets outcome to Confirmed"
+    );
+
+    // Untrust — re-evaluate: outcome cleared, status recomputed
+    let untrusted_book = service.untrust_metadata(book.id).await.unwrap().unwrap();
+    assert_eq!(
+        untrusted_book.resolution_outcome, None,
+        "untrust should clear outcome to None; got {:?}",
+        untrusted_book.resolution_outcome
+    );
+    assert_eq!(
+        untrusted_book.metadata_status,
+        MetadataStatus::Unidentified,
+        "empty book (no authors, no identifiers) should recompute to Unidentified"
+    );
+}
+
+/// Untrust re-evaluates after trust during active review: book with applied
+/// candidate recomputes to `Identified` with `resolution_outcome = None`.
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn trust_during_review_untrust_recomputes_applied_candidate() {
+    let tmp = TempDir::new().unwrap();
+
+    // First resolve will auto-apply (strong ISBN), producing Enriched.
+    // Second resolve (manual refresh) enters review with baseline=Enriched.
+    let provider = Arc::new(FlexibleStubProvider {
+        isbn_results: vec![ProviderMetadata {
+            provider_name: "test_provider".into(),
+            title: Some("Review Book".into()),
+            subtitle: None,
+            authors: vec![ProviderAuthor {
+                name: "Author C".into(),
+                role: Some("author".into()),
+            }],
+            description: Some("Description.".into()),
+            language: None,
+            publisher: None,
+            publication_year: None,
+            identifiers: vec![ProviderIdentifier {
+                identifier_type: IdentifierType::Isbn13,
+                value: "9780000000004".into(),
+            }],
+            subjects: vec![],
+            series: None,
+            page_count: None,
+            cover_url: None,
+            rating: None,
+            physical_format: None,
+            confidence: 0.95,
+        }],
+        search_results: vec![],
+    });
+
+    let (service, pool) = setup_with_provider(&tmp, provider).await;
+
+    // Initial resolve → auto-apply → Enriched
+    let book = Book::new("Review Book");
+    BookRepository::create(&pool, &book).await.unwrap();
+
+    let author = archivis_core::models::Author::new("Author C");
+    AuthorRepository::create(&pool, &author).await.unwrap();
+    BookRepository::add_author(&pool, book.id, author.id, "author", 0)
+        .await
+        .unwrap();
+
+    let isbn = Identifier::new(
+        book.id,
+        IdentifierType::Isbn13,
+        "9780000000004",
+        MetadataSource::Embedded,
+        0.9,
+    );
+    IdentifierRepository::create(&pool, &isbn).await.unwrap();
+
+    let outcome1 = service.resolve_book(book.id, false).await.unwrap();
+    assert!(outcome1.auto_applied, "precondition: should auto-apply");
+
+    let post_resolve = BookRepository::get_by_id(&pool, book.id).await.unwrap();
+    assert_eq!(
+        post_resolve.resolution_outcome,
+        Some(BookResolutionOutcome::Enriched),
+        "precondition: should be Enriched after auto-apply with new fields"
+    );
+
+    // Manual refresh → enters review (baseline = Enriched, current = Ambiguous/Disputed)
+    let _outcome2 = service.resolve_book(book.id, true).await.unwrap();
+    let review_book = BookRepository::get_by_id(&pool, book.id).await.unwrap();
+    assert!(
+        review_book.review_baseline_resolution_outcome.is_some(),
+        "precondition: should have baseline outcome during review"
+    );
+    assert_eq!(
+        review_book.review_baseline_resolution_outcome,
+        Some(BookResolutionOutcome::Enriched),
+        "precondition: baseline should be Enriched"
+    );
+
+    // Trust during review
+    let trusted = service.trust_metadata(book.id).await.unwrap();
+    assert!(trusted, "trust should succeed during review");
+
+    // Untrust — re-evaluate: outcome cleared, status recomputed from data
+    let untrusted_book = service.untrust_metadata(book.id).await.unwrap().unwrap();
+    assert_eq!(
+        untrusted_book.resolution_outcome, None,
+        "untrust should clear outcome to None; got {:?}",
+        untrusted_book.resolution_outcome
+    );
+    assert_eq!(
+        untrusted_book.metadata_status,
+        MetadataStatus::Identified,
+        "book with applied candidate should recompute to Identified"
+    );
+}
+
+/// Untrust re-evaluates after trust during active review: book with authors
+/// and identifiers (no applied candidate) recomputes to `Identified` with
+/// `resolution_outcome = None`.
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn trust_during_review_untrust_recomputes_with_identifiers() {
+    let tmp = TempDir::new().unwrap();
+
+    let provider = Arc::new(FlexibleStubProvider {
+        isbn_results: vec![ProviderMetadata {
+            provider_name: "test_provider".into(),
+            title: Some("Different Title".into()),
+            subtitle: None,
+            authors: vec![ProviderAuthor {
+                name: "Author D".into(),
+                role: Some("author".into()),
+            }],
+            description: None,
+            language: None,
+            publisher: None,
+            publication_year: None,
+            identifiers: vec![ProviderIdentifier {
+                identifier_type: IdentifierType::Isbn13,
+                value: "9780000000005".into(),
+            }],
+            subjects: vec![],
+            series: None,
+            page_count: None,
+            cover_url: None,
+            rating: None,
+            physical_format: None,
+            confidence: 0.95,
+        }],
+        search_results: vec![],
+    });
+
+    let (service, pool) = setup_with_provider(&tmp, provider).await;
+
+    // Create book with protected title. Set outcome to Confirmed directly
+    // (simulating a prior user confirmation), NOT via trust_metadata, so
+    // `metadata_user_trusted` stays false.
+    let mut book = Book::new("My Title");
+    book.metadata_provenance.title = Some(FieldProvenance {
+        origin: MetadataSource::User,
+        protected: true,
+    });
+    book.resolution_outcome = Some(BookResolutionOutcome::Confirmed);
+    book.metadata_status = MetadataStatus::Identified;
+    book.resolution_state = archivis_core::models::ResolutionState::Done;
+    BookRepository::create(&pool, &book).await.unwrap();
+
+    let author = archivis_core::models::Author::new("Author D");
+    AuthorRepository::create(&pool, &author).await.unwrap();
+    BookRepository::add_author(&pool, book.id, author.id, "author", 0)
+        .await
+        .unwrap();
+
+    let isbn = Identifier::new(
+        book.id,
+        IdentifierType::Isbn13,
+        "9780000000005",
+        MetadataSource::Embedded,
+        0.9,
+    );
+    IdentifierRepository::create(&pool, &isbn).await.unwrap();
+
+    // Re-resolve (manual refresh) → enters review with baseline = Confirmed
+    let outcome = service.resolve_book(book.id, true).await.unwrap();
+    assert!(
+        !outcome.auto_applied,
+        "protected title conflict → no auto-apply"
+    );
+
+    let review_book = BookRepository::get_by_id(&pool, book.id).await.unwrap();
+    assert_eq!(
+        review_book.review_baseline_resolution_outcome,
+        Some(BookResolutionOutcome::Confirmed),
+        "baseline should capture the pre-review Confirmed outcome"
+    );
+    // Current outcome is now the transient review value (Disputed or Ambiguous)
+    assert!(
+        matches!(
+            review_book.resolution_outcome,
+            Some(BookResolutionOutcome::Disputed | BookResolutionOutcome::Ambiguous)
+        ),
+        "precondition: review sets transient review outcome; got {:?}",
+        review_book.resolution_outcome
+    );
+
+    // Trust during review (metadata_user_trusted = false → guard fires)
+    let trusted = service.trust_metadata(book.id).await.unwrap();
+    assert!(trusted);
+
+    // Untrust — re-evaluate: outcome cleared, status recomputed from data
+    let final_book = service.untrust_metadata(book.id).await.unwrap().unwrap();
+    assert_eq!(
+        final_book.resolution_outcome, None,
+        "untrust should clear outcome to None; got {:?}",
+        final_book.resolution_outcome
+    );
+    assert_eq!(
+        final_book.metadata_status,
+        MetadataStatus::Identified,
+        "book with authors + identifiers should recompute to Identified"
+    );
+}
+
+/// Regression: trust must supersede the active review run so
+/// `latest_reviewable_run_id` no longer returns stale state.
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn trust_supersedes_active_review_run() {
+    let tmp = TempDir::new().unwrap();
+
+    let provider = Arc::new(FlexibleStubProvider {
+        isbn_results: vec![ProviderMetadata {
+            provider_name: "test_provider".into(),
+            title: Some("Supersede Book".into()),
+            subtitle: None,
+            authors: vec![ProviderAuthor {
+                name: "Author E".into(),
+                role: Some("author".into()),
+            }],
+            description: Some("Desc.".into()),
+            language: None,
+            publisher: None,
+            publication_year: None,
+            identifiers: vec![ProviderIdentifier {
+                identifier_type: IdentifierType::Isbn13,
+                value: "9780000000006".into(),
+            }],
+            subjects: vec![],
+            series: None,
+            page_count: None,
+            cover_url: None,
+            rating: None,
+            physical_format: None,
+            confidence: 0.95,
+        }],
+        search_results: vec![],
+    });
+
+    let (service, pool) = setup_with_provider(&tmp, provider).await;
+
+    let book = Book::new("Supersede Book");
+    BookRepository::create(&pool, &book).await.unwrap();
+
+    let author = archivis_core::models::Author::new("Author E");
+    AuthorRepository::create(&pool, &author).await.unwrap();
+    BookRepository::add_author(&pool, book.id, author.id, "author", 0)
+        .await
+        .unwrap();
+
+    let isbn = Identifier::new(
+        book.id,
+        IdentifierType::Isbn13,
+        "9780000000006",
+        MetadataSource::Embedded,
+        0.9,
+    );
+    IdentifierRepository::create(&pool, &isbn).await.unwrap();
+
+    // Initial resolve → auto-apply
+    let outcome1 = service.resolve_book(book.id, false).await.unwrap();
+    assert!(outcome1.auto_applied);
+
+    // Manual refresh → enters review, creates a new run
+    let _outcome2 = service.resolve_book(book.id, true).await.unwrap();
+
+    // Verify there's an active review run
+    let mut conn = pool.acquire().await.unwrap();
+    let review_run_id = CandidateRepository::latest_reviewable_run_id_conn(conn.as_mut(), book.id)
+        .await
+        .unwrap();
+    assert!(
+        review_run_id.is_some(),
+        "precondition: should have active review run before trust"
+    );
+    let run_id = review_run_id.unwrap();
+    drop(conn);
+
+    // Trust → should supersede the review run
+    let trusted = service.trust_metadata(book.id).await.unwrap();
+    assert!(trusted);
+
+    // Verify: review run is superseded
+    let run_after = ResolutionRunRepository::get_by_id(&pool, run_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        run_after.state,
+        archivis_core::models::ResolutionRunState::Superseded,
+        "review run should be superseded after trust; got {:?}",
+        run_after.state
+    );
+
+    // Verify: `latest_reviewable_run_id` no longer returns the run
+    let mut conn2 = pool.acquire().await.unwrap();
+    let stale_run = CandidateRepository::latest_reviewable_run_id_conn(conn2.as_mut(), book.id)
+        .await
+        .unwrap();
+    assert!(
+        stale_run.is_none(),
+        "latest_reviewable_run_id should return None after trust superseded the run"
+    );
+}
+
+/// Untrust after author removal while trusted reflects current data.
+///
+/// Book starts with author + identifier → Identified. Trust. Remove the
+/// author while trusted. Untrust. Verify outcome=None, status=NeedsReview
+/// (has identifier but no author).
+#[tokio::test]
+async fn untrust_after_author_removal_reflects_changed_snapshot() {
+    let tmp = TempDir::new().unwrap();
+    let (service, pool) = setup_no_provider(&tmp).await;
+
+    let book = Book::new("Author Removal Book");
+    BookRepository::create(&pool, &book).await.unwrap();
+
+    let author = archivis_core::models::Author::new("Removable Author");
+    AuthorRepository::create(&pool, &author).await.unwrap();
+    BookRepository::add_author(&pool, book.id, author.id, "author", 0)
+        .await
+        .unwrap();
+
+    let isbn = Identifier::new(
+        book.id,
+        IdentifierType::Isbn13,
+        "9780000000010",
+        MetadataSource::Embedded,
+        0.9,
+    );
+    IdentifierRepository::create(&pool, &isbn).await.unwrap();
+
+    // Set to Identified/Done (simulating prior resolution)
+    let mut setup_book = BookRepository::get_by_id(&pool, book.id).await.unwrap();
+    setup_book.metadata_status = MetadataStatus::Identified;
+    setup_book.resolution_outcome = Some(BookResolutionOutcome::Confirmed);
+    setup_book.resolution_state = archivis_core::models::ResolutionState::Done;
+    BookRepository::update(&pool, &setup_book).await.unwrap();
+
+    // Trust
+    let trusted = service.trust_metadata(book.id).await.unwrap();
+    assert!(trusted, "trust should succeed");
+
+    // Remove author while trusted
+    BookRepository::clear_authors(&pool, book.id).await.unwrap();
+
+    // Untrust — should reflect post-edit data (identifier only, no author)
+    let untrusted_book = service.untrust_metadata(book.id).await.unwrap().unwrap();
+    assert_eq!(
+        untrusted_book.resolution_outcome, None,
+        "untrust should clear outcome to None; got {:?}",
+        untrusted_book.resolution_outcome
+    );
+    assert_eq!(
+        untrusted_book.metadata_status,
+        MetadataStatus::NeedsReview,
+        "identifier-only book (author removed) should recompute to NeedsReview"
+    );
+}
+
+/// Regression test for the original bug path:
+/// `NeedsReview → reject all → trust → untrust` must not restore a stale
+/// outcome. Outcome is cleared to None, status recomputed from data.
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn untrust_original_bug_path_needs_review_with_identifiers() {
+    let tmp = TempDir::new().unwrap();
+
+    // Provider returns a candidate that will NOT auto-apply (no ISBN in result,
+    // only title match — below threshold for auto-apply without hard ID proof).
+    let provider = Arc::new(FlexibleStubProvider {
+        isbn_results: vec![],
+        search_results: vec![ProviderMetadata {
+            provider_name: "test_provider".into(),
+            title: Some("Bug Path Book".into()),
+            subtitle: None,
+            authors: vec![ProviderAuthor {
+                name: "Author F".into(),
+                role: Some("author".into()),
+            }],
+            description: None,
+            language: None,
+            publisher: None,
+            publication_year: None,
+            identifiers: vec![],
+            subjects: vec![],
+            series: None,
+            page_count: None,
+            cover_url: None,
+            rating: None,
+            physical_format: None,
+            confidence: 0.7,
+        }],
+    });
+
+    let (service, pool) = setup_with_provider(&tmp, provider).await;
+
+    let book = Book::new("Bug Path Book");
+    BookRepository::create(&pool, &book).await.unwrap();
+
+    let author = archivis_core::models::Author::new("Author F");
+    AuthorRepository::create(&pool, &author).await.unwrap();
+    BookRepository::add_author(&pool, book.id, author.id, "author", 0)
+        .await
+        .unwrap();
+
+    // Add a non-ISBN identifier (e.g., ASIN) — won't trigger ISBN lookup
+    let asin = Identifier::new(
+        book.id,
+        IdentifierType::Asin,
+        "B00TEST1234",
+        MetadataSource::Embedded,
+        0.9,
+    );
+    IdentifierRepository::create(&pool, &asin).await.unwrap();
+
+    // Resolve → enters review (candidate not auto-applied)
+    let outcome = service.resolve_book(book.id, false).await.unwrap();
+    assert!(
+        !outcome.auto_applied,
+        "precondition: should NOT auto-apply without strong ID proof"
+    );
+
+    let review_book = BookRepository::get_by_id(&pool, book.id).await.unwrap();
+    assert_eq!(
+        review_book.metadata_status,
+        MetadataStatus::NeedsReview,
+        "precondition: should be NeedsReview with pending candidates"
+    );
+
+    // Reject all candidates
+    let candidates = CandidateRepository::list_by_book(&pool, book.id)
+        .await
+        .unwrap();
+    for c in &candidates {
+        if c.status == CandidateStatus::Pending {
+            CandidateRepository::update_status(&pool, c.id, CandidateStatus::Rejected)
+                .await
+                .unwrap();
+        }
+    }
+
+    // Trust — sets Identified/Confirmed
+    let trusted = service.trust_metadata(book.id).await.unwrap();
+    assert!(trusted, "trust should succeed");
+
+    let trusted_book = BookRepository::get_by_id(&pool, book.id).await.unwrap();
+    assert_eq!(
+        trusted_book.resolution_outcome,
+        Some(BookResolutionOutcome::Confirmed)
+    );
+
+    // Untrust — the fix: outcome is cleared, status recomputed from data
+    let untrusted_book = service.untrust_metadata(book.id).await.unwrap().unwrap();
+    assert_eq!(
+        untrusted_book.resolution_outcome, None,
+        "untrust should clear outcome to None (not restore stale snapshot); got {:?}",
+        untrusted_book.resolution_outcome
+    );
+    // Book has authors + identifiers (ASIN) → `recompute_status` → Identified
+    assert_eq!(
+        untrusted_book.metadata_status,
+        MetadataStatus::Identified,
+        "book with authors + identifiers should recompute to Identified"
+    );
+}
+
+/// Locked trusted book: untrust keeps `resolution_state = Done`, book
+/// doesn't enter auto-resolution queue.
+#[tokio::test]
+async fn locked_trusted_book_untrust_stays_done() {
+    let tmp = TempDir::new().unwrap();
+    let (service, pool) = setup_no_provider(&tmp).await;
+
+    let book = Book::new("Locked Book");
+    BookRepository::create(&pool, &book).await.unwrap();
+
+    // Trust first
+    let trusted = service.trust_metadata(book.id).await.unwrap();
+    assert!(trusted);
+
+    // Set `metadata_locked = true`
+    let mut locked_book = BookRepository::get_by_id(&pool, book.id).await.unwrap();
+    locked_book.metadata_locked = true;
+    BookRepository::update(&pool, &locked_book).await.unwrap();
+
+    // Untrust
+    let untrusted_book = service.untrust_metadata(book.id).await.unwrap().unwrap();
+    assert_eq!(
+        untrusted_book.resolution_outcome, None,
+        "untrust should clear outcome to None"
+    );
+    assert_eq!(
+        untrusted_book.resolution_state,
+        archivis_core::models::ResolutionState::Done,
+        "locked book should stay Done (Pending→Done conversion), not enter resolution queue"
+    );
+    assert!(
+        untrusted_book.metadata_locked,
+        "metadata_locked should be preserved"
     );
 }

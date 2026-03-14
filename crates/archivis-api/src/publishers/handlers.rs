@@ -229,6 +229,7 @@ pub async fn list_publisher_books(
 
     let filter = BookFilter {
         publisher_id: Some(id.to_string()),
+        trusted: None,
         ..BookFilter::default()
     };
 

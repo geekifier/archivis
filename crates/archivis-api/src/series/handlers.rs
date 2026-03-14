@@ -219,6 +219,7 @@ pub async fn list_series_books(
 
     let filter = BookFilter {
         series_id: Some(id.to_string()),
+        trusted: None,
         ..BookFilter::default()
     };
 

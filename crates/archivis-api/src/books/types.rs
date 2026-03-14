@@ -78,6 +78,9 @@ pub struct UpdateBookRequest {
     #[schema(value_type = Option<String>)]
     #[allow(clippy::option_option)]
     pub publisher_id: Option<Option<Uuid>>,
+    /// Set or clear user-trusted metadata flag.
+    /// `true` = trust, `false` = untrust, absent = no change.
+    pub metadata_user_trusted: Option<bool>,
 }
 
 /// Request body for `POST /api/books/{id}/protect-fields` and `unprotect-fields`.
@@ -266,6 +269,7 @@ pub struct BookSummary {
     #[schema(value_type = Option<String>)]
     pub resolution_outcome: Option<ResolutionOutcome>,
     pub metadata_locked: bool,
+    pub metadata_user_trusted: bool,
     pub ingest_quality_score: f32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata_quality_score: Option<f32>,
@@ -308,6 +312,7 @@ pub struct BookDetail {
     #[schema(value_type = Option<String>)]
     pub resolution_outcome: Option<ResolutionOutcome>,
     pub metadata_locked: bool,
+    pub metadata_user_trusted: bool,
     pub metadata_provenance: MetadataProvenanceResponse,
     pub ingest_quality_score: f32,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -435,6 +440,7 @@ impl From<BookWithRelations> for BookDetail {
             resolution_state: bwr.book.resolution_state,
             resolution_outcome: bwr.book.resolution_outcome,
             metadata_locked: bwr.book.metadata_locked,
+            metadata_user_trusted: bwr.book.metadata_user_trusted,
             metadata_provenance: bwr.book.metadata_provenance.into(),
             ingest_quality_score: bwr.book.ingest_quality_score,
             metadata_quality_score: bwr.book.metadata_quality_score,
@@ -475,6 +481,7 @@ impl From<Book> for BookSummary {
             resolution_state: book.resolution_state,
             resolution_outcome: book.resolution_outcome,
             metadata_locked: book.metadata_locked,
+            metadata_user_trusted: book.metadata_user_trusted,
             ingest_quality_score: book.ingest_quality_score,
             metadata_quality_score: book.metadata_quality_score,
             has_cover: book.cover_path.is_some(),

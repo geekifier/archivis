@@ -1,7 +1,7 @@
 use archivis_core::errors::DbError;
 use archivis_core::models::{ResolutionOutcome, ResolutionRun, ResolutionRunState};
 use chrono::{DateTime, Utc};
-use sqlx::{FromRow, SqlitePool};
+use sqlx::{FromRow, SqliteConnection, SqlitePool};
 use uuid::Uuid;
 
 use crate::CandidateRepository;
@@ -275,6 +275,28 @@ impl ResolutionRunRepository {
         .map_err(|e| DbError::Query(e.to_string()))?;
 
         Ok(result.rows_affected())
+    }
+
+    /// Mark a single resolution run as `superseded`, setting `finished_at`
+    /// if it was not already set. Returns `Ok(true)` if the row was updated.
+    pub async fn supersede_run_conn(
+        conn: &mut SqliteConnection,
+        run_id: Uuid,
+    ) -> Result<bool, DbError> {
+        let finished_at = Utc::now().to_rfc3339();
+        let result = sqlx::query(
+            "UPDATE resolution_runs
+             SET state = 'superseded',
+                 finished_at = COALESCE(finished_at, ?)
+             WHERE id = ? AND state != 'superseded'",
+        )
+        .bind(&finished_at)
+        .bind(run_id.to_string())
+        .execute(&mut *conn)
+        .await
+        .map_err(|e| DbError::Query(e.to_string()))?;
+
+        Ok(result.rows_affected() > 0)
     }
 
     async fn set_book_current_run(

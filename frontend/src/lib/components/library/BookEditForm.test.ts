@@ -240,4 +240,95 @@ describe('BookEditForm', () => {
     expect(mockApi.books.setTags).not.toHaveBeenCalled();
     expect(mockApi.books.setSeries).not.toHaveBeenCalled();
   });
+
+  it('save error does not close form (onsave not called)', async () => {
+    mockApi.books.update.mockRejectedValue(new Error('Server error'));
+    const onsave = vi.fn<SaveFn>();
+
+    render(BookEditForm, {
+      props: { book, oncancel: vi.fn<CancelFn>(), onsave }
+    });
+
+    const titleInput = screen.getByLabelText('Title') as HTMLInputElement;
+    await user.clear(titleInput);
+    await user.type(titleInput, 'Changed Title');
+    await user.click(screen.getByText('Save'));
+
+    await vi.waitFor(() => {
+      expect(screen.getByText('Server error')).toBeInTheDocument();
+    });
+    // Form must stay open — onsave must NOT be called
+    expect(onsave).not.toHaveBeenCalled();
+  });
+
+  it('409 conflict keeps form open with conflict message', async () => {
+    // Import the mocked ApiError from the module
+    const { ApiError } = await import('$lib/api/index.js');
+    mockApi.books.update.mockRejectedValue(new ApiError(409, 'Conflict'));
+    const onsave = vi.fn<SaveFn>();
+
+    render(BookEditForm, {
+      props: { book, oncancel: vi.fn<CancelFn>(), onsave }
+    });
+
+    const titleInput = screen.getByLabelText('Title') as HTMLInputElement;
+    await user.clear(titleInput);
+    await user.type(titleInput, 'Changed Title');
+    await user.click(screen.getByText('Save'));
+
+    await vi.waitFor(() => {
+      expect(
+        screen.getByText('A metadata refresh started. Save again after it completes.')
+      ).toBeInTheDocument();
+    });
+    // Form must stay open
+    expect(onsave).not.toHaveBeenCalled();
+  });
+
+  it('trust toggle included in save payload when changed', async () => {
+    const updatedBook = createBookDetail({ ...book, metadata_user_trusted: true });
+    mockApi.books.update.mockResolvedValue(updatedBook);
+    const onsave = vi.fn<SaveFn>();
+
+    render(BookEditForm, {
+      props: { book, oncancel: vi.fn<CancelFn>(), onsave }
+    });
+
+    // Click the trust toggle button
+    const trustButton = screen.getByText('Trust this metadata');
+    await user.click(trustButton);
+    await user.click(screen.getByText('Save'));
+
+    await vi.waitFor(() => {
+      expect(mockApi.books.update).toHaveBeenCalledWith('book-1', {
+        metadata_user_trusted: true
+      });
+    });
+  });
+
+  it('trust toggle disabled when resolution_state is running', () => {
+    const runningBook = createBookDetail({
+      ...book,
+      resolution_state: 'running'
+    });
+    render(BookEditForm, {
+      props: { book: runningBook, oncancel: vi.fn<CancelFn>(), onsave: vi.fn<SaveFn>() }
+    });
+
+    const trustButton = screen.getByText('Trust this metadata');
+    expect(trustButton).toBeDisabled();
+  });
+
+  it('trust toggle enabled when resolution_state is done', () => {
+    const doneBook = createBookDetail({
+      ...book,
+      resolution_state: 'done'
+    });
+    render(BookEditForm, {
+      props: { book: doneBook, oncancel: vi.fn<CancelFn>(), onsave: vi.fn<SaveFn>() }
+    });
+
+    const trustButton = screen.getByText('Trust this metadata');
+    expect(trustButton).toBeEnabled();
+  });
 });

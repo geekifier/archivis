@@ -79,6 +79,8 @@ pub struct Book {
     #[serde(default)]
     pub metadata_locked: bool,
     #[serde(default)]
+    pub metadata_user_trusted: bool,
+    #[serde(default)]
     pub metadata_provenance: MetadataProvenance,
     /// Path to the primary cover image in storage, if available.
     pub cover_path: Option<String>,
@@ -122,6 +124,7 @@ impl Book {
             last_resolved_at: None,
             last_resolution_run_id: None,
             metadata_locked: false,
+            metadata_user_trusted: false,
             metadata_provenance: MetadataProvenance::default(),
             cover_path: None,
         }
@@ -202,6 +205,7 @@ mod tests {
         assert!(book.last_resolved_at.is_none());
         assert!(book.last_resolution_run_id.is_none());
         assert!(!book.metadata_locked);
+        assert!(!book.metadata_user_trusted);
         assert_eq!(book.metadata_provenance, MetadataProvenance::default());
         assert!(book.description.is_none());
         assert!(book.rating.is_none());

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO books (id, title, subtitle, sort_title, description, language, publication_year, publisher_id, added_at, updated_at, rating, page_count, metadata_status, review_baseline_metadata_status, review_baseline_resolution_outcome, ingest_quality_score, metadata_quality_score, resolution_state, resolution_outcome, resolution_requested_at, resolution_requested_reason, last_resolved_at, last_resolution_run_id, metadata_locked, metadata_user_trusted, metadata_provenance, cover_path, norm_title)\n             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 28
+    },
+    "nullable": []
+  },
+  "hash": "5ab85de2c34aa8d59e52749fb063a50543cd8bffa540f7fa8ba2103e0f51120e"
+}

@@ -118,79 +118,11 @@ impl CandidateRepository {
         pool: &SqlitePool,
         book_id: Uuid,
     ) -> Result<Vec<IdentificationCandidate>, DbError> {
-        if let Some(run_id) = Self::latest_reviewable_run_id(pool, book_id).await? {
-            let mut candidates = Self::list_current_reviewable_by_run(pool, run_id).await?;
-            let applied = Self::list_applied_from_other_runs(pool, book_id, run_id).await?;
-            candidates.extend(applied);
-            return Ok(candidates);
-        }
-
-        let rows = sqlx::query_as::<_, CandidateRow>(
-            "SELECT id, book_id, run_id, provider_name, score, metadata, match_reasons,
-                    disputes, tier, status, created_at, apply_changeset
-             FROM identification_candidates
-             WHERE book_id = ?
-               AND run_id IS NULL
-               AND status != 'superseded'
-             ORDER BY score DESC, created_at ASC",
-        )
-        .bind(book_id.to_string())
-        .fetch_all(pool)
-        .await
-        .map_err(|e| DbError::Query(e.to_string()))?;
-
-        let mut candidates: Vec<IdentificationCandidate> = rows
-            .into_iter()
-            .map(CandidateRow::into_candidate)
-            .collect::<Result<_, _>>()?;
-
-        // Also include applied candidates from any run
-        let applied_rows = sqlx::query_as::<_, CandidateRow>(
-            "SELECT id, book_id, run_id, provider_name, score, metadata, match_reasons,
-                    disputes, tier, status, created_at, apply_changeset
-             FROM identification_candidates
-             WHERE book_id = ?
-               AND run_id IS NOT NULL
-               AND status = 'applied'
-             ORDER BY created_at ASC",
-        )
-        .bind(book_id.to_string())
-        .fetch_all(pool)
-        .await
-        .map_err(|e| DbError::Query(e.to_string()))?;
-
-        for row in applied_rows {
-            let candidate = row.into_candidate()?;
-            if !candidates.iter().any(|c| c.id == candidate.id) {
-                candidates.push(candidate);
-            }
-        }
-
-        Ok(candidates)
-    }
-
-    /// List applied candidates from runs other than the given one.
-    async fn list_applied_from_other_runs(
-        pool: &SqlitePool,
-        book_id: Uuid,
-        exclude_run_id: Uuid,
-    ) -> Result<Vec<IdentificationCandidate>, DbError> {
-        let rows = sqlx::query_as::<_, CandidateRow>(
-            "SELECT id, book_id, run_id, provider_name, score, metadata, match_reasons,
-                    disputes, tier, status, created_at, apply_changeset
-             FROM identification_candidates
-             WHERE book_id = ?
-               AND status = 'applied'
-               AND (run_id IS NULL OR run_id != ?)
-             ORDER BY created_at ASC",
-        )
-        .bind(book_id.to_string())
-        .bind(exclude_run_id.to_string())
-        .fetch_all(pool)
-        .await
-        .map_err(|e| DbError::Query(e.to_string()))?;
-
-        rows.into_iter().map(CandidateRow::into_candidate).collect()
+        let mut conn = pool
+            .acquire()
+            .await
+            .map_err(|e| DbError::Connection(e.to_string()))?;
+        Self::list_current_reviewable_by_book_conn(&mut conn, book_id).await
     }
 
     /// List legacy runless candidates for a book.
@@ -239,28 +171,11 @@ impl CandidateRepository {
         id: Uuid,
         status: CandidateStatus,
     ) -> Result<(), DbError> {
-        let id_str = id.to_string();
-        let status_str = status.to_string();
-
-        let result = sqlx::query(
-            "UPDATE identification_candidates
-             SET status = ?
-             WHERE id = ?",
-        )
-        .bind(status_str)
-        .bind(id_str.clone())
-        .execute(pool)
-        .await
-        .map_err(|e| DbError::Query(e.to_string()))?;
-
-        if result.rows_affected() == 0 {
-            return Err(DbError::NotFound {
-                entity: "identification_candidate",
-                id: id_str,
-            });
-        }
-
-        Ok(())
+        let mut conn = pool
+            .acquire()
+            .await
+            .map_err(|e| DbError::Connection(e.to_string()))?;
+        Self::update_status_conn(&mut conn, id, status).await
     }
 
     pub async fn update_status_conn(
@@ -467,6 +382,17 @@ impl CandidateRepository {
         pool: &SqlitePool,
         book_id: Uuid,
     ) -> Result<Option<Uuid>, DbError> {
+        let mut conn = pool
+            .acquire()
+            .await
+            .map_err(|e| DbError::Connection(e.to_string()))?;
+        Self::latest_reviewable_run_id_conn(&mut conn, book_id).await
+    }
+
+    pub async fn latest_reviewable_run_id_conn(
+        conn: &mut SqliteConnection,
+        book_id: Uuid,
+    ) -> Result<Option<Uuid>, DbError> {
         let run_id = sqlx::query_scalar::<_, String>(
             "SELECT rr.id
              FROM resolution_runs rr
@@ -485,7 +411,7 @@ impl CandidateRepository {
              LIMIT 1",
         )
         .bind(book_id.to_string())
-        .fetch_optional(pool)
+        .fetch_optional(&mut *conn)
         .await
         .map_err(|e| DbError::Query(e.to_string()))?;
 
@@ -497,8 +423,8 @@ impl CandidateRepository {
             .transpose()
     }
 
-    async fn list_current_reviewable_by_run(
-        pool: &SqlitePool,
+    async fn list_current_reviewable_by_run_conn(
+        conn: &mut SqliteConnection,
         run_id: Uuid,
     ) -> Result<Vec<IdentificationCandidate>, DbError> {
         let rows = sqlx::query_as::<_, CandidateRow>(
@@ -510,7 +436,93 @@ impl CandidateRepository {
              ORDER BY score DESC, created_at ASC",
         )
         .bind(run_id.to_string())
-        .fetch_all(pool)
+        .fetch_all(&mut *conn)
+        .await
+        .map_err(|e| DbError::Query(e.to_string()))?;
+
+        rows.into_iter().map(CandidateRow::into_candidate).collect()
+    }
+
+    pub async fn list_current_reviewable_by_book_conn(
+        conn: &mut SqliteConnection,
+        book_id: Uuid,
+    ) -> Result<Vec<IdentificationCandidate>, DbError> {
+        if let Some(run_id) = Self::latest_reviewable_run_id_conn(&mut *conn, book_id).await? {
+            let mut candidates =
+                Self::list_current_reviewable_by_run_conn(&mut *conn, run_id).await?;
+            let applied =
+                Self::list_applied_from_other_runs_conn(&mut *conn, book_id, run_id).await?;
+            candidates.extend(applied);
+            return Ok(candidates);
+        }
+
+        let rows = sqlx::query_as::<_, CandidateRow>(
+            "SELECT id, book_id, run_id, provider_name, score, metadata, match_reasons,
+                    disputes, tier, status, created_at, apply_changeset
+             FROM identification_candidates
+             WHERE book_id = ?
+               AND run_id IS NULL
+               AND status != 'superseded'
+             ORDER BY score DESC, created_at ASC",
+        )
+        .bind(book_id.to_string())
+        .fetch_all(&mut *conn)
+        .await
+        .map_err(|e| DbError::Query(e.to_string()))?;
+
+        let mut candidates: Vec<IdentificationCandidate> = rows
+            .into_iter()
+            .map(CandidateRow::into_candidate)
+            .collect::<Result<_, _>>()?;
+
+        let applied_rows = sqlx::query_as::<_, CandidateRow>(
+            "SELECT id, book_id, run_id, provider_name, score, metadata, match_reasons,
+                    disputes, tier, status, created_at, apply_changeset
+             FROM identification_candidates
+             WHERE book_id = ?
+               AND run_id IS NOT NULL
+               AND status = 'applied'
+             ORDER BY created_at ASC",
+        )
+        .bind(book_id.to_string())
+        .fetch_all(&mut *conn)
+        .await
+        .map_err(|e| DbError::Query(e.to_string()))?;
+
+        for row in applied_rows {
+            let candidate = row.into_candidate()?;
+            if !candidates.iter().any(|c| c.id == candidate.id) {
+                candidates.push(candidate);
+            }
+        }
+
+        Ok(candidates)
+    }
+
+    pub async fn list_by_book_conn(
+        conn: &mut SqliteConnection,
+        book_id: Uuid,
+    ) -> Result<Vec<IdentificationCandidate>, DbError> {
+        Self::list_current_reviewable_by_book_conn(conn, book_id).await
+    }
+
+    async fn list_applied_from_other_runs_conn(
+        conn: &mut SqliteConnection,
+        book_id: Uuid,
+        exclude_run_id: Uuid,
+    ) -> Result<Vec<IdentificationCandidate>, DbError> {
+        let rows = sqlx::query_as::<_, CandidateRow>(
+            "SELECT id, book_id, run_id, provider_name, score, metadata, match_reasons,
+                    disputes, tier, status, created_at, apply_changeset
+             FROM identification_candidates
+             WHERE book_id = ?
+               AND status = 'applied'
+               AND (run_id IS NULL OR run_id != ?)
+             ORDER BY created_at ASC",
+        )
+        .bind(book_id.to_string())
+        .bind(exclude_run_id.to_string())
+        .fetch_all(&mut *conn)
         .await
         .map_err(|e| DbError::Query(e.to_string()))?;
 

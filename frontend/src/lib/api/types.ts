@@ -120,6 +120,7 @@ export interface BookSummary {
   resolution_state: ResolutionState;
   resolution_outcome: ResolutionOutcome | null;
   metadata_locked: boolean;
+  metadata_user_trusted: boolean;
   ingest_quality_score: number;
   metadata_quality_score: number | null;
   has_cover: boolean;
@@ -183,6 +184,7 @@ export interface BookDetail {
   resolution_state: ResolutionState;
   resolution_outcome: ResolutionOutcome | null;
   metadata_locked: boolean;
+  metadata_user_trusted: boolean;
   metadata_provenance?: MetadataProvenance;
   ingest_quality_score: number;
   metadata_quality_score: number | null;
@@ -241,6 +243,8 @@ export interface UpdateBookRequest {
   page_count?: number;
   /** Set to a UUID to assign a publisher, or null to clear. Omit to leave unchanged. */
   publisher_id?: string | null;
+  /** Set or clear user-trusted metadata flag. true = trust, false = untrust, omit = no change. */
+  metadata_user_trusted?: boolean;
 }
 
 export interface BookAuthorLink {

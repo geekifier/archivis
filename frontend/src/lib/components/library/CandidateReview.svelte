@@ -260,6 +260,32 @@
 
           <!-- Side-by-side comparison -->
           <div class="overflow-x-auto">
+            {#snippet scalarField(
+              candidateId: string,
+              fieldKey: CandidateFieldName,
+              label: string,
+              currentDisplay: string | number | null,
+              candidateDisplay: string | number | null,
+              fieldMatch: boolean,
+              showCheckbox: boolean,
+              isIncluded: boolean,
+              isWarned: boolean
+            )}
+              <tr class="{fieldMatch ? 'opacity-40' : showCheckbox && !isIncluded ? 'opacity-40' : ''} {isWarned ? 'bg-amber-50 dark:bg-amber-900/10' : ''}">
+                <td class="py-1.5 pr-1">
+                  {#if showCheckbox && !fieldMatch}
+                    <input type="checkbox" checked={isIncluded}
+                      onchange={() => toggleField(candidateId, fieldKey)}
+                      class="h-3.5 w-3.5 rounded border-border" />
+                  {/if}
+                </td>
+                <td class="py-1.5 pr-3 text-xs font-medium {isWarned ? 'text-amber-700 dark:text-amber-400' : 'text-muted-foreground'}">{label}</td>
+                <td class="py-1.5 pr-3 text-xs">{currentDisplay ?? '--'}</td>
+                <td class="py-1.5 text-xs {fieldMatch ? 'text-muted-foreground' : isWarned ? 'font-medium text-amber-700 dark:text-amber-400' : 'font-medium text-primary'}">
+                  {candidateDisplay ?? '--'}
+                </td>
+              </tr>
+            {/snippet}
             <table class="w-full text-sm">
               <thead>
                 <tr class="border-b border-border text-left text-xs text-muted-foreground">
@@ -272,48 +298,13 @@
               <tbody class="divide-y divide-border/50">
                 <!-- Title -->
                 {#if candidate.title != null}
-                  {@const titleMatch = !hasChange(candidate.title, book.title)}
-                  {@const titleIncluded = isFieldIncluded(candidate.id, 'title')}
-                  {@const titleWarned = warned.has('title')}
-                  <tr class="{titleMatch ? 'opacity-40' : !titleIncluded ? 'opacity-40' : ''} {titleWarned ? 'bg-amber-50 dark:bg-amber-900/10' : ''}">
-                    <td class="py-1.5 pr-1">
-                      {#if !titleMatch}
-                        <input
-                          type="checkbox"
-                          checked={titleIncluded}
-                          onchange={() => toggleField(candidate.id, 'title')}
-                          class="h-3.5 w-3.5 rounded border-border"
-                        />
-                      {/if}
-                    </td>
-                    <td class="py-1.5 pr-3 text-xs font-medium {titleWarned ? 'text-amber-700 dark:text-amber-400' : 'text-muted-foreground'}">Title</td>
-                    <td class="py-1.5 pr-3 text-xs">{book.title}</td>
-                    <td class="py-1.5 text-xs {titleMatch ? 'text-muted-foreground' : titleWarned ? 'font-medium text-amber-700 dark:text-amber-400' : 'font-medium text-primary'}">
-                      {candidate.title}
-                    </td>
-                  </tr>
+                  {@const m = !hasChange(candidate.title, book.title)}
+                  {@render scalarField(candidate.id, 'title', 'Title', book.title, candidate.title, m, true, isFieldIncluded(candidate.id, 'title'), warned.has('title'))}
                 {/if}
                 <!-- Subtitle -->
                 {#if candidate.subtitle != null}
-                  {@const subtitleMatch = !hasChange(candidate.subtitle ?? null, book.subtitle ?? null)}
-                  {@const subtitleIncluded = isFieldIncluded(candidate.id, 'subtitle')}
-                  <tr class={subtitleMatch ? 'opacity-40' : candidate.subtitle != null && !subtitleIncluded ? 'opacity-40' : ''}>
-                    <td class="py-1.5 pr-1">
-                      {#if candidate.subtitle != null && !subtitleMatch}
-                        <input
-                          type="checkbox"
-                          checked={subtitleIncluded}
-                          onchange={() => toggleField(candidate.id, 'subtitle')}
-                          class="h-3.5 w-3.5 rounded border-border"
-                        />
-                      {/if}
-                    </td>
-                    <td class="py-1.5 pr-3 text-xs font-medium text-muted-foreground">Subtitle</td>
-                    <td class="py-1.5 pr-3 text-xs">{book.subtitle ?? '--'}</td>
-                    <td class="py-1.5 text-xs {subtitleMatch ? 'text-muted-foreground' : 'font-medium text-primary'}">
-                      {candidate.subtitle ?? '--'}
-                    </td>
-                  </tr>
+                  {@const m = !hasChange(candidate.subtitle ?? null, book.subtitle ?? null)}
+                  {@render scalarField(candidate.id, 'subtitle', 'Subtitle', book.subtitle, candidate.subtitle, m, candidate.subtitle != null, isFieldIncluded(candidate.id, 'subtitle'), false)}
                 {/if}
                 <!-- Authors (split by role) -->
                 {#if candidate.authors.length > 0}
@@ -373,93 +364,23 @@
                 {/if}
                 <!-- Publisher -->
                 {#if candidate.publisher || book.publisher_name}
-                  {@const publisherMatch = !hasChange(candidate.publisher, book.publisher_name)}
-                  {@const publisherIncluded = isFieldIncluded(candidate.id, 'publisher')}
-                  <tr class={publisherMatch ? 'opacity-40' : candidate.publisher && !publisherIncluded ? 'opacity-40' : ''}>
-                    <td class="py-1.5 pr-1">
-                      {#if candidate.publisher && !publisherMatch}
-                        <input
-                          type="checkbox"
-                          checked={publisherIncluded}
-                          onchange={() => toggleField(candidate.id, 'publisher')}
-                          class="h-3.5 w-3.5 rounded border-border"
-                        />
-                      {/if}
-                    </td>
-                    <td class="py-1.5 pr-3 text-xs font-medium text-muted-foreground">Publisher</td>
-                    <td class="py-1.5 pr-3 text-xs">{book.publisher_name ?? '--'}</td>
-                    <td class="py-1.5 text-xs {publisherMatch ? 'text-muted-foreground' : 'font-medium text-primary'}">
-                      {candidate.publisher ?? '--'}
-                    </td>
-                  </tr>
+                  {@const m = !hasChange(candidate.publisher, book.publisher_name)}
+                  {@render scalarField(candidate.id, 'publisher', 'Publisher', book.publisher_name ?? null, candidate.publisher ?? null, m, !!candidate.publisher, isFieldIncluded(candidate.id, 'publisher'), false)}
                 {/if}
-                <!-- Publication Date -->
+                <!-- Publication Year -->
                 {#if candidate.publication_year != null || book.publication_year != null}
-                  {@const pubYearMatch = candidate.publication_year === book.publication_year}
-                  {@const pubYearIncluded = isFieldIncluded(candidate.id, 'publication_year')}
-                  <tr class={pubYearMatch ? 'opacity-40' : candidate.publication_year != null && !pubYearIncluded ? 'opacity-40' : ''}>
-                    <td class="py-1.5 pr-1">
-                      {#if candidate.publication_year != null && !pubYearMatch}
-                        <input
-                          type="checkbox"
-                          checked={pubYearIncluded}
-                          onchange={() => toggleField(candidate.id, 'publication_year')}
-                          class="h-3.5 w-3.5 rounded border-border"
-                        />
-                      {/if}
-                    </td>
-                    <td class="py-1.5 pr-3 text-xs font-medium text-muted-foreground">Published</td>
-                    <td class="py-1.5 pr-3 text-xs">{book.publication_year ?? '--'}</td>
-                    <td class="py-1.5 text-xs {pubYearMatch ? 'text-muted-foreground' : 'font-medium text-primary'}">
-                      {candidate.publication_year ?? '--'}
-                    </td>
-                  </tr>
+                  {@const m = candidate.publication_year === book.publication_year}
+                  {@render scalarField(candidate.id, 'publication_year', 'Published', book.publication_year ?? null, candidate.publication_year ?? null, m, candidate.publication_year != null, isFieldIncluded(candidate.id, 'publication_year'), false)}
                 {/if}
                 <!-- Language -->
                 {#if candidate.language != null || book.language != null}
-                  {@const bookLangDisplay = book.language_label ?? book.language ?? '--'}
-                  {@const candLangDisplay = candidate.language_label ?? candidate.language ?? '--'}
-                  {@const langMatch = (candidate.language ?? null) === (book.language ?? null)}
-                  {@const langIncluded = isFieldIncluded(candidate.id, 'language')}
-                  <tr class={langMatch ? 'opacity-40' : candidate.language != null && !langIncluded ? 'opacity-40' : ''}>
-                    <td class="py-1.5 pr-1">
-                      {#if candidate.language != null && !langMatch}
-                        <input
-                          type="checkbox"
-                          checked={langIncluded}
-                          onchange={() => toggleField(candidate.id, 'language')}
-                          class="h-3.5 w-3.5 rounded border-border"
-                        />
-                      {/if}
-                    </td>
-                    <td class="py-1.5 pr-3 text-xs font-medium text-muted-foreground">Language</td>
-                    <td class="py-1.5 pr-3 text-xs">{bookLangDisplay}</td>
-                    <td class="py-1.5 text-xs {langMatch ? 'text-muted-foreground' : 'font-medium text-primary'}">
-                      {candLangDisplay}
-                    </td>
-                  </tr>
+                  {@const m = (candidate.language ?? null) === (book.language ?? null)}
+                  {@render scalarField(candidate.id, 'language', 'Language', book.language_label ?? book.language ?? null, candidate.language_label ?? candidate.language ?? null, m, candidate.language != null, isFieldIncluded(candidate.id, 'language'), false)}
                 {/if}
                 <!-- Page Count -->
                 {#if candidate.page_count != null || book.page_count != null}
-                  {@const pageMatch = candidate.page_count === book.page_count}
-                  {@const pageIncluded = isFieldIncluded(candidate.id, 'page_count')}
-                  <tr class={pageMatch ? 'opacity-40' : candidate.page_count != null && !pageIncluded ? 'opacity-40' : ''}>
-                    <td class="py-1.5 pr-1">
-                      {#if candidate.page_count != null && !pageMatch}
-                        <input
-                          type="checkbox"
-                          checked={pageIncluded}
-                          onchange={() => toggleField(candidate.id, 'page_count')}
-                          class="h-3.5 w-3.5 rounded border-border"
-                        />
-                      {/if}
-                    </td>
-                    <td class="py-1.5 pr-3 text-xs font-medium text-muted-foreground">Pages</td>
-                    <td class="py-1.5 pr-3 text-xs">{book.page_count ?? '--'}</td>
-                    <td class="py-1.5 text-xs {pageMatch ? 'text-muted-foreground' : 'font-medium text-primary'}">
-                      {candidate.page_count ?? '--'}
-                    </td>
-                  </tr>
+                  {@const m = candidate.page_count === book.page_count}
+                  {@render scalarField(candidate.id, 'page_count', 'Pages', book.page_count ?? null, candidate.page_count ?? null, m, candidate.page_count != null, isFieldIncluded(candidate.id, 'page_count'), false)}
                 {/if}
                 <!-- ISBN (additive — backend merges, never replaces) -->
                 {#if candidate.isbn}

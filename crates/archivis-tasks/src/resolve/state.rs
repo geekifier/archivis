@@ -1,13 +1,18 @@
 use archivis_core::errors::TaskError;
-use archivis_core::models::{Book, CandidateStatus, IdentificationCandidate, MetadataStatus};
+use archivis_core::models::{
+    Book, CandidateStatus, IdentificationCandidate, MetadataStatus, ResolutionOutcome,
+};
 use archivis_db::{BookRepository, CandidateRepository, DbPool};
+use sqlx::SqliteConnection;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct BookSnapshot {
     pub has_authors: bool,
     pub has_identifiers: bool,
     pub has_applied_candidate: bool,
+    pub metadata_user_trusted: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -48,6 +53,10 @@ impl StatusContext {
 pub fn recompute_status(book: &BookSnapshot, ctx: &StatusContext) -> MetadataStatus {
     if ctx.has_ambiguous_candidates || ctx.has_disputed_candidates {
         return MetadataStatus::NeedsReview;
+    }
+
+    if book.metadata_user_trusted {
+        return MetadataStatus::Identified;
     }
 
     if book.has_applied_candidate || (book.has_authors && book.has_identifiers) {
@@ -102,6 +111,7 @@ pub async fn persist_recomputed_status(pool: &DbPool, book_id: Uuid) -> Result<B
         has_authors: !relations.authors.is_empty(),
         has_identifiers: !relations.identifiers.is_empty(),
         has_applied_candidate: has_applied,
+        metadata_user_trusted: relations.book.metadata_user_trusted,
     };
 
     let old_status = relations.book.metadata_status;
@@ -109,11 +119,76 @@ pub async fn persist_recomputed_status(pool: &DbPool, book_id: Uuid) -> Result<B
     let had_baseline = relations.book.review_baseline_metadata_status.is_some();
     update_status_with_floor(&mut relations.book, &snapshot, &ctx);
 
+    // Fix stale review-specific outcomes for trusted books.
+    // `Ambiguous`/`Disputed` imply active review context (pending candidates,
+    // baselines). When `invalidate_resolution_for_user_edit` supersedes a review
+    // (clears baselines before recompute), these outcomes become stale.
+    if snapshot.metadata_user_trusted
+        && !ctx.has_ambiguous_candidates
+        && !ctx.has_disputed_candidates
+        && relations.book.review_baseline_metadata_status.is_none()
+        && matches!(
+            relations.book.resolution_outcome,
+            Some(ResolutionOutcome::Ambiguous | ResolutionOutcome::Disputed)
+        )
+    {
+        relations.book.resolution_outcome = Some(ResolutionOutcome::Confirmed);
+    }
+
     if relations.book.metadata_status != old_status
         || relations.book.resolution_outcome != old_outcome
         || (had_baseline && relations.book.review_baseline_metadata_status.is_none())
     {
         BookRepository::update(pool, &relations.book)
+            .await
+            .map_err(|e| TaskError::Failed(format!("failed to update book status: {e}")))?;
+    }
+
+    Ok(relations.book)
+}
+
+pub async fn persist_recomputed_status_conn(
+    conn: &mut SqliteConnection,
+    book_id: Uuid,
+) -> Result<Book, TaskError> {
+    let mut relations = BookRepository::get_with_relations_conn(&mut *conn, book_id)
+        .await
+        .map_err(|e| TaskError::Failed(format!("failed to load book relations: {e}")))?;
+    let candidates = CandidateRepository::list_by_book_conn(&mut *conn, book_id)
+        .await
+        .map_err(|e| TaskError::Failed(format!("failed to load candidates: {e}")))?;
+
+    let (ctx, has_applied) = StatusContext::from_candidates(&candidates);
+    let snapshot = BookSnapshot {
+        has_authors: !relations.authors.is_empty(),
+        has_identifiers: !relations.identifiers.is_empty(),
+        has_applied_candidate: has_applied,
+        metadata_user_trusted: relations.book.metadata_user_trusted,
+    };
+
+    let old_status = relations.book.metadata_status;
+    let old_outcome = relations.book.resolution_outcome;
+    let had_baseline = relations.book.review_baseline_metadata_status.is_some();
+    update_status_with_floor(&mut relations.book, &snapshot, &ctx);
+
+    // Fix stale review-specific outcomes for trusted books.
+    if snapshot.metadata_user_trusted
+        && !ctx.has_ambiguous_candidates
+        && !ctx.has_disputed_candidates
+        && relations.book.review_baseline_metadata_status.is_none()
+        && matches!(
+            relations.book.resolution_outcome,
+            Some(ResolutionOutcome::Ambiguous | ResolutionOutcome::Disputed)
+        )
+    {
+        relations.book.resolution_outcome = Some(ResolutionOutcome::Confirmed);
+    }
+
+    if relations.book.metadata_status != old_status
+        || relations.book.resolution_outcome != old_outcome
+        || (had_baseline && relations.book.review_baseline_metadata_status.is_none())
+    {
+        BookRepository::update_conn(&mut *conn, &relations.book)
             .await
             .map_err(|e| TaskError::Failed(format!("failed to update book status: {e}")))?;
     }
@@ -132,6 +207,7 @@ mod tests {
             has_authors: true,
             has_identifiers: true,
             has_applied_candidate: true,
+            ..BookSnapshot::default()
         };
         let ctx = StatusContext {
             has_ambiguous_candidates: true,
@@ -150,6 +226,7 @@ mod tests {
             has_authors: false,
             has_identifiers: false,
             has_applied_candidate: true,
+            ..BookSnapshot::default()
         };
 
         assert_eq!(
@@ -164,6 +241,7 @@ mod tests {
             has_authors: true,
             has_identifiers: false,
             has_applied_candidate: false,
+            ..BookSnapshot::default()
         };
 
         assert_eq!(
@@ -178,6 +256,77 @@ mod tests {
             recompute_status(&BookSnapshot::default(), &StatusContext::default()),
             MetadataStatus::Unidentified
         );
+    }
+
+    #[test]
+    fn trusted_book_without_identifiers_is_identified() {
+        let snapshot = BookSnapshot {
+            has_authors: false,
+            has_identifiers: false,
+            has_applied_candidate: false,
+            metadata_user_trusted: true,
+        };
+        assert_eq!(
+            recompute_status(&snapshot, &StatusContext::default()),
+            MetadataStatus::Identified
+        );
+    }
+
+    #[test]
+    fn trusted_book_with_pending_candidates_is_needs_review() {
+        let snapshot = BookSnapshot {
+            has_authors: false,
+            has_identifiers: false,
+            has_applied_candidate: false,
+            metadata_user_trusted: true,
+        };
+        let ctx = StatusContext {
+            has_ambiguous_candidates: true,
+            has_disputed_candidates: false,
+        };
+        assert_eq!(
+            recompute_status(&snapshot, &ctx),
+            MetadataStatus::NeedsReview
+        );
+    }
+
+    #[test]
+    fn untrusted_book_falls_through_normally() {
+        let snapshot = BookSnapshot {
+            has_authors: true,
+            has_identifiers: false,
+            has_applied_candidate: false,
+            metadata_user_trusted: false,
+        };
+        assert_eq!(
+            recompute_status(&snapshot, &StatusContext::default()),
+            MetadataStatus::NeedsReview
+        );
+    }
+
+    #[test]
+    fn trusted_book_review_end_restores_identified() {
+        let mut book = Book::new("Test");
+        book.metadata_user_trusted = true;
+        book.metadata_status = MetadataStatus::NeedsReview;
+        book.review_baseline_metadata_status = Some(MetadataStatus::Identified);
+        book.review_baseline_resolution_outcome = Some(ResolutionOutcome::Confirmed);
+        book.resolution_outcome = Some(ResolutionOutcome::Ambiguous);
+
+        let snapshot = BookSnapshot {
+            has_authors: false,
+            has_identifiers: false,
+            has_applied_candidate: false,
+            metadata_user_trusted: true,
+        };
+        let ctx = StatusContext::default(); // no pending candidates
+
+        update_status_with_floor(&mut book, &snapshot, &ctx);
+
+        assert_eq!(book.metadata_status, MetadataStatus::Identified);
+        assert_eq!(book.resolution_outcome, Some(ResolutionOutcome::Confirmed));
+        assert!(book.review_baseline_metadata_status.is_none());
+        assert!(book.review_baseline_resolution_outcome.is_none());
     }
 
     // ── apply_review_floor ─────────────────────────────────────────
@@ -239,6 +388,7 @@ mod tests {
             has_authors: true,
             has_identifiers: true,
             has_applied_candidate: true,
+            ..BookSnapshot::default()
         };
         let ctx = StatusContext::default(); // no pending candidates
 
@@ -265,6 +415,7 @@ mod tests {
             has_authors: true,
             has_identifiers: true,
             has_applied_candidate: false,
+            ..BookSnapshot::default()
         };
         let ctx = StatusContext::default(); // no pending candidates — review ended
 
@@ -295,6 +446,7 @@ mod tests {
             has_authors: true,
             has_identifiers: true,
             has_applied_candidate: true,
+            ..BookSnapshot::default()
         };
         let ctx = StatusContext::default();
 
@@ -318,6 +470,7 @@ mod tests {
             has_authors: true,
             has_identifiers: true,
             has_applied_candidate: true,
+            ..BookSnapshot::default()
         };
         let ctx = StatusContext {
             has_ambiguous_candidates: true,
@@ -354,5 +507,87 @@ mod tests {
         assert!(book.resolution_outcome.is_none());
         assert!(book.review_baseline_metadata_status.is_none());
         assert!(book.review_baseline_resolution_outcome.is_none());
+    }
+
+    #[test]
+    fn trusted_book_stale_ambiguous_outcome_corrected_to_confirmed() {
+        // Scenario from Issue 5: trusted book with stale `Ambiguous` outcome
+        // after `invalidate_resolution_for_user_edit` cleared baselines and
+        // superseded candidates.
+        let mut book = Book::new("Test");
+        book.metadata_user_trusted = true;
+        book.metadata_status = MetadataStatus::NeedsReview;
+        book.resolution_outcome = Some(ResolutionOutcome::Ambiguous);
+        // Baselines already cleared by `invalidate_resolution_for_user_edit`
+        book.review_baseline_metadata_status = None;
+        book.review_baseline_resolution_outcome = None;
+
+        let snapshot = BookSnapshot {
+            metadata_user_trusted: true,
+            ..BookSnapshot::default()
+        };
+        let ctx = StatusContext::default(); // no pending candidates (superseded)
+
+        update_status_with_floor(&mut book, &snapshot, &ctx);
+
+        // The stale outcome guard (in `persist_recomputed_status`) would fire here.
+        // Simulate the same guard inline for the unit test.
+        if snapshot.metadata_user_trusted
+            && !ctx.has_ambiguous_candidates
+            && !ctx.has_disputed_candidates
+            && book.review_baseline_metadata_status.is_none()
+            && matches!(
+                book.resolution_outcome,
+                Some(ResolutionOutcome::Ambiguous | ResolutionOutcome::Disputed)
+            )
+        {
+            book.resolution_outcome = Some(ResolutionOutcome::Confirmed);
+        }
+
+        assert_eq!(book.metadata_status, MetadataStatus::Identified);
+        assert_eq!(
+            book.resolution_outcome,
+            Some(ResolutionOutcome::Confirmed),
+            "stale Ambiguous must be corrected to Confirmed for trusted book"
+        );
+    }
+
+    #[test]
+    fn trusted_book_enriched_outcome_not_overwritten() {
+        // `Enriched` is a valid non-review outcome — the guard must not touch it.
+        let mut book = Book::new("Test");
+        book.metadata_user_trusted = true;
+        book.metadata_status = MetadataStatus::Identified;
+        book.resolution_outcome = Some(ResolutionOutcome::Enriched);
+        book.review_baseline_metadata_status = None;
+        book.review_baseline_resolution_outcome = None;
+
+        let snapshot = BookSnapshot {
+            metadata_user_trusted: true,
+            has_applied_candidate: true,
+            ..BookSnapshot::default()
+        };
+        let ctx = StatusContext::default();
+
+        update_status_with_floor(&mut book, &snapshot, &ctx);
+
+        // Apply the same guard
+        if snapshot.metadata_user_trusted
+            && !ctx.has_ambiguous_candidates
+            && !ctx.has_disputed_candidates
+            && book.review_baseline_metadata_status.is_none()
+            && matches!(
+                book.resolution_outcome,
+                Some(ResolutionOutcome::Ambiguous | ResolutionOutcome::Disputed)
+            )
+        {
+            book.resolution_outcome = Some(ResolutionOutcome::Confirmed);
+        }
+
+        assert_eq!(
+            book.resolution_outcome,
+            Some(ResolutionOutcome::Enriched),
+            "Enriched must NOT be downgraded to Confirmed"
+        );
     }
 }

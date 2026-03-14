@@ -33,6 +33,10 @@ pub enum ApiError {
     #[error("internal server error")]
     Internal(String),
 
+    /// The request conflicts with the current state of the resource.
+    #[error("conflict: {0}")]
+    Conflict(String),
+
     /// A required service is not available (e.g. watcher disabled).
     #[error("service unavailable: {0}")]
     ServiceUnavailable(String),
@@ -45,6 +49,7 @@ impl IntoResponse for ApiError {
             Self::NotFound(msg) => (StatusCode::NOT_FOUND, msg.clone()),
             Self::Unauthorized => (StatusCode::UNAUTHORIZED, self.to_string()),
             Self::Forbidden => (StatusCode::FORBIDDEN, self.to_string()),
+            Self::Conflict(msg) => (StatusCode::CONFLICT, msg.clone()),
             Self::Internal(msg) => {
                 tracing::error!(error = %msg, "internal server error");
                 (
@@ -237,6 +242,15 @@ mod tests {
         let err = ApiError::from(AuthError::UserExists("admin".into()));
         let (status, _) = response_status_and_body(err).await;
         assert_eq!(status, StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn conflict_returns_409() {
+        let (status, body) =
+            response_status_and_body(ApiError::Conflict("resource is busy".into())).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(body["error"]["status"], 409);
+        assert_eq!(body["error"]["message"], "resource is busy");
     }
 
     #[tokio::test]

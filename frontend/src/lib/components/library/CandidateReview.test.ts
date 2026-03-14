@@ -34,7 +34,8 @@ const { mockApi } = vi.hoisted(() => {
       rejectCandidate: vi.fn(),
       undoCandidate: vi.fn(),
       rejectCandidates: vi.fn(),
-      keepMetadata: vi.fn(),
+      trustMetadata: vi.fn(),
+      untrustMetadata: vi.fn(),
       batch: vi.fn(),
       all: vi.fn()
     }

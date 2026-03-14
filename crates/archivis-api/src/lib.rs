@@ -115,7 +115,8 @@ mod openapi {
             super::resolve::handlers::reject_candidate,
             super::resolve::handlers::undo_candidate,
             super::resolve::handlers::batch_reject_candidates,
-            super::resolve::handlers::keep_metadata,
+            super::resolve::handlers::trust_metadata,
+            super::resolve::handlers::untrust_metadata,
             super::resolve::handlers::batch_refresh_metadata,
             super::resolve::handlers::refresh_all_metadata,
             // Reader

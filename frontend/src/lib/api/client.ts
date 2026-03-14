@@ -732,11 +732,21 @@ export const api = {
       return result;
     },
 
-    /** Keep current metadata, reject all pending candidates and stop resolution. */
-    async keepMetadata(bookId: string): Promise<BookDetail> {
+    /** Trust current metadata, reject pending candidates and stop resolution. */
+    async trustMetadata(bookId: string): Promise<BookDetail> {
       const result = await request<BookDetail>(
         'POST',
-        `/books/${encodeURIComponent(bookId)}/keep-metadata`
+        `/books/${encodeURIComponent(bookId)}/trust-metadata`
+      );
+      notifyCountsChanged();
+      return result;
+    },
+
+    /** Remove trust from current metadata and recompute status. */
+    async untrustMetadata(bookId: string): Promise<BookDetail> {
+      const result = await request<BookDetail>(
+        'POST',
+        `/books/${encodeURIComponent(bookId)}/untrust-metadata`
       );
       notifyCountsChanged();
       return result;

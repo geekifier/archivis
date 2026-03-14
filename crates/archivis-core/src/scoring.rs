@@ -4,6 +4,7 @@
 //! quality signals. Used by both the ingest scorer (`archivis-formats`)
 //! and the live scorer (`archivis-tasks`).
 
+use crate::isbn;
 use crate::models::{IdentifierType, MetadataStatus};
 
 // ── Thresholds ───────────────────────────────────────────────────────
@@ -152,45 +153,6 @@ pub fn is_placeholder_isbn(isbn: &str) -> bool {
     PLACEHOLDER_ISBNS.contains(&isbn)
 }
 
-/// Validate an ISBN-13 check digit (modulo 10).
-pub fn validate_isbn13_checksum(isbn: &str) -> bool {
-    let digits: Vec<u32> = isbn.chars().filter_map(|c| c.to_digit(10)).collect();
-    if digits.len() != 13 {
-        return false;
-    }
-    let sum: u32 = digits
-        .iter()
-        .enumerate()
-        .map(|(i, &d)| if i % 2 == 0 { d } else { d * 3 })
-        .sum();
-    sum % 10 == 0
-}
-
-/// Validate an ISBN-10 check digit (modulo 11).
-pub fn validate_isbn10_checksum(isbn: &str) -> bool {
-    let chars: Vec<char> = isbn.chars().collect();
-    if chars.len() != 10 {
-        return false;
-    }
-    let mut sum = 0u32;
-    for (i, &ch) in chars.iter().enumerate() {
-        let val = if ch == 'X' || ch == 'x' {
-            if i != 9 {
-                return false;
-            }
-            10
-        } else {
-            match ch.to_digit(10) {
-                Some(d) => d,
-                None => return false,
-            }
-        };
-        let weight = 10 - u32::try_from(i).expect("index <= 9");
-        sum += val * weight;
-    }
-    sum % 11 == 0
-}
-
 /// Check whether an identifier of the given type and value is valid.
 ///
 /// ISBN-10/13 require a non-placeholder value with a correct checksum.
@@ -198,8 +160,12 @@ pub fn validate_isbn10_checksum(isbn: &str) -> bool {
 /// valid if present.
 pub fn is_valid_identifier_by_type(id_type: IdentifierType, value: &str) -> bool {
     match id_type {
-        IdentifierType::Isbn13 => !is_placeholder_isbn(value) && validate_isbn13_checksum(value),
-        IdentifierType::Isbn10 => !is_placeholder_isbn(value) && validate_isbn10_checksum(value),
+        IdentifierType::Isbn13 => {
+            !is_placeholder_isbn(value) && isbn::validate_isbn13_checksum(value)
+        }
+        IdentifierType::Isbn10 => {
+            !is_placeholder_isbn(value) && isbn::validate_isbn10_checksum(value)
+        }
         _ => true,
     }
 }
@@ -212,17 +178,35 @@ mod tests {
 
     #[test]
     fn isbn13_checksum_validation() {
-        assert!(validate_isbn13_checksum("9783161484100"));
-        assert!(!validate_isbn13_checksum("9783161484109"));
-        assert!(!validate_isbn13_checksum("978316"));
+        assert!(isbn::validate_isbn13_checksum("9783161484100"));
+        assert!(!isbn::validate_isbn13_checksum("9783161484109"));
+        assert!(!isbn::validate_isbn13_checksum("978316"));
     }
 
     #[test]
     fn isbn10_checksum_validation() {
-        assert!(validate_isbn10_checksum("0306406152"));
-        assert!(validate_isbn10_checksum("080442957X"));
-        assert!(!validate_isbn10_checksum("0306406153"));
-        assert!(!validate_isbn10_checksum("03064"));
+        assert!(isbn::validate_isbn10_checksum("0306406152"));
+        assert!(isbn::validate_isbn10_checksum("080442957X"));
+        assert!(!isbn::validate_isbn10_checksum("0306406153"));
+        assert!(!isbn::validate_isbn10_checksum("03064"));
+    }
+
+    #[test]
+    fn isbn13_rejects_non_digit_garbage() {
+        assert!(!isbn::validate_isbn13_checksum("978316148410X"));
+        assert!(!isbn::validate_isbn13_checksum("97831614841ab"));
+    }
+
+    #[test]
+    fn isbn10_rejects_x_in_non_final_position() {
+        assert!(!isbn::validate_isbn10_checksum("X306406152"));
+        assert!(!isbn::validate_isbn10_checksum("03064X6152"));
+    }
+
+    #[test]
+    fn isbn10_rejects_non_digit_garbage() {
+        assert!(!isbn::validate_isbn10_checksum("030640615a"));
+        assert!(!isbn::validate_isbn10_checksum("03064!6152"));
     }
 
     #[test]

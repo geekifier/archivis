@@ -55,7 +55,10 @@ const PROTECTABLE_FIELDS: &[&str] = &[
 ];
 
 /// Stamp the live quality score into an already-loaded `BookWithRelations`.
-async fn stamp_quality_score(pool: &archivis_db::DbPool, bwr: &mut archivis_db::BookWithRelations) {
+pub async fn stamp_quality_score(
+    pool: &archivis_db::DbPool,
+    bwr: &mut archivis_db::BookWithRelations,
+) {
     match compute_and_persist_quality_score(pool, bwr).await {
         Ok(score) => bwr.book.metadata_quality_score = Some(score),
         Err(e) => {
@@ -159,6 +162,44 @@ async fn invalidate_resolution_for_user_edit(
     Ok(())
 }
 
+/// Trust-aware invalidation for core identity edits on a trusted book.
+///
+/// Unlike `invalidate_resolution_for_user_edit`, this does NOT queue the
+/// book for automatic resolution.  Instead it normalizes `resolution_state`
+/// back to `Done` (or stamps supersession if a manual refresh is in flight).
+async fn invalidate_resolution_for_trusted_edit(
+    pool: &archivis_db::DbPool,
+    book_id: Uuid,
+) -> Result<(), ApiError> {
+    // 1. Normalize resolution_state (Done, or keep Running + supersede)
+    BookRepository::normalize_trusted_resolution_state(pool, book_id, USER_EDIT_TRIGGER).await?;
+
+    // 2. Supersede any active review (defensive — trust should have
+    //    already cleared this, but edits can arrive in any order)
+    supersede_active_review(pool, book_id).await?;
+
+    // 3. Clear review baselines (defensive)
+    BookRepository::set_review_baseline(pool, book_id, None, None).await?;
+
+    // 4. Recompute status (Identified for trusted, corrects stale outcomes)
+    persist_recomputed_status(pool, book_id).await?;
+    Ok(())
+}
+
+/// Shared dispatch: checks `metadata_user_trusted` and calls the appropriate
+/// invalidation path.  All backend core-identity edit endpoints use this.
+async fn invalidate_resolution_for_core_edit(
+    pool: &archivis_db::DbPool,
+    book_id: Uuid,
+) -> Result<(), ApiError> {
+    let book = BookRepository::get_by_id(pool, book_id).await?;
+    if book.metadata_user_trusted {
+        invalidate_resolution_for_trusted_edit(pool, book_id).await
+    } else {
+        invalidate_resolution_for_user_edit(pool, book_id).await
+    }
+}
+
 /// Supersede the currently active reviewable run and its candidates so
 /// `persist_recomputed_status` doesn't see stale pending candidates.
 async fn supersede_active_review(
@@ -234,6 +275,7 @@ pub async fn list_books(
         author_id: params.author_id.map(|id| id.to_string()),
         series_id: params.series_id.map(|id| id.to_string()),
         publisher_id: None,
+        trusted: None,
     };
 
     let pool = state.db_pool();
@@ -304,6 +346,15 @@ pub async fn get_book(
     Ok(Json(bwr.into()))
 }
 
+fn validate_language(input: &str) -> Result<Option<String>, ApiError> {
+    if input.is_empty() {
+        return Ok(None);
+    }
+    archivis_core::language::normalize_language(input)
+        .map(|code| Some(code.to_string()))
+        .ok_or_else(|| ApiError::Validation(format!("unrecognized language: {input:?}")))
+}
+
 /// PUT /api/books/{id} — update book metadata (partial update).
 #[utoipa::path(
     put,
@@ -316,9 +367,11 @@ pub async fn get_book(
         (status = 400, description = "Validation error"),
         (status = 404, description = "Book not found"),
         (status = 401, description = "Not authenticated"),
+        (status = 409, description = "Metadata refresh in progress"),
     ),
     security(("bearer" = []))
 )]
+#[allow(clippy::too_many_lines)]
 pub async fn update_book(
     State(state): State<AppState>,
     AuthUser(_user): AuthUser,
@@ -332,55 +385,100 @@ pub async fn update_book(
     let mut book_changed = false;
     let mut core_identity_changed = false;
 
-    // Always strip dangerous content from user-submitted text
+    // --- Pre-validate all fields BEFORE any mutations ---
     let sanitize_opts = SanitizeOptions::default();
 
-    if let Some(ref title) = body.title {
-        let clean = sanitize_text(title, &sanitize_opts).unwrap_or_default();
+    let validated_title = body
+        .title
+        .as_ref()
+        .map(|t| sanitize_text(t, &sanitize_opts).unwrap_or_default());
+    if let Some(ref clean) = validated_title {
         if clean.is_empty() {
             return Err(ApiError::Validation("title must not be empty".into()));
         }
-        if clean != book.title {
-            book.set_title(clean);
+    }
+    let validated_subtitle = body.subtitle.as_ref().map(|s| {
+        if s.is_empty() {
+            None
+        } else {
+            sanitize_text(s, &sanitize_opts)
+        }
+    });
+    let validated_description = body
+        .description
+        .as_ref()
+        .map(|d| sanitize_text(d, &sanitize_opts));
+    let validated_language = body
+        .language
+        .as_deref()
+        .map(validate_language)
+        .transpose()?;
+
+    // --- Trust change (atomic, after validation) ---
+    if let Some(trusted) = body.metadata_user_trusted {
+        if trusted != book.metadata_user_trusted {
+            if trusted {
+                let ok = state
+                    .resolve_service()
+                    .trust_metadata(id)
+                    .await
+                    .map_err(|e| ApiError::Internal(format!("trust failed: {e}")))?;
+                if !ok {
+                    return Err(ApiError::Conflict(
+                        "Cannot change trust while a metadata refresh is in progress".into(),
+                    ));
+                }
+                // Update in-memory book to reflect trust state so subsequent
+                // BookRepository::update (for field changes) does not overwrite it.
+                book.metadata_user_trusted = true;
+                book.metadata_status = archivis_core::models::MetadataStatus::Identified;
+                book.resolution_outcome = Some(archivis_core::models::ResolutionOutcome::Confirmed);
+                book.resolution_state = archivis_core::models::ResolutionState::Done;
+                book.review_baseline_metadata_status = None;
+                book.review_baseline_resolution_outcome = None;
+            } else {
+                let result = state
+                    .resolve_service()
+                    .untrust_metadata(id)
+                    .await
+                    .map_err(|e| ApiError::Internal(format!("untrust failed: {e}")))?;
+                if result.is_none() {
+                    return Err(ApiError::Conflict(
+                        "Cannot change trust while a metadata refresh is in progress".into(),
+                    ));
+                }
+                // Reload book — untrust changed status, outcome, state
+                book = BookRepository::get_by_id(pool, id).await?;
+            }
+        }
+    }
+
+    // --- Apply pre-validated fields ---
+    if let Some(ref clean) = validated_title {
+        if *clean != book.title {
+            book.set_title(clean.clone());
             book.metadata_provenance.title = Some(user_field_provenance());
             book_changed = true;
             core_identity_changed = true;
         }
     }
-    if let Some(ref subtitle) = body.subtitle {
-        let new_subtitle = if subtitle.is_empty() {
-            None
-        } else {
-            sanitize_text(subtitle, &sanitize_opts)
-        };
-        if new_subtitle != book.subtitle {
-            book.subtitle = new_subtitle;
+    if let Some(ref new_subtitle) = validated_subtitle {
+        if *new_subtitle != book.subtitle {
+            book.subtitle = new_subtitle.clone();
             book.metadata_provenance.subtitle = Some(user_field_provenance());
             book_changed = true;
         }
     }
-    if let Some(ref description) = body.description {
-        let new_description = sanitize_text(description, &sanitize_opts);
-        if new_description != book.description {
-            book.description = new_description;
+    if let Some(ref new_description) = validated_description {
+        if *new_description != book.description {
+            book.description = new_description.clone();
             book.metadata_provenance.description = Some(user_field_provenance());
             book_changed = true;
         }
     }
-    if let Some(ref language) = body.language {
-        let new_language = if language.is_empty() {
-            None
-        } else {
-            Some(
-                archivis_core::language::normalize_language(language)
-                    .ok_or_else(|| {
-                        ApiError::Validation(format!("unrecognized language: {language:?}"))
-                    })?
-                    .to_string(),
-            )
-        };
-        if new_language != book.language {
-            book.language = new_language;
+    if let Some(ref new_language) = validated_language {
+        if *new_language != book.language {
+            book.language = new_language.clone();
             book.metadata_provenance.language = Some(user_field_provenance());
             book_changed = true;
         }
@@ -420,7 +518,7 @@ pub async fn update_book(
         BookRepository::update(pool, &book).await?;
     }
     if core_identity_changed {
-        invalidate_resolution_for_user_edit(pool, id).await?;
+        invalidate_resolution_for_core_edit(pool, id).await?;
     }
     // Single BWR load AFTER mutations + invalidation so `resolution_state` is fresh
     let mut bwr = BookRepository::get_with_relations(pool, id).await?;
@@ -1077,7 +1175,7 @@ pub async fn set_book_authors(
 
     book.metadata_provenance.authors = Some(user_field_provenance());
     BookRepository::update(pool, &book).await?;
-    invalidate_resolution_for_user_edit(pool, id).await?;
+    invalidate_resolution_for_core_edit(pool, id).await?;
     let mut bwr = BookRepository::get_with_relations(pool, id).await?;
     stamp_quality_score(pool, &mut bwr).await;
     Ok(Json(bwr.into()))
@@ -1119,7 +1217,7 @@ pub async fn set_book_series(
 
     book.metadata_provenance.series = Some(user_field_provenance());
     BookRepository::update(pool, &book).await?;
-    invalidate_resolution_for_user_edit(pool, id).await?;
+    invalidate_resolution_for_core_edit(pool, id).await?;
     let mut bwr = BookRepository::get_with_relations(pool, id).await?;
     stamp_quality_score(pool, &mut bwr).await;
     Ok(Json(bwr.into()))
@@ -1239,7 +1337,7 @@ pub async fn add_identifier(
     // Create the identifier with source: User and confidence: 1.0
     let identifier = Identifier::new(id, identifier_type, &value, MetadataSource::User, 1.0);
     IdentifierRepository::create(pool, &identifier).await?;
-    invalidate_resolution_for_user_edit(pool, id).await?;
+    invalidate_resolution_for_core_edit(pool, id).await?;
     let mut bwr = BookRepository::get_with_relations(pool, id).await?;
     stamp_quality_score(pool, &mut bwr).await;
     Ok(Json(bwr.into()))
@@ -1307,7 +1405,7 @@ pub async fn update_identifier(
         .unwrap_or_default();
 
     IdentifierRepository::update(pool, identifier_id, &final_value, &type_str).await?;
-    invalidate_resolution_for_user_edit(pool, book_id).await?;
+    invalidate_resolution_for_core_edit(pool, book_id).await?;
     let mut bwr = BookRepository::get_with_relations(pool, book_id).await?;
     stamp_quality_score(pool, &mut bwr).await;
     Ok(Json(bwr.into()))
@@ -1348,7 +1446,7 @@ pub async fn delete_identifier(
     }
 
     IdentifierRepository::delete(pool, identifier_id).await?;
-    invalidate_resolution_for_user_edit(pool, book_id).await?;
+    invalidate_resolution_for_core_edit(pool, book_id).await?;
     refresh_quality_score_best_effort(pool, book_id).await;
 
     Ok(StatusCode::NO_CONTENT)
@@ -1415,17 +1513,7 @@ async fn apply_batch_fields(
     let mut book_changed = false;
 
     if let Some(ref language) = fields.language {
-        let new_language = if language.is_empty() {
-            None
-        } else {
-            Some(
-                archivis_core::language::normalize_language(language)
-                    .ok_or_else(|| {
-                        ApiError::Validation(format!("unrecognized language: {language:?}"))
-                    })?
-                    .to_string(),
-            )
-        };
+        let new_language = validate_language(language)?;
         if new_language != book.language {
             book.language = new_language;
             book.metadata_provenance.language = Some(user_field_provenance());
@@ -1689,6 +1777,7 @@ mod tests {
                 rating: None,
                 page_count: None,
                 publisher_id: None,
+                metadata_user_trusted: None,
             }),
         )
         .await
@@ -1996,6 +2085,7 @@ mod tests {
                 rating: None,
                 page_count: None,
                 publisher_id: None,
+                metadata_user_trusted: None,
             }),
         )
         .await
@@ -2066,5 +2156,181 @@ mod tests {
             score > 0.3,
             "score with ISBN should exceed title+author baseline of 0.3, got {score}"
         );
+    }
+
+    // ── Trust-aware invalidation tests ──
+
+    /// Helper: trust a book via the resolution service, same as the PUT handler does.
+    async fn trust_book(state: &AppState, book_id: Uuid) {
+        let ok = state
+            .resolve_service()
+            .trust_metadata(book_id)
+            .await
+            .unwrap();
+        assert!(ok, "trust_metadata should succeed");
+    }
+
+    #[tokio::test]
+    async fn trust_plus_title_change_no_pending() {
+        let tmp = TempDir::new().unwrap();
+        let state = test_state(&tmp).await;
+        let (book, _) = create_resolved_book(state.db_pool(), "Trust Title").await;
+
+        let _ = update_book(
+            State(state.clone()),
+            auth_user(),
+            Path(book.id),
+            Json(UpdateBookRequest {
+                title: Some("New Title".into()),
+                subtitle: None,
+                description: None,
+                language: None,
+                publication_year: None,
+                rating: None,
+                page_count: None,
+                publisher_id: None,
+                metadata_user_trusted: Some(true),
+            }),
+        )
+        .await
+        .unwrap();
+
+        let updated = BookRepository::get_by_id(state.db_pool(), book.id)
+            .await
+            .unwrap();
+        assert_eq!(
+            updated.resolution_state,
+            ResolutionState::Done,
+            "trusted book should stay Done, not Pending"
+        );
+        assert!(updated.metadata_user_trusted, "book should be trusted");
+        assert_eq!(
+            updated.metadata_status,
+            MetadataStatus::Identified,
+            "trusted book status should be Identified"
+        );
+        assert_eq!(updated.title, "New Title");
+    }
+
+    #[tokio::test]
+    async fn title_edit_on_trusted_book_no_pending() {
+        let tmp = TempDir::new().unwrap();
+        let state = test_state(&tmp).await;
+        let (book, _) = create_resolved_book(state.db_pool(), "Already Trusted").await;
+
+        // Trust first
+        trust_book(&state, book.id).await;
+
+        // Then edit title (no trust field in request)
+        let _ = update_book(
+            State(state.clone()),
+            auth_user(),
+            Path(book.id),
+            Json(UpdateBookRequest {
+                title: Some("Edited Title".into()),
+                subtitle: None,
+                description: None,
+                language: None,
+                publication_year: None,
+                rating: None,
+                page_count: None,
+                publisher_id: None,
+                metadata_user_trusted: None,
+            }),
+        )
+        .await
+        .unwrap();
+
+        let updated = BookRepository::get_by_id(state.db_pool(), book.id)
+            .await
+            .unwrap();
+        assert_eq!(
+            updated.resolution_state,
+            ResolutionState::Done,
+            "trusted book should stay Done after title edit"
+        );
+        assert!(updated.metadata_user_trusted);
+        assert_eq!(updated.metadata_status, MetadataStatus::Identified,);
+    }
+
+    #[tokio::test]
+    async fn authors_edit_on_trusted_book_no_pending() {
+        let tmp = TempDir::new().unwrap();
+        let state = test_state(&tmp).await;
+        let (book, _) = create_resolved_book(state.db_pool(), "Trusted Authors").await;
+
+        // Trust first
+        trust_book(&state, book.id).await;
+
+        let replacement = Author::new("New Author");
+        AuthorRepository::create(state.db_pool(), &replacement)
+            .await
+            .unwrap();
+
+        let _ = set_book_authors(
+            State(state.clone()),
+            auth_user(),
+            Path(book.id),
+            Json(SetBookAuthorsRequest {
+                authors: vec![BookAuthorLink {
+                    author_id: replacement.id,
+                    role: "author".into(),
+                    position: 0,
+                }],
+            }),
+        )
+        .await
+        .unwrap();
+
+        let updated = BookRepository::get_by_id(state.db_pool(), book.id)
+            .await
+            .unwrap();
+        assert_eq!(
+            updated.resolution_state,
+            ResolutionState::Done,
+            "trusted book should stay Done after authors edit"
+        );
+        assert!(updated.metadata_user_trusted);
+        assert_eq!(updated.metadata_status, MetadataStatus::Identified,);
+    }
+
+    #[tokio::test]
+    async fn untrust_plus_title_change_enters_pipeline() {
+        let tmp = TempDir::new().unwrap();
+        let state = test_state(&tmp).await;
+        let (book, _) = create_resolved_book(state.db_pool(), "Untrust Title").await;
+
+        // Trust first
+        trust_book(&state, book.id).await;
+
+        // Then untrust + edit title
+        let _ = update_book(
+            State(state.clone()),
+            auth_user(),
+            Path(book.id),
+            Json(UpdateBookRequest {
+                title: Some("Changed Title".into()),
+                subtitle: None,
+                description: None,
+                language: None,
+                publication_year: None,
+                rating: None,
+                page_count: None,
+                publisher_id: None,
+                metadata_user_trusted: Some(false),
+            }),
+        )
+        .await
+        .unwrap();
+
+        let updated = BookRepository::get_by_id(state.db_pool(), book.id)
+            .await
+            .unwrap();
+        assert_eq!(
+            updated.resolution_state,
+            ResolutionState::Pending,
+            "untrusted book should enter Pending after title edit"
+        );
+        assert!(!updated.metadata_user_trusted);
     }
 }

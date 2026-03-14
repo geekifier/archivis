@@ -84,7 +84,11 @@ pub fn router() -> Router<AppState> {
             post(resolution_handlers::batch_reject_candidates),
         )
         .route(
-            "/{id}/keep-metadata",
-            post(resolution_handlers::keep_metadata),
+            "/{id}/trust-metadata",
+            post(resolution_handlers::trust_metadata),
+        )
+        .route(
+            "/{id}/untrust-metadata",
+            post(resolution_handlers::untrust_metadata),
         )
 }

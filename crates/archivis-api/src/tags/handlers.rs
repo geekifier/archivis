@@ -231,6 +231,7 @@ pub async fn list_tag_books(
 
     let filter = BookFilter {
         tags: Some(vec![id.to_string()]),
+        trusted: None,
         ..BookFilter::default()
     };
 

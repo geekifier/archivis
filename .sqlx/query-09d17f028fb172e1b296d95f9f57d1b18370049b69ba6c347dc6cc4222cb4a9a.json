@@ -1,0 +1,176 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT b.id, b.title, b.subtitle, b.sort_title, b.description, b.language, b.publication_year, b.publisher_id, b.added_at, b.updated_at, b.rating, b.page_count, b.metadata_status, b.review_baseline_metadata_status, b.review_baseline_resolution_outcome, b.ingest_quality_score, b.metadata_quality_score, b.resolution_state, b.resolution_outcome, b.resolution_requested_at, b.resolution_requested_reason, b.last_resolved_at, b.last_resolution_run_id, b.metadata_locked, b.metadata_user_trusted, b.metadata_provenance, b.cover_path FROM books b WHERE (? IS NULL OR b.id IN (SELECT book_id FROM book_files WHERE format = ?)) AND (? IS NULL OR b.metadata_status = ?) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_series WHERE series_id = ?)) AND (? IS NULL OR b.id IN (SELECT book_id FROM book_tags WHERE tag_id IN (SELECT value FROM json_each(?)))) AND (? IS NULL OR b.publisher_id = ?) ORDER BY b.sort_title ASC LIMIT ? OFFSET ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "title",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "subtitle",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "sort_title",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "description",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "language",
+        "ordinal": 5,
+        "type_info": "Text"
+      },
+      {
+        "name": "publication_year",
+        "ordinal": 6,
+        "type_info": "Integer"
+      },
+      {
+        "name": "publisher_id",
+        "ordinal": 7,
+        "type_info": "Text"
+      },
+      {
+        "name": "added_at",
+        "ordinal": 8,
+        "type_info": "Text"
+      },
+      {
+        "name": "updated_at",
+        "ordinal": 9,
+        "type_info": "Text"
+      },
+      {
+        "name": "rating",
+        "ordinal": 10,
+        "type_info": "Float"
+      },
+      {
+        "name": "page_count",
+        "ordinal": 11,
+        "type_info": "Integer"
+      },
+      {
+        "name": "metadata_status",
+        "ordinal": 12,
+        "type_info": "Text"
+      },
+      {
+        "name": "review_baseline_metadata_status",
+        "ordinal": 13,
+        "type_info": "Text"
+      },
+      {
+        "name": "review_baseline_resolution_outcome",
+        "ordinal": 14,
+        "type_info": "Text"
+      },
+      {
+        "name": "ingest_quality_score",
+        "ordinal": 15,
+        "type_info": "Float"
+      },
+      {
+        "name": "metadata_quality_score",
+        "ordinal": 16,
+        "type_info": "Float"
+      },
+      {
+        "name": "resolution_state",
+        "ordinal": 17,
+        "type_info": "Text"
+      },
+      {
+        "name": "resolution_outcome",
+        "ordinal": 18,
+        "type_info": "Text"
+      },
+      {
+        "name": "resolution_requested_at",
+        "ordinal": 19,
+        "type_info": "Text"
+      },
+      {
+        "name": "resolution_requested_reason",
+        "ordinal": 20,
+        "type_info": "Text"
+      },
+      {
+        "name": "last_resolved_at",
+        "ordinal": 21,
+        "type_info": "Text"
+      },
+      {
+        "name": "last_resolution_run_id",
+        "ordinal": 22,
+        "type_info": "Text"
+      },
+      {
+        "name": "metadata_locked",
+        "ordinal": 23,
+        "type_info": "Integer"
+      },
+      {
+        "name": "metadata_user_trusted",
+        "ordinal": 24,
+        "type_info": "Integer"
+      },
+      {
+        "name": "metadata_provenance",
+        "ordinal": 25,
+        "type_info": "Text"
+      },
+      {
+        "name": "cover_path",
+        "ordinal": 26,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 14
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      true,
+      true,
+      true,
+      true,
+      false,
+      false,
+      true,
+      true,
+      false,
+      true,
+      true,
+      false,
+      true,
+      false,
+      true,
+      false,
+      true,
+      true,
+      true,
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "09d17f028fb172e1b296d95f9f57d1b18370049b69ba6c347dc6cc4222cb4a9a"
+}
