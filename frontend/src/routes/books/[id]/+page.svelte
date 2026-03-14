@@ -1030,11 +1030,11 @@
                   </svg>
                 </button>
                 <div class="flex items-center gap-1.5 text-xs text-muted-foreground">
-                  <span>{Math.round(book.ingest_quality_score * 100)}%</span>
+                  <span>{Math.round((book.metadata_quality_score ?? book.ingest_quality_score) * 100)}%</span>
                   <div class="h-1.5 w-10 overflow-hidden rounded-full bg-muted">
                     <div
                       class="h-full rounded-full bg-primary transition-all"
-                      style="width: {book.ingest_quality_score * 100}%"
+                      style="width: {(book.metadata_quality_score ?? book.ingest_quality_score) * 100}%"
                     ></div>
                   </div>
                 </div>

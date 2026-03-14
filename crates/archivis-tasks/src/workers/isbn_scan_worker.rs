@@ -92,6 +92,8 @@ impl<S: StorageBackend> IsbnScanWorker<S> {
                         "isbns_found": result.isbns_found,
                         "isbns_stored": result.isbns_stored,
                         "files_scanned": result.files_scanned,
+                        "lccns_found": result.lccns_found,
+                        "lccns_stored": result.lccns_stored,
                     }));
                 }
                 Err(error) => {
@@ -171,6 +173,8 @@ impl<S: StorageBackend> IsbnScanWorker<S> {
             "isbns_found": result.isbns_found,
             "isbns_stored": result.isbns_stored,
             "files_scanned": result.files_scanned,
+            "lccns_found": result.lccns_found,
+            "lccns_stored": result.lccns_stored,
         }))
     }
 }

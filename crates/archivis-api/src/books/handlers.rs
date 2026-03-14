@@ -21,7 +21,9 @@ use archivis_db::{
     IdentifierRepository, PaginationParams, SeriesRepository, SortOrder, TagRepository,
 };
 use archivis_storage::StorageBackend;
-use archivis_tasks::resolve::persist_recomputed_status;
+use archivis_tasks::resolve::{
+    compute_and_persist_quality_score, persist_recomputed_status, refresh_quality_score_best_effort,
+};
 
 use crate::auth::AuthUser;
 use crate::errors::ApiError;
@@ -51,6 +53,16 @@ const PROTECTABLE_FIELDS: &[&str] = &[
     "page_count",
     "cover",
 ];
+
+/// Stamp the live quality score into an already-loaded `BookWithRelations`.
+async fn stamp_quality_score(pool: &archivis_db::DbPool, bwr: &mut archivis_db::BookWithRelations) {
+    match compute_and_persist_quality_score(pool, bwr).await {
+        Ok(score) => bwr.book.metadata_quality_score = Some(score),
+        Err(e) => {
+            tracing::warn!(book_id = %bwr.book.id, error = %e, "metadata quality score refresh failed");
+        }
+    }
+}
 
 fn user_field_provenance() -> FieldProvenance {
     FieldProvenance {
@@ -410,8 +422,11 @@ pub async fn update_book(
     if core_identity_changed {
         invalidate_resolution_for_user_edit(pool, id).await?;
     }
-
-    let bwr = BookRepository::get_with_relations(pool, id).await?;
+    // Single BWR load AFTER mutations + invalidation so `resolution_state` is fresh
+    let mut bwr = BookRepository::get_with_relations(pool, id).await?;
+    if book_changed {
+        stamp_quality_score(pool, &mut bwr).await;
+    }
     Ok(Json(bwr.into()))
 }
 
@@ -854,8 +869,8 @@ pub async fn upload_cover(
     // Update book.cover_path in the database
     book.cover_path = Some(new_cover_path);
     BookRepository::update(pool, &book).await?;
-
-    let bwr = BookRepository::get_with_relations(pool, id).await?;
+    let mut bwr = BookRepository::get_with_relations(pool, id).await?;
+    stamp_quality_score(pool, &mut bwr).await;
     Ok(Json(bwr.into()))
 }
 
@@ -1063,8 +1078,8 @@ pub async fn set_book_authors(
     book.metadata_provenance.authors = Some(user_field_provenance());
     BookRepository::update(pool, &book).await?;
     invalidate_resolution_for_user_edit(pool, id).await?;
-
-    let bwr = BookRepository::get_with_relations(pool, id).await?;
+    let mut bwr = BookRepository::get_with_relations(pool, id).await?;
+    stamp_quality_score(pool, &mut bwr).await;
     Ok(Json(bwr.into()))
 }
 
@@ -1105,8 +1120,8 @@ pub async fn set_book_series(
     book.metadata_provenance.series = Some(user_field_provenance());
     BookRepository::update(pool, &book).await?;
     invalidate_resolution_for_user_edit(pool, id).await?;
-
-    let bwr = BookRepository::get_with_relations(pool, id).await?;
+    let mut bwr = BookRepository::get_with_relations(pool, id).await?;
+    stamp_quality_score(pool, &mut bwr).await;
     Ok(Json(bwr.into()))
 }
 
@@ -1225,8 +1240,8 @@ pub async fn add_identifier(
     let identifier = Identifier::new(id, identifier_type, &value, MetadataSource::User, 1.0);
     IdentifierRepository::create(pool, &identifier).await?;
     invalidate_resolution_for_user_edit(pool, id).await?;
-
-    let bwr = BookRepository::get_with_relations(pool, id).await?;
+    let mut bwr = BookRepository::get_with_relations(pool, id).await?;
+    stamp_quality_score(pool, &mut bwr).await;
     Ok(Json(bwr.into()))
 }
 
@@ -1293,8 +1308,8 @@ pub async fn update_identifier(
 
     IdentifierRepository::update(pool, identifier_id, &final_value, &type_str).await?;
     invalidate_resolution_for_user_edit(pool, book_id).await?;
-
-    let bwr = BookRepository::get_with_relations(pool, book_id).await?;
+    let mut bwr = BookRepository::get_with_relations(pool, book_id).await?;
+    stamp_quality_score(pool, &mut bwr).await;
     Ok(Json(bwr.into()))
 }
 
@@ -1334,6 +1349,7 @@ pub async fn delete_identifier(
 
     IdentifierRepository::delete(pool, identifier_id).await?;
     invalidate_resolution_for_user_edit(pool, book_id).await?;
+    refresh_quality_score_best_effort(pool, book_id).await;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -1433,6 +1449,7 @@ async fn apply_batch_fields(
 
     if book_changed {
         BookRepository::update(pool, &book).await?;
+        refresh_quality_score_best_effort(pool, book_id).await;
     }
     Ok(())
 }
@@ -1957,6 +1974,97 @@ mod tests {
         assert_eq!(
             updated.resolution_requested_reason.as_deref(),
             Some(UNPROTECT_FIELDS_TRIGGER)
+        );
+    }
+
+    #[tokio::test]
+    async fn update_book_returns_metadata_quality_score() {
+        let tmp = TempDir::new().unwrap();
+        let state = test_state(&tmp).await;
+        let (book, _) = create_resolved_book(state.db_pool(), "Score Update").await;
+
+        let Json(detail) = update_book(
+            State(state.clone()),
+            auth_user(),
+            Path(book.id),
+            Json(UpdateBookRequest {
+                title: Some("Score Updated".into()),
+                subtitle: None,
+                description: None,
+                language: None,
+                publication_year: None,
+                rating: None,
+                page_count: None,
+                publisher_id: None,
+            }),
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            detail.metadata_quality_score.is_some(),
+            "update_book response should include metadata_quality_score"
+        );
+    }
+
+    #[tokio::test]
+    async fn set_book_authors_returns_metadata_quality_score() {
+        let tmp = TempDir::new().unwrap();
+        let state = test_state(&tmp).await;
+        let (book, _) = create_resolved_book(state.db_pool(), "Author Score").await;
+        let new_author = Author::new("New Author");
+        AuthorRepository::create(state.db_pool(), &new_author)
+            .await
+            .unwrap();
+
+        let Json(detail) = set_book_authors(
+            State(state.clone()),
+            auth_user(),
+            Path(book.id),
+            Json(SetBookAuthorsRequest {
+                authors: vec![BookAuthorLink {
+                    author_id: new_author.id,
+                    role: "author".into(),
+                    position: 0,
+                }],
+            }),
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            detail.metadata_quality_score.is_some(),
+            "set_book_authors response should include metadata_quality_score"
+        );
+    }
+
+    #[tokio::test]
+    async fn add_identifier_returns_metadata_quality_score() {
+        let tmp = TempDir::new().unwrap();
+        let state = test_state(&tmp).await;
+        let (book, _) = create_resolved_book(state.db_pool(), "ISBN Score").await;
+
+        let Json(detail) = add_identifier(
+            State(state.clone()),
+            auth_user(),
+            Path(book.id),
+            Json(AddIdentifierRequest {
+                identifier_type: IdentifierType::Isbn13,
+                value: "9783161484100".into(),
+            }),
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            detail.metadata_quality_score.is_some(),
+            "add_identifier response should include metadata_quality_score"
+        );
+        // ISBN should boost score above the base title+author level
+        let score = detail.metadata_quality_score.unwrap();
+        assert!(
+            score > 0.3,
+            "score with ISBN should exceed title+author baseline of 0.3, got {score}"
         );
     }
 }

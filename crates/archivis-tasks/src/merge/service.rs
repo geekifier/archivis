@@ -116,6 +116,9 @@ impl<S: StorageBackend> MergeService<S> {
             "merge complete — secondary book deleted"
         );
 
+        // Refresh live quality score after the full merge sequence
+        crate::resolve::quality::refresh_quality_score_best_effort(&self.db_pool, primary_id).await;
+
         // 12. Return updated primary
         let result = BookRepository::get_with_relations(&self.db_pool, primary_id).await?;
         Ok(result)

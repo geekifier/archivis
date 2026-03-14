@@ -69,6 +69,18 @@ async fn main() {
         std::process::exit(1);
     }
 
+    // Backfill live metadata quality scores for existing books (runs in background)
+    {
+        let backfill_pool = db_pool.clone();
+        tokio::spawn(async move {
+            if let Err(e) =
+                archivis_tasks::resolve::backfill_metadata_quality_scores(&backfill_pool).await
+            {
+                tracing::warn!("backfill metadata quality scores failed: {e}");
+            }
+        });
+    }
+
     // 1a. Settings: load DB overrides and build ConfigService
     let config_service = init_config_service(&cli, &mut config, &db_pool).await;
 

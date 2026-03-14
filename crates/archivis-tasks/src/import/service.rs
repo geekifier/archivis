@@ -347,6 +347,10 @@ impl<S: StorageBackend> ImportService<S> {
             self.create_tags(book_id, embedded, sanitize_opts).await?;
             self.create_series(book_id, embedded, parsed, sanitize_opts)
                 .await?;
+
+            // Compute initial live quality score from the fully-created canonical record
+            crate::resolve::quality::refresh_quality_score_best_effort(&self.db_pool, book_id)
+                .await;
         } else {
             BookFileRepository::create(&self.db_pool, &book_file).await?;
         }

@@ -121,6 +121,7 @@ export interface BookSummary {
   resolution_outcome: ResolutionOutcome | null;
   metadata_locked: boolean;
   ingest_quality_score: number;
+  metadata_quality_score: number | null;
   has_cover: boolean;
   authors?: AuthorEntry[];
   series?: SeriesEntry[];
@@ -184,6 +185,7 @@ export interface BookDetail {
   metadata_locked: boolean;
   metadata_provenance?: MetadataProvenance;
   ingest_quality_score: number;
+  metadata_quality_score: number | null;
   has_cover: boolean;
   authors: AuthorEntry[];
   series: SeriesEntry[];

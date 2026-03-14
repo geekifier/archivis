@@ -64,6 +64,10 @@ pub struct Book {
     /// Import-time local metadata quality score (0.0–1.0).
     #[serde(default)]
     pub ingest_quality_score: f32,
+    /// Live metadata quality score (0.0–1.0), reflecting the current canonical
+    /// state of the book record. `None` = not yet computed.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub metadata_quality_score: Option<f32>,
     #[serde(default)]
     pub resolution_state: ResolutionState,
     pub resolution_outcome: Option<ResolutionOutcome>,
@@ -110,6 +114,7 @@ impl Book {
             review_baseline_metadata_status: None,
             review_baseline_resolution_outcome: None,
             ingest_quality_score: 0.0,
+            metadata_quality_score: None,
             resolution_state: ResolutionState::Pending,
             resolution_outcome: None,
             resolution_requested_at: now,

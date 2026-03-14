@@ -21,7 +21,10 @@ use archivis_core::errors::TaskError;
 use archivis_core::models::{Identifier, IdentifierType, MetadataSource};
 use archivis_db::{BookFileRepository, BookRepository, DbPool, IdentifierRepository};
 use archivis_formats::content_text::ContentScanConfig;
-use archivis_formats::isbn_scan::{scan_text_for_isbns, ScannedIsbn};
+use archivis_formats::isbn_scan::{
+    dedup_lccn_values, scan_text_for_isbns_with_lccn_exclusions, scan_text_for_lccn_occurrences,
+    ScannedIsbn,
+};
 use archivis_storage::StorageBackend;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
@@ -99,6 +102,10 @@ pub struct IsbnScanResult {
     pub isbns_stored: usize,
     /// Number of files that were read and scanned.
     pub files_scanned: usize,
+    /// Total unique LCCNs found across all files.
+    pub lccns_found: usize,
+    /// How many LCCNs were stored as new `Identifier` records.
+    pub lccns_stored: usize,
 }
 
 // ---------------------------------------------------------------------------
@@ -149,6 +156,8 @@ impl<S: StorageBackend> IsbnScanService<S> {
                 isbns_found: 0,
                 isbns_stored: 0,
                 files_scanned: 0,
+                lccns_found: 0,
+                lccns_stored: 0,
             });
         }
 
@@ -164,11 +173,14 @@ impl<S: StorageBackend> IsbnScanService<S> {
                 isbns_found: 0,
                 isbns_stored: 0,
                 files_scanned: 0,
+                lccns_found: 0,
+                lccns_stored: 0,
             });
         }
 
         // 3. For each file: read from storage -> extract text -> scan for ISBNs.
         let mut all_isbns: Vec<ScannedIsbn> = Vec::new();
+        let mut all_lccn_values: Vec<String> = Vec::new();
         let mut files_scanned: usize = 0;
 
         for file in &files {
@@ -218,11 +230,16 @@ impl<S: StorageBackend> IsbnScanService<S> {
                 continue;
             }
 
-            let found = scan_text_for_isbns(&text, true);
+            // LCCN scan first — all occurrences with spans for exclusion
+            let lccn_occurrences = scan_text_for_lccn_occurrences(&text);
+
+            // ISBN scan with LCCN exclusions
+            let found = scan_text_for_isbns_with_lccn_exclusions(&text, true, &lccn_occurrences);
             debug!(
                 file_id = %file.id,
                 format = %file.format,
                 isbns = found.len(),
+                lccns = lccn_occurrences.len(),
                 "scanned file for ISBNs"
             );
 
@@ -232,6 +249,13 @@ impl<S: StorageBackend> IsbnScanService<S> {
                     .any(|s| s.identifier_type == isbn.identifier_type && s.value == isbn.value);
                 if !already {
                     all_isbns.push(isbn);
+                }
+            }
+
+            // Collect unique LCCN values (dedup across files too)
+            for lccn_value in dedup_lccn_values(&lccn_occurrences) {
+                if !all_lccn_values.contains(&lccn_value) {
+                    all_lccn_values.push(lccn_value);
                 }
             }
         }
@@ -305,11 +329,55 @@ impl<S: StorageBackend> IsbnScanService<S> {
             isbns_stored += 1;
         }
 
+        // 7. Store LCCNs as Identifier records.
+        let mut lccns_stored: usize = 0;
+
+        for lccn_value in &all_lccn_values {
+            let id_type_str = serde_json::to_value(IdentifierType::Lccn)
+                .ok()
+                .and_then(|v| v.as_str().map(String::from))
+                .unwrap_or_default();
+
+            let exists = IdentifierRepository::exists_for_book(
+                &self.db_pool,
+                book_id,
+                &id_type_str,
+                lccn_value,
+            )
+            .await
+            .map_err(|e| TaskError::Failed(format!("failed to check existing identifier: {e}")))?;
+
+            if exists {
+                debug!(
+                    book_id = %book_id,
+                    lccn = %lccn_value,
+                    "LCCN already exists for book, skipping"
+                );
+                continue;
+            }
+
+            let identifier = Identifier::new(
+                book_id,
+                IdentifierType::Lccn,
+                lccn_value,
+                MetadataSource::ContentScan,
+                self.config.confidence,
+            );
+
+            IdentifierRepository::create(&self.db_pool, &identifier)
+                .await
+                .map_err(|e| TaskError::Failed(format!("failed to store identifier: {e}")))?;
+
+            lccns_stored += 1;
+        }
+
         info!(
             book_id = %book_id,
             files_scanned = files_scanned,
             isbns_found = all_isbns.len(),
             isbns_stored = isbns_stored,
+            lccns_found = all_lccn_values.len(),
+            lccns_stored = lccns_stored,
             "ISBN content scan complete"
         );
 
@@ -319,6 +387,8 @@ impl<S: StorageBackend> IsbnScanService<S> {
                 .map_err(|e| {
                     TaskError::Failed(format!("failed to mark resolution pending: {e}"))
                 })?;
+            crate::resolve::quality::refresh_quality_score_best_effort(&self.db_pool, book_id)
+                .await;
         }
 
         Ok(IsbnScanResult {
@@ -326,6 +396,8 @@ impl<S: StorageBackend> IsbnScanService<S> {
             isbns_found: all_isbns.len(),
             isbns_stored,
             files_scanned,
+            lccns_found: all_lccn_values.len(),
+            lccns_stored,
         })
     }
 }

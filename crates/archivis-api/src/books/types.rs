@@ -267,6 +267,8 @@ pub struct BookSummary {
     pub resolution_outcome: Option<ResolutionOutcome>,
     pub metadata_locked: bool,
     pub ingest_quality_score: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata_quality_score: Option<f32>,
     pub has_cover: bool,
     /// Populated when `?include=authors`.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -308,6 +310,8 @@ pub struct BookDetail {
     pub metadata_locked: bool,
     pub metadata_provenance: MetadataProvenanceResponse,
     pub ingest_quality_score: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata_quality_score: Option<f32>,
     pub has_cover: bool,
     pub authors: Vec<AuthorEntry>,
     pub series: Vec<SeriesEntry>,
@@ -433,6 +437,7 @@ impl From<BookWithRelations> for BookDetail {
             metadata_locked: bwr.book.metadata_locked,
             metadata_provenance: bwr.book.metadata_provenance.into(),
             ingest_quality_score: bwr.book.ingest_quality_score,
+            metadata_quality_score: bwr.book.metadata_quality_score,
             has_cover: bwr.book.cover_path.is_some(),
             authors: bwr.authors.into_iter().map(AuthorEntry::from).collect(),
             series: bwr.series.into_iter().map(SeriesEntry::from).collect(),
@@ -471,6 +476,7 @@ impl From<Book> for BookSummary {
             resolution_outcome: book.resolution_outcome,
             metadata_locked: book.metadata_locked,
             ingest_quality_score: book.ingest_quality_score,
+            metadata_quality_score: book.metadata_quality_score,
             has_cover: book.cover_path.is_some(),
             authors: None,
             series: None,

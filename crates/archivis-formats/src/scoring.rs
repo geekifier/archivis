@@ -3,7 +3,11 @@
 //! Evaluates the completeness of extracted metadata and assigns a confidence
 //! score (0.0–1.0) that determines the resulting [`MetadataStatus`].
 
-use archivis_core::models::{IdentifierType, MetadataStatus, ScoringProfile};
+use archivis_core::models::{MetadataStatus, ScoringProfile};
+use archivis_core::scoring::{
+    compute_quality_score, derive_metadata_status, is_garbage_author, is_garbage_title,
+    is_valid_identifier_by_type, QualitySignals, ScoreWeights,
+};
 
 use crate::{ExtractedMetadata, ParsedFilename};
 
@@ -16,32 +20,13 @@ pub struct MetadataScore {
     pub status: MetadataStatus,
 }
 
-// ── Thresholds ───────────────────────────────────────────────────────
-
-/// Minimum confidence to be considered `Identified`.
-const IDENTIFIED_THRESHOLD: f32 = 0.6;
-
-/// Minimum confidence to be considered `NeedsReview`.
-const NEEDS_REVIEW_THRESHOLD: f32 = 0.2;
-
-// ── Scoring weights ──────────────────────────────────────────────────
-
-/// Bonus for having at least one valid ISBN.
-const ISBN_BONUS: f32 = 0.4;
-
-/// Bonus for having both title and at least one author.
-const TITLE_AUTHOR_BONUS: f32 = 0.3;
-
-/// Bonus for having a title but no author.
-const TITLE_ONLY_BONUS: f32 = 0.1;
+// ── Scoring weights (profile-dependent) ──────────────────────────────
 
 /// Bonus when embedded and filename metadata agree on title.
 const CROSS_VALIDATION_BONUS: f32 = 0.2;
 
-// ── Richness bonus (profile-dependent) ──────────────────────────────
-
-/// Number of richness fields checked.
-const RICHNESS_FIELDS: usize = 5;
+/// Number of richness fields checked at ingest time.
+const RICHNESS_FIELDS: u8 = 5;
 
 /// Maximum richness bonus for `Balanced` profile.
 const BALANCED_RICHNESS_MAX: f32 = 0.30;
@@ -49,43 +34,20 @@ const BALANCED_RICHNESS_MAX: f32 = 0.30;
 /// Maximum richness bonus for `Permissive` profile.
 const PERMISSIVE_RICHNESS_MAX: f32 = 0.50;
 
-// ── Known garbage values ─────────────────────────────────────────────
-
-/// Author values that are effectively useless.
-const GARBAGE_AUTHORS: &[&str] = &[
-    "unknown",
-    "unknown author",
-    "various",
-    "various authors",
-    "author",
-    "n/a",
-    "na",
-    "none",
-    "calibre",
-    "calibre ebook management",
-];
-
-/// Title values that indicate no real title was extracted.
-const GARBAGE_TITLES: &[&str] = &[
-    "unknown",
-    "unknown title",
-    "untitled",
-    "title",
-    "n/a",
-    "na",
-    "none",
-    "calibre",
-];
-
-/// Placeholder ISBNs to reject.
-const PLACEHOLDER_ISBNS: &[&str] = &[
-    "0000000000",
-    "0000000000000",
-    "9780000000000",
-    "1234567890",
-    "1234567890123",
-    "9781234567890",
-];
+/// Build [`ScoreWeights`] from a [`ScoringProfile`].
+fn weights_for_profile(profile: ScoringProfile) -> ScoreWeights {
+    let richness_max = match profile {
+        ScoringProfile::Strict => 0.0,
+        ScoringProfile::Balanced => BALANCED_RICHNESS_MAX,
+        ScoringProfile::Permissive => PERMISSIVE_RICHNESS_MAX,
+    };
+    ScoreWeights {
+        isbn_bonus: 0.4,
+        title_author_bonus: 0.3,
+        title_only_bonus: 0.1,
+        richness_max,
+    }
+}
 
 // ── Public API ───────────────────────────────────────────────────────
 
@@ -100,13 +62,20 @@ pub fn score_metadata(
     filename: Option<&ParsedFilename>,
     profile: &ScoringProfile,
 ) -> MetadataScore {
-    let mut confidence = 0.0_f32;
+    let signals = extract_ingest_signals(embedded, filename);
+    let weights = weights_for_profile(*profile);
+    let confidence = compute_quality_score(&signals, &weights);
+    let status = derive_metadata_status(confidence);
 
+    MetadataScore { confidence, status }
+}
+
+/// Extract quality signals from ingest-time metadata.
+fn extract_ingest_signals(
+    embedded: &ExtractedMetadata,
+    filename: Option<&ParsedFilename>,
+) -> QualitySignals {
     let has_valid_isbn = embedded.identifiers.iter().any(is_valid_identifier);
-
-    if has_valid_isbn {
-        confidence += ISBN_BONUS;
-    }
 
     let has_title = embedded
         .title
@@ -114,54 +83,44 @@ pub fn score_metadata(
         .is_some_and(|t| !is_garbage_title(t));
     let has_author = embedded.authors.iter().any(|a| !is_garbage_author(a));
 
-    if has_title && has_author {
-        confidence += TITLE_AUTHOR_BONUS;
-    } else if has_title {
-        confidence += TITLE_ONLY_BONUS;
-    }
-
-    // Cross-validation: do embedded and filename metadata agree?
-    if let Some(parsed) = filename {
-        if has_title {
-            if let Some(ref file_title) = parsed.title {
-                let emb_title = embedded.title.as_deref().unwrap_or_default();
-                if titles_match(emb_title, file_title) {
-                    confidence += CROSS_VALIDATION_BONUS;
-                }
-            }
+    // Cross-validation bonus
+    let context_bonus = filename.map_or(0.0, |parsed| {
+        if !has_title {
+            return 0.0;
         }
+        parsed.title.as_ref().map_or(0.0, |file_title| {
+            let emb_title = embedded.title.as_deref().unwrap_or_default();
+            if titles_match(emb_title, file_title) {
+                CROSS_VALIDATION_BONUS
+            } else {
+                0.0
+            }
+        })
+    });
+
+    // Richness: 5 ingest-time fields
+    let richness_present = richness_count(embedded);
+
+    QualitySignals {
+        has_title,
+        has_author,
+        has_strong_identifier: has_valid_isbn,
+        richness_present,
+        richness_total: RICHNESS_FIELDS,
+        context_bonus,
     }
-
-    // Metadata richness bonus (profile-dependent)
-    confidence += richness_bonus(embedded, *profile);
-
-    confidence = confidence.min(1.0);
-
-    let status = if confidence >= IDENTIFIED_THRESHOLD {
-        MetadataStatus::Identified
-    } else if confidence >= NEEDS_REVIEW_THRESHOLD {
-        MetadataStatus::NeedsReview
-    } else {
-        MetadataStatus::Unidentified
-    };
-
-    MetadataScore { confidence, status }
 }
 
-/// Compute a richness bonus based on how many optional metadata fields are populated.
-///
-/// Checked fields: description, language, publisher, subjects (at least 1),
-/// and publication year. The bonus scales linearly with the number of fields
-/// present, up to the profile's maximum.
-fn richness_bonus(embedded: &ExtractedMetadata, profile: ScoringProfile) -> f32 {
-    let max_bonus = match profile {
-        ScoringProfile::Strict => return 0.0,
-        ScoringProfile::Balanced => BALANCED_RICHNESS_MAX,
-        ScoringProfile::Permissive => PERMISSIVE_RICHNESS_MAX,
-    };
+// ── Validation helpers ───────────────────────────────────────────────
 
-    let mut count: u32 = 0;
+/// Check whether an extracted identifier is valid (delegates to shared engine).
+fn is_valid_identifier(id: &crate::ExtractedIdentifier) -> bool {
+    is_valid_identifier_by_type(id.identifier_type, &id.value)
+}
 
+/// Count how many ingest-time richness fields are populated.
+fn richness_count(embedded: &ExtractedMetadata) -> u8 {
+    let mut count: u8 = 0;
     if embedded
         .description
         .as_deref()
@@ -181,81 +140,7 @@ fn richness_bonus(embedded: &ExtractedMetadata, profile: ScoringProfile) -> f32 
     if embedded.publication_year.is_some() {
         count += 1;
     }
-
-    #[allow(clippy::cast_precision_loss)]
-    let ratio = count as f32 / RICHNESS_FIELDS as f32;
-    ratio * max_bonus
-}
-
-// ── Validation helpers ───────────────────────────────────────────────
-
-/// Check whether an identifier is a valid, non-placeholder ISBN with a
-/// correct checksum.
-fn is_valid_identifier(id: &crate::ExtractedIdentifier) -> bool {
-    match id.identifier_type {
-        IdentifierType::Isbn13 => {
-            !is_placeholder_isbn(&id.value) && validate_isbn13_checksum(&id.value)
-        }
-        IdentifierType::Isbn10 => {
-            !is_placeholder_isbn(&id.value) && validate_isbn10_checksum(&id.value)
-        }
-        // ASINs and other identifiers are always considered valid if present.
-        _ => true,
-    }
-}
-
-fn is_placeholder_isbn(isbn: &str) -> bool {
-    PLACEHOLDER_ISBNS.contains(&isbn)
-}
-
-/// Validate an ISBN-13 check digit (modulo 10).
-fn validate_isbn13_checksum(isbn: &str) -> bool {
-    let digits: Vec<u32> = isbn.chars().filter_map(|c| c.to_digit(10)).collect();
-    if digits.len() != 13 {
-        return false;
-    }
-    let sum: u32 = digits
-        .iter()
-        .enumerate()
-        .map(|(i, &d)| if i % 2 == 0 { d } else { d * 3 })
-        .sum();
-    sum % 10 == 0
-}
-
-/// Validate an ISBN-10 check digit (modulo 11).
-fn validate_isbn10_checksum(isbn: &str) -> bool {
-    let chars: Vec<char> = isbn.chars().collect();
-    if chars.len() != 10 {
-        return false;
-    }
-    let mut sum = 0u32;
-    for (i, &ch) in chars.iter().enumerate() {
-        let val = if ch == 'X' || ch == 'x' {
-            if i != 9 {
-                return false;
-            }
-            10
-        } else {
-            match ch.to_digit(10) {
-                Some(d) => d,
-                None => return false,
-            }
-        };
-        // i is at most 9 (ISBN-10 has exactly 10 chars), so the cast is safe.
-        let weight = 10 - u32::try_from(i).expect("index <= 9");
-        sum += val * weight;
-    }
-    sum % 11 == 0
-}
-
-fn is_garbage_title(title: &str) -> bool {
-    let lower = title.trim().to_lowercase();
-    GARBAGE_TITLES.contains(&lower.as_str())
-}
-
-fn is_garbage_author(author: &str) -> bool {
-    let lower = author.trim().to_lowercase();
-    GARBAGE_AUTHORS.contains(&lower.as_str())
+    count
 }
 
 /// Compare two titles for a fuzzy match.
@@ -284,7 +169,7 @@ fn normalise_for_comparison(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use archivis_core::models::MetadataSource;
+    use archivis_core::models::{IdentifierType, MetadataSource};
 
     use super::*;
     use crate::ExtractedIdentifier;
@@ -417,28 +302,6 @@ mod tests {
             "expected 0.3, got {}",
             score.confidence
         );
-    }
-
-    #[test]
-    fn isbn13_checksum_validation() {
-        // Valid: 978-3-16-148410-0
-        assert!(validate_isbn13_checksum("9783161484100"));
-        // Invalid: last digit wrong
-        assert!(!validate_isbn13_checksum("9783161484109"));
-        // Too short
-        assert!(!validate_isbn13_checksum("978316"));
-    }
-
-    #[test]
-    fn isbn10_checksum_validation() {
-        // Valid: 0-306-40615-2
-        assert!(validate_isbn10_checksum("0306406152"));
-        // Valid with X check digit: 0-8044-2957-X
-        assert!(validate_isbn10_checksum("080442957X"));
-        // Invalid: last digit wrong
-        assert!(!validate_isbn10_checksum("0306406153"));
-        // Too short
-        assert!(!validate_isbn10_checksum("03064"));
     }
 
     #[test]

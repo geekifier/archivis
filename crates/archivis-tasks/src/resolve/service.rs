@@ -1829,6 +1829,8 @@ impl<S: StorageBackend> ResolutionService<S> {
             self.finalize_staged_cover(book_id, staged).await;
         }
 
+        crate::resolve::quality::refresh_quality_score_best_effort(&self.db_pool, book_id).await;
+
         info!(
             book_id = %book_id,
             candidate_id = %candidate_id,
@@ -2111,6 +2113,8 @@ impl<S: StorageBackend> ResolutionService<S> {
         } else {
             book
         };
+
+        crate::resolve::quality::refresh_quality_score_best_effort(&self.db_pool, book_id).await;
 
         info!(
             book_id = %book_id,

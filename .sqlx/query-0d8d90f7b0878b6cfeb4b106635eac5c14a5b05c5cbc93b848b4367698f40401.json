@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE books SET metadata_quality_score = ? WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "0d8d90f7b0878b6cfeb4b106635eac5c14a5b05c5cbc93b848b4367698f40401"
+}
