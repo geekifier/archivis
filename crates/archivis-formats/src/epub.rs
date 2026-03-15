@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::io::{Cursor, Read};
 
 use archivis_core::errors::FormatError;
+use archivis_core::isbn;
 use archivis_core::models::{IdentifierType, MetadataSource};
 use quick_xml::events::Event;
 use quick_xml::Reader;
@@ -436,7 +437,7 @@ fn parse_identifier(raw: &str, scheme: Option<&str>, meta: &mut ExtractedMetadat
                 return;
             }
         }
-        if s_upper == "ASIN" {
+        if s_upper.contains("ASIN") && isbn::is_asin_format(&normalized) {
             meta.identifiers.push(ExtractedIdentifier {
                 identifier_type: IdentifierType::Asin,
                 value: normalized,
@@ -451,11 +452,8 @@ fn parse_identifier(raw: &str, scheme: Option<&str>, meta: &mut ExtractedMetadat
         return;
     }
 
-    // Check for ASIN pattern (10 alphanumeric chars starting with 'B').
-    if normalized.len() == 10
-        && normalized.starts_with('B')
-        && normalized.chars().all(|c| c.is_ascii_alphanumeric())
-    {
+    // Heuristic: ASIN pattern — must start with 'B' and pass format check.
+    if normalized.starts_with('B') && isbn::is_asin_format(&normalized) {
         meta.identifiers.push(ExtractedIdentifier {
             identifier_type: IdentifierType::Asin,
             value: normalized,
@@ -1129,6 +1127,65 @@ mod tests {
         assert_eq!(meta.identifiers.len(), 1);
         assert_eq!(meta.identifiers[0].identifier_type, IdentifierType::Asin);
         assert_eq!(meta.identifiers[0].value, "B08N5WRWNW");
+    }
+
+    #[test]
+    fn mobi_asin_scheme_with_valid_asin() {
+        let opf = r#"<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/"
+            xmlns:opf="http://www.idpf.org/2007/opf">
+    <dc:title>Converted Kindle Book</dc:title>
+    <dc:identifier opf:scheme="MOBI-ASIN">B08N5WRWNW</dc:identifier>
+  </metadata>
+  <manifest/>
+  <spine/>
+</package>"#;
+
+        let data = build_epub_with_opf(opf, &[]);
+        let meta = extract_epub_metadata(&data).unwrap();
+
+        assert_eq!(meta.identifiers.len(), 1);
+        assert_eq!(meta.identifiers[0].identifier_type, IdentifierType::Asin);
+        assert_eq!(meta.identifiers[0].value, "B08N5WRWNW");
+    }
+
+    #[test]
+    fn mobi_asin_scheme_with_calibre_uuid() {
+        let opf = r#"<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/"
+            xmlns:opf="http://www.idpf.org/2007/opf">
+    <dc:title>Calibre Converted Book</dc:title>
+    <dc:identifier opf:scheme="MOBI-ASIN">12345678-0123-4567-89ab-0123456789ab</dc:identifier>
+  </metadata>
+  <manifest/>
+  <spine/>
+</package>"#;
+
+        let data = build_epub_with_opf(opf, &[]);
+        let meta = extract_epub_metadata(&data).unwrap();
+
+        assert!(meta.identifiers.is_empty());
+    }
+
+    #[test]
+    fn asin_scheme_with_invalid_value() {
+        let opf = r#"<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/"
+            xmlns:opf="http://www.idpf.org/2007/opf">
+    <dc:title>Bad ASIN Book</dc:title>
+    <dc:identifier opf:scheme="ASIN">12345678-0123-4567-89ab-0123456789ab</dc:identifier>
+  </metadata>
+  <manifest/>
+  <spine/>
+</package>"#;
+
+        let data = build_epub_with_opf(opf, &[]);
+        let meta = extract_epub_metadata(&data).unwrap();
+
+        assert!(meta.identifiers.is_empty());
     }
 
     #[test]

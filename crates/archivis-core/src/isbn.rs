@@ -277,6 +277,11 @@ pub fn normalize_isbn(value: &str) -> String {
         .collect()
 }
 
+/// Check whether a value has valid ASIN format: exactly 10 ASCII-alphanumeric characters.
+pub fn is_asin_format(value: &str) -> bool {
+    value.len() == 10 && value.chars().all(|c| c.is_ascii_alphanumeric())
+}
+
 /// Normalize an ASIN value: strip whitespace, uppercase.
 pub fn normalize_asin(value: &str) -> String {
     value
@@ -411,5 +416,21 @@ mod tests {
     #[test]
     fn convert_invalid_isbn13_returns_none() {
         assert_eq!(isbn13_to_isbn10("9780441172710"), None);
+    }
+
+    // ── is_asin_format ──────────────────────────────────────────
+
+    #[test]
+    fn asin_format_valid() {
+        assert!(is_asin_format("B08N5WRWNW"));
+        assert!(is_asin_format("0451524934")); // numeric-only is also valid ASIN shape
+    }
+
+    #[test]
+    fn asin_format_rejects_wrong_length_and_non_alnum() {
+        assert!(!is_asin_format("B08N5")); // too short
+        assert!(!is_asin_format("B08N5WRWNW1")); // too long
+        assert!(!is_asin_format("B08N5-WRWN")); // contains hyphen
+        assert!(!is_asin_format("12345678-0123-4567-89ab-0123456789ab")); // UUID
     }
 }

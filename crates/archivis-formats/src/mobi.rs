@@ -1,4 +1,5 @@
 use archivis_core::errors::FormatError;
+use archivis_core::isbn;
 use archivis_core::models::{IdentifierType, MetadataSource};
 use tracing::warn;
 
@@ -54,10 +55,13 @@ pub fn extract_mobi_metadata(data: &[u8]) -> Result<ExtractedMetadata, FormatErr
 
     // ASIN
     if let Some(ref asin) = meta.asin {
-        extracted.identifiers.push(ExtractedIdentifier {
-            identifier_type: IdentifierType::Asin,
-            value: asin.clone(),
-        });
+        let normalized = isbn::normalize_asin(asin);
+        if isbn::is_asin_format(&normalized) {
+            extracted.identifiers.push(ExtractedIdentifier {
+                identifier_type: IdentifierType::Asin,
+                value: normalized,
+            });
+        }
     }
 
     // Cover image (fall back to thumbnail)
@@ -183,6 +187,24 @@ mod tests {
         };
         assert_eq!(id.identifier_type, IdentifierType::Asin);
         assert_eq!(id.value, "B08N5WRWNW");
+    }
+
+    /// Calibre-converted files routinely store a UUID in the MOBI ASIN EXTH
+    /// record. Verify that `normalize_asin` + `is_asin_format` rejects it so
+    /// no garbage identifier is pushed.
+    #[test]
+    fn asin_uuid_rejected() {
+        let uuid = "12345678-0123-4567-89ab-0123456789ab";
+        let normalized = isbn::normalize_asin(uuid);
+        assert!(!isbn::is_asin_format(&normalized));
+    }
+
+    /// A valid ASIN passes both normalize and format checks.
+    #[test]
+    fn asin_valid_accepted() {
+        let asin = "B08N5WRWNW";
+        let normalized = isbn::normalize_asin(asin);
+        assert!(isbn::is_asin_format(&normalized));
     }
 
     #[test]
