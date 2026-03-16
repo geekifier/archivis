@@ -44,7 +44,10 @@ use crate::provider::MetadataProvider;
 use crate::provider_names;
 use crate::registry::ProviderRegistry;
 use crate::similarity;
-use crate::types::{MetadataQuery, ProviderFeature, ProviderIdentifier, ProviderMetadata};
+use crate::types::{
+    normalize_author_name_casing, MetadataQuery, ProviderFeature, ProviderIdentifier,
+    ProviderMetadata,
+};
 
 // ── Scoring constants ───────────────────────────────────────────────
 
@@ -624,19 +627,7 @@ async fn query_providers_by_id(
         .collect();
 
     let results = futures::future::join_all(futs).await;
-    results
-        .into_iter()
-        .flatten()
-        .map(|(provider_name, metadata)| ScoredCandidate {
-            provider_name,
-            score: metadata.confidence,
-            match_reasons: Vec::new(),
-            signals: HashSet::new(),
-            tier: CandidateMatchTier::WeakMatch,
-            field_count: 0,
-            metadata,
-        })
-        .collect()
+    into_scored_candidates(results)
 }
 
 /// Query all providers by title+author search concurrently.
@@ -669,17 +660,28 @@ async fn query_providers_search(
         .collect();
 
     let results = futures::future::join_all(futs).await;
+    into_scored_candidates(results)
+}
+
+/// Flatten provider results into scored candidates, normalizing author name casing.
+fn into_scored_candidates(results: Vec<Vec<(String, ProviderMetadata)>>) -> Vec<ScoredCandidate> {
     results
         .into_iter()
         .flatten()
-        .map(|(provider_name, metadata)| ScoredCandidate {
-            provider_name,
-            score: metadata.confidence,
-            match_reasons: Vec::new(),
-            signals: HashSet::new(),
-            tier: CandidateMatchTier::WeakMatch,
-            field_count: 0,
-            metadata,
+        .map(|(provider_name, mut metadata)| {
+            // Normalize ALL-CAPS author names from upstream providers.
+            for author in &mut metadata.authors {
+                author.name = normalize_author_name_casing(&author.name);
+            }
+            ScoredCandidate {
+                provider_name,
+                score: metadata.confidence,
+                match_reasons: Vec::new(),
+                signals: HashSet::new(),
+                tier: CandidateMatchTier::WeakMatch,
+                field_count: 0,
+                metadata,
+            }
         })
         .collect()
 }
@@ -5377,6 +5379,90 @@ mod tests {
         assert!(
             best.signals.contains(&MatchSignal::LanguageMismatch),
             "expected LanguageMismatch signal"
+        );
+    }
+
+    // ── Author name casing normalization (resolver path) ──────────────
+
+    #[tokio::test]
+    async fn query_providers_by_id_normalizes_all_caps_author() {
+        let provider =
+            Arc::new(
+                StubProvider::new("open_library").with_isbn_results(vec![make_metadata(
+                    "open_library",
+                    "The Anatomist's Wife",
+                    &["ANNA LEE HUBER"],
+                    Some("9780425261347"),
+                    0.90,
+                )]),
+            );
+
+        let candidates = query_providers_by_id(
+            &[provider as Arc<dyn MetadataProvider>],
+            "9780425261347",
+            IdentifierLookup::Isbn,
+        )
+        .await;
+
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(
+            candidates[0].metadata.authors[0].name, "Anna Lee Huber",
+            "ALL-CAPS author name should be normalized"
+        );
+    }
+
+    #[tokio::test]
+    async fn query_providers_by_id_leaves_correct_case_unchanged() {
+        let provider =
+            Arc::new(
+                StubProvider::new("open_library").with_isbn_results(vec![make_metadata(
+                    "open_library",
+                    "The Anatomist's Wife",
+                    &["Anna Lee Huber"],
+                    Some("9780425261347"),
+                    0.90,
+                )]),
+            );
+
+        let candidates = query_providers_by_id(
+            &[provider as Arc<dyn MetadataProvider>],
+            "9780425261347",
+            IdentifierLookup::Isbn,
+        )
+        .await;
+
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(
+            candidates[0].metadata.authors[0].name, "Anna Lee Huber",
+            "correctly-cased name should pass through unchanged"
+        );
+    }
+
+    #[tokio::test]
+    async fn query_providers_search_normalizes_all_caps_author() {
+        let provider =
+            Arc::new(
+                StubProvider::new("open_library").with_search_results(vec![make_metadata(
+                    "open_library",
+                    "The Anatomist's Wife",
+                    &["ANNA LEE HUBER"],
+                    None,
+                    0.75,
+                )]),
+            );
+
+        let query = MetadataQuery {
+            title: Some("The Anatomist's Wife".to_string()),
+            ..Default::default()
+        };
+
+        let candidates =
+            query_providers_search(&[provider as Arc<dyn MetadataProvider>], &query).await;
+
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(
+            candidates[0].metadata.authors[0].name, "Anna Lee Huber",
+            "ALL-CAPS author name from search should be normalized"
         );
     }
 }

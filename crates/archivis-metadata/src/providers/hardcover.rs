@@ -55,6 +55,7 @@ query LookupISBN($isbn: String!) {
     book {
       id
       title
+      subtitle
       description
       rating
       image { url }
@@ -94,6 +95,7 @@ query LookupISBN($isbn: String!) {
     book {
       id
       title
+      subtitle
       description
       rating
       image { url }
@@ -133,6 +135,7 @@ query LookupASIN($asin: String!) {
     book {
       id
       title
+      subtitle
       description
       rating
       image { url }
@@ -171,6 +174,7 @@ query GetBooks($ids: [Int!]!) {
   books(where: { id: { _in: $ids } }) {
     id
     title
+    subtitle
     description
     rating
     contributions {
@@ -377,11 +381,16 @@ impl HardcoverProvider {
     fn extract_edition_fields(edition: &HcEdition) -> ProviderMetadata {
         let book = edition.book.as_ref();
 
-        let title = edition
+        let raw_title = edition
             .title
             .as_deref()
-            .or_else(|| book.and_then(|b| b.title.as_deref()))
-            .map(titlecase_title);
+            .or_else(|| book.and_then(|b| b.title.as_deref()));
+
+        let book_subtitle = book
+            .and_then(|b| b.subtitle.as_deref())
+            .filter(|s| !s.is_empty());
+
+        let (title, subtitle) = resolve_title_subtitle(raw_title, book_subtitle);
 
         let authors =
             extract_authors_from_contributions(book.and_then(|b| b.contributions.as_ref()));
@@ -426,7 +435,7 @@ impl HardcoverProvider {
         ProviderMetadata {
             provider_name: PROVIDER_NAME.to_string(),
             title,
-            subtitle: None, // Hardcover API doesn't provide subtitles.
+            subtitle,
             authors,
             description,
             language,
@@ -465,12 +474,11 @@ impl HardcoverProvider {
     /// Build `ProviderMetadata` from a Hardcover book (work) response
     /// returned by the search follow-up query.
     fn build_metadata_from_book(book: &HcBook, query: &MetadataQuery) -> ProviderMetadata {
-        let title = book.title.as_deref().map(titlecase_title);
-
+        let book_subtitle = book.subtitle.as_deref().filter(|s| !s.is_empty());
+        let (title, subtitle) = resolve_title_subtitle(book.title.as_deref(), book_subtitle);
         let authors = extract_authors_from_contributions(book.contributions.as_ref());
 
         let description = book.description.clone();
-
         let series = extract_series(book.book_series.as_ref());
 
         #[allow(clippy::cast_possible_truncation)]
@@ -520,47 +528,7 @@ impl HardcoverProvider {
         // `reading_format` ("Read"/"Listened") is a modality label, not a physical format.
         let physical_format = edition.and_then(|e| e.edition_format.clone());
 
-        // Collect ISBNs from both editions to avoid losing portable identifiers.
-        let mut identifiers = Vec::new();
-        for ed in [
-            book.default_ebook_edition.as_ref(),
-            book.default_physical_edition.as_ref(),
-        ]
-        .into_iter()
-        .flatten()
-        {
-            if let Some(ref isbn13) = ed.isbn_13 {
-                if !isbn13.is_empty()
-                    && !identifiers
-                        .iter()
-                        .any(|i: &ProviderIdentifier| i.value == *isbn13)
-                {
-                    identifiers.push(ProviderIdentifier {
-                        identifier_type: IdentifierType::Isbn13,
-                        value: isbn13.clone(),
-                    });
-                }
-            }
-            if let Some(ref isbn10) = ed.isbn_10 {
-                if !isbn10.is_empty()
-                    && !identifiers
-                        .iter()
-                        .any(|i: &ProviderIdentifier| i.value == *isbn10)
-                {
-                    identifiers.push(ProviderIdentifier {
-                        identifier_type: IdentifierType::Isbn10,
-                        value: isbn10.clone(),
-                    });
-                }
-            }
-        }
-
-        if let Some(book_id) = book.id {
-            identifiers.push(ProviderIdentifier {
-                identifier_type: IdentifierType::Hardcover,
-                value: book_id.to_string(),
-            });
-        }
+        let identifiers = collect_book_identifiers(book);
 
         // Compute confidence based on title match quality.
         let confidence =
@@ -569,7 +537,7 @@ impl HardcoverProvider {
         ProviderMetadata {
             provider_name: PROVIDER_NAME.to_string(),
             title,
-            subtitle: None, // Hardcover API doesn't provide subtitles.
+            subtitle,
             authors,
             description,
             language,
@@ -853,6 +821,7 @@ struct HcBookInEdition {
     #[serde(default, deserialize_with = "deserialize_optional_i64")]
     id: Option<i64>,
     title: Option<String>,
+    subtitle: Option<String>,
     description: Option<String>,
     rating: Option<f64>,
     book_series: Option<Vec<HcBookSeries>>,
@@ -890,6 +859,7 @@ struct HcBook {
     #[serde(default, deserialize_with = "deserialize_optional_i64")]
     id: Option<i64>,
     title: Option<String>,
+    subtitle: Option<String>,
     description: Option<String>,
     rating: Option<f64>,
     contributions: Option<Vec<HcContribution>>,
@@ -1090,6 +1060,51 @@ fn build_asin_edition_identifiers(
     identifiers
 }
 
+/// Collect ISBNs from both default editions of a book, deduplicating them,
+/// and append the Hardcover book ID.
+fn collect_book_identifiers(book: &HcBook) -> Vec<ProviderIdentifier> {
+    let mut identifiers = Vec::new();
+    for ed in [
+        book.default_ebook_edition.as_ref(),
+        book.default_physical_edition.as_ref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if let Some(ref isbn13) = ed.isbn_13 {
+            if !isbn13.is_empty()
+                && !identifiers
+                    .iter()
+                    .any(|i: &ProviderIdentifier| i.value == *isbn13)
+            {
+                identifiers.push(ProviderIdentifier {
+                    identifier_type: IdentifierType::Isbn13,
+                    value: isbn13.clone(),
+                });
+            }
+        }
+        if let Some(ref isbn10) = ed.isbn_10 {
+            if !isbn10.is_empty()
+                && !identifiers
+                    .iter()
+                    .any(|i: &ProviderIdentifier| i.value == *isbn10)
+            {
+                identifiers.push(ProviderIdentifier {
+                    identifier_type: IdentifierType::Isbn10,
+                    value: isbn10.clone(),
+                });
+            }
+        }
+    }
+    if let Some(book_id) = book.id {
+        identifiers.push(ProviderIdentifier {
+            identifier_type: IdentifierType::Hardcover,
+            value: book_id.to_string(),
+        });
+    }
+    identifiers
+}
+
 /// Parse `cached_tags` from a JSON value.
 ///
 /// The `cached_tags` field is a JSON value that may be:
@@ -1256,6 +1271,51 @@ fn normalize_for_comparison(s: &str) -> String {
     let start = usize::from(collapsed.first().is_some_and(|w| articles.contains(w)));
 
     collapsed[start..].join(" ")
+}
+
+/// Resolve a `(title, subtitle)` pair from a raw compound title and an
+/// optional API subtitle value.
+///
+/// If `book_subtitle` is `Some` and can be located inside `compound_title`
+/// via [`split_on_subtitle`], returns the split titles (both titlecased).
+/// Otherwise returns the full compound title as the title with `None`
+/// subtitle. If `compound_title` is `None`, returns `(None, None)`.
+fn resolve_title_subtitle(
+    compound_title: Option<&str>,
+    book_subtitle: Option<&str>,
+) -> (Option<String>, Option<String>) {
+    compound_title.map_or((None, None), |t| {
+        match book_subtitle.and_then(|sub| split_on_subtitle(t, sub)) {
+            Some((main, sub)) => (Some(titlecase_title(main)), Some(titlecase_title(sub))),
+            None => (Some(titlecase_title(t)), None),
+        }
+    })
+}
+
+/// Split a compound title into `(main_title, subtitle)` using the known
+/// subtitle string as a search anchor.
+///
+/// Searches for `{sep}{subtitle}` (case-insensitive) within `compound_title`
+/// for each standard separator (`": "`, `" - "`, `" — "`). If found at a
+/// position that leaves a non-empty main title, returns the cleaned title and
+/// the subtitle (preserving the API's original casing). Returns `None` if the
+/// subtitle cannot be located in the compound title, treating it as potentially
+/// invalid data (e.g. a series name rather than a true subtitle).
+fn split_on_subtitle<'a, 'b>(
+    compound_title: &'a str,
+    subtitle: &'b str,
+) -> Option<(&'a str, &'b str)> {
+    let sub_lower = subtitle.to_lowercase();
+    for sep in [": ", " - ", " \u{2014} "] {
+        for (pos, _) in compound_title.match_indices(sep) {
+            let main = compound_title[..pos].trim();
+            let after_sep = &compound_title[pos + sep.len()..];
+            if !main.is_empty() && after_sep.to_lowercase().starts_with(&sub_lower) {
+                return Some((main, subtitle));
+            }
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -2083,6 +2143,7 @@ mod tests {
         HcBook {
             id: Some(1),
             title: Some("Test Book".to_string()),
+            subtitle: None,
             description: None,
             rating: None,
             contributions: None,
@@ -2231,6 +2292,222 @@ mod tests {
             metadata.physical_format.as_deref(),
             Some("ebook"),
             "`edition_format` should populate `physical_format`"
+        );
+    }
+
+    // ── split_on_subtitle ────────────────────────────────────────────
+
+    #[test]
+    fn split_on_subtitle_colon_separator() {
+        let result = split_on_subtitle(
+            "The Lean Startup: How Today's Entrepreneurs Use Continuous Innovation",
+            "How Today's Entrepreneurs Use Continuous Innovation",
+        );
+        assert_eq!(
+            result,
+            Some((
+                "The Lean Startup",
+                "How Today's Entrepreneurs Use Continuous Innovation"
+            ))
+        );
+    }
+
+    #[test]
+    fn split_on_subtitle_dash_separator() {
+        let result = split_on_subtitle(
+            "Sapiens - A Brief History of Humankind",
+            "A Brief History of Humankind",
+        );
+        assert_eq!(result, Some(("Sapiens", "A Brief History of Humankind")));
+    }
+
+    #[test]
+    fn split_on_subtitle_em_dash_separator() {
+        let result = split_on_subtitle(
+            "Sapiens \u{2014} A Brief History of Humankind",
+            "A Brief History of Humankind",
+        );
+        assert_eq!(result, Some(("Sapiens", "A Brief History of Humankind")));
+    }
+
+    #[test]
+    fn split_on_subtitle_case_insensitive_match_preserves_original_casing() {
+        let result = split_on_subtitle(
+            "Sapiens: A Brief History of Humankind",
+            "a brief history of humankind",
+        );
+        // Subtitle is found case-insensitively; original subtitle casing is returned.
+        assert_eq!(result, Some(("Sapiens", "a brief history of humankind")));
+    }
+
+    #[test]
+    fn split_on_subtitle_not_found_returns_none() {
+        // Subtitle is a series name that doesn't appear as suffix in the title.
+        let result = split_on_subtitle("The Lean Startup", "Lean Series");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn split_on_subtitle_title_already_clean_returns_none() {
+        // Title has no separator — subtitle can't be anchored.
+        let result = split_on_subtitle("Sapiens", "A Brief History of Humankind");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn split_on_subtitle_empty_main_title_returns_none() {
+        // Degenerate: subtitle IS the full title.
+        let result = split_on_subtitle(": Just a Subtitle", "Just a Subtitle");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn split_on_subtitle_unicode_before_separator_is_safe() {
+        let result = split_on_subtitle("İstanbul: Bir Hatira", "Bir Hatira");
+        assert_eq!(result, Some(("İstanbul", "Bir Hatira")));
+    }
+
+    // ── Subtitle extraction integration ─────────────────────────────
+
+    #[test]
+    fn extract_edition_fields_splits_subtitle_from_book() {
+        let json = r#"{
+            "editions": [{
+                "id": 1,
+                "isbn_13": "9780307887894",
+                "isbn_10": null,
+                "asin": null,
+                "title": "The Lean Startup: How Today's Entrepreneurs Use Continuous Innovation to Create Radically Successful Businesses",
+                "pages": 336,
+                "release_date": "2011-09-13",
+                "edition_format": null,
+                "reading_format": null,
+                "language": { "language": "English" },
+                "publisher": { "name": "Crown Business" },
+                "cached_image": null,
+                "cached_contributors": null,
+                "book": {
+                    "id": 42,
+                    "title": "The Lean Startup: How Today's Entrepreneurs Use Continuous Innovation to Create Radically Successful Businesses",
+                    "subtitle": "How Today's Entrepreneurs Use Continuous Innovation to Create Radically Successful Businesses",
+                    "description": null,
+                    "rating": 3.9,
+                    "book_series": [],
+                    "contributions": [
+                        { "contribution": "Author", "author": { "name": "Eric Ries" } }
+                    ],
+                    "cached_tags": null
+                }
+            }]
+        }"#;
+
+        let response: EditionsResponse = serde_json::from_str(json).unwrap();
+        let edition = &response.editions[0];
+        let metadata = HardcoverProvider::build_metadata_from_edition(edition, "9780307887894");
+
+        assert_eq!(metadata.title.as_deref(), Some("The Lean Startup"));
+        assert_eq!(
+            metadata.subtitle.as_deref(),
+            Some(
+                "How Today's Entrepreneurs Use Continuous Innovation to Create Radically Successful Businesses"
+            )
+        );
+    }
+
+    #[test]
+    fn extract_edition_fields_no_subtitle_leaves_title_intact() {
+        let json = r#"{
+            "editions": [{
+                "id": 1,
+                "isbn_13": "9780441172719",
+                "isbn_10": null,
+                "asin": null,
+                "title": "Dune",
+                "pages": 412,
+                "release_date": null,
+                "edition_format": null,
+                "reading_format": null,
+                "language": null,
+                "publisher": null,
+                "cached_image": null,
+                "cached_contributors": null,
+                "book": {
+                    "id": 99,
+                    "title": "Dune",
+                    "subtitle": null,
+                    "description": null,
+                    "rating": null,
+                    "book_series": [],
+                    "contributions": [],
+                    "cached_tags": null
+                }
+            }]
+        }"#;
+
+        let response: EditionsResponse = serde_json::from_str(json).unwrap();
+        let edition = &response.editions[0];
+        let metadata = HardcoverProvider::build_metadata_from_edition(edition, "9780441172719");
+
+        assert_eq!(metadata.title.as_deref(), Some("Dune"));
+        assert!(metadata.subtitle.is_none());
+    }
+
+    #[test]
+    fn build_metadata_from_book_splits_subtitle() {
+        let book = HcBook {
+            id: Some(100),
+            title: Some("Sapiens: A Brief History of Humankind".to_string()),
+            subtitle: Some("A Brief History of Humankind".to_string()),
+            description: None,
+            rating: None,
+            contributions: None,
+            book_series: None,
+            default_ebook_edition: None,
+            default_physical_edition: None,
+            image: None,
+            cached_tags: None,
+        };
+        let query = MetadataQuery {
+            title: Some("Sapiens".to_string()),
+            ..Default::default()
+        };
+
+        let metadata = HardcoverProvider::build_metadata_from_book(&book, &query);
+
+        assert_eq!(metadata.title.as_deref(), Some("Sapiens"));
+        assert_eq!(
+            metadata.subtitle.as_deref(),
+            Some("A Brief History of Humankind")
+        );
+    }
+
+    #[test]
+    fn build_metadata_from_book_bogus_subtitle_ignored() {
+        // `book.subtitle` contains a series name, not in the title as a suffix.
+        let book = HcBook {
+            id: Some(101),
+            title: Some("Dune".to_string()),
+            subtitle: Some("Dune Chronicles".to_string()),
+            description: None,
+            rating: None,
+            contributions: None,
+            book_series: None,
+            default_ebook_edition: None,
+            default_physical_edition: None,
+            image: None,
+            cached_tags: None,
+        };
+        let query = MetadataQuery {
+            title: Some("Dune".to_string()),
+            ..Default::default()
+        };
+
+        let metadata = HardcoverProvider::build_metadata_from_book(&book, &query);
+
+        assert_eq!(metadata.title.as_deref(), Some("Dune"));
+        assert!(
+            metadata.subtitle.is_none(),
+            "series name in subtitle field should not produce a subtitle"
         );
     }
 }

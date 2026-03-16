@@ -218,6 +218,50 @@ pub fn titlecase_title(s: &str) -> String {
     result
 }
 
+/// Normalize casing of an author name returned by a metadata provider.
+///
+/// **Only acts when two conditions both hold:**
+/// 1. The name contains only letters and whitespace (no periods, hyphens,
+///    apostrophes, or other punctuation). Any punctuation is a signal that
+///    the name needs more careful handling (initials, hyphenated names,
+///    prefixes like "O'") — those cases are explicitly deferred to v2.
+/// 2. Every alphabetic character is uppercase (ALL CAPS).
+///
+/// Returns the input unchanged for mixed-case names, correctly-cased names,
+/// or any name containing punctuation. Safe to call unconditionally.
+pub fn normalize_author_name_casing(name: &str) -> String {
+    if name.is_empty() {
+        return name.to_string();
+    }
+    // Guard: any non-alpha, non-whitespace character (period, hyphen,
+    // apostrophe, comma…) means the name is out of v1 scope. Return as-is.
+    if !name.chars().all(|c| c.is_alphabetic() || c.is_whitespace()) {
+        return name.to_string();
+    }
+    // Only act when entire name is ALL CAPS.
+    if !name.chars().any(char::is_alphabetic)
+        || !name.chars().all(|c| !c.is_alphabetic() || c.is_uppercase())
+    {
+        return name.to_string();
+    }
+    // Capitalize first letter of every whitespace-separated word.
+    name.split_inclusive(char::is_whitespace)
+        .map(|chunk| {
+            let word = chunk.trim();
+            if word.is_empty() {
+                return chunk.to_string();
+            }
+            let lower = word.to_lowercase();
+            let mut chars = lower.chars();
+            let cap = chars
+                .next()
+                .map(|c| c.to_uppercase().to_string() + chars.as_str())
+                .unwrap_or_default();
+            cap + &chunk[chunk.trim_end().len()..]
+        })
+        .collect()
+}
+
 /// A search query for looking up book metadata.
 #[derive(Debug, Clone, Default)]
 pub struct MetadataQuery {
@@ -362,6 +406,43 @@ mod tests {
     fn titlecase_single_word() {
         assert_eq!(titlecase_title("dune"), "Dune");
         assert_eq!(titlecase_title("the"), "The");
+    }
+
+    // ── normalize_author_name_casing ──────────────────────────────
+
+    #[test]
+    fn normalize_author_all_caps() {
+        assert_eq!(
+            normalize_author_name_casing("ANNA LEE HUBER"),
+            "Anna Lee Huber"
+        );
+    }
+
+    #[test]
+    fn normalize_author_already_correct() {
+        assert_eq!(
+            normalize_author_name_casing("Anna Lee Huber"),
+            "Anna Lee Huber"
+        );
+    }
+
+    #[test]
+    fn normalize_author_single_word_caps() {
+        assert_eq!(normalize_author_name_casing("TOLKIEN"), "Tolkien");
+    }
+
+    #[test]
+    fn normalize_author_initials_all_caps_unchanged() {
+        // Punctuation present → deferred to v2, returned as-is.
+        assert_eq!(
+            normalize_author_name_casing("J.R.R. TOLKIEN"),
+            "J.R.R. TOLKIEN"
+        );
+    }
+
+    #[test]
+    fn normalize_author_empty() {
+        assert_eq!(normalize_author_name_casing(""), "");
     }
 
     // ── ProviderIdentifier::isbn ──────────────────────────────────
