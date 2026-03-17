@@ -8,7 +8,7 @@
 //! At least one of these tests is expected to FAIL on the current code,
 //! proving the regression exists and guiding the fix.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 use archivis_core::models::{
@@ -197,6 +197,8 @@ async fn asin_book_not_auto_applied_via_fuzzy_search() {
             rating: None,
             physical_format: None,
             confidence: 0.75,
+            merged_from: Vec::new(),
+            field_sources: BTreeMap::new(),
         }],
     });
 
@@ -284,6 +286,8 @@ async fn fuzzy_only_single_candidate_remains_needs_review() {
             rating: None,
             physical_format: None,
             confidence: 0.75,
+            merged_from: Vec::new(),
+            field_sources: BTreeMap::new(),
         }],
     });
 
@@ -351,6 +355,8 @@ async fn strong_isbn_match_auto_applies_correctly() {
             rating: None,
             physical_format: None,
             confidence: 0.95,
+            merged_from: Vec::new(),
+            field_sources: BTreeMap::new(),
         }],
         search_results: vec![],
     });
@@ -461,6 +467,8 @@ async fn stale_author_replaced_under_strong_isbn_proof() {
         rating: None,
         physical_format: None,
         confidence: 0.95,
+        merged_from: Vec::new(),
+        field_sources: BTreeMap::new(),
     };
     let meta_json = serde_json::to_value(&correct_meta).unwrap();
     let candidate = IdentificationCandidate::new(
@@ -537,6 +545,8 @@ async fn strong_match_enriches_existing_book() {
             rating: None,
             physical_format: None,
             confidence: 0.95,
+            merged_from: Vec::new(),
+            field_sources: BTreeMap::new(),
         }],
         search_results: vec![],
     });
@@ -623,6 +633,8 @@ async fn protected_core_conflict_becomes_disputed() {
             rating: None,
             physical_format: None,
             confidence: 0.95,
+            merged_from: Vec::new(),
+            field_sources: BTreeMap::new(),
         }],
         search_results: vec![],
     });
@@ -633,6 +645,7 @@ async fn protected_core_conflict_becomes_disputed() {
     book.metadata_provenance.title = Some(FieldProvenance {
         origin: MetadataSource::User,
         protected: true,
+        applied_candidate_id: None,
     });
     BookRepository::create(&pool, &book).await.unwrap();
 
@@ -718,6 +731,8 @@ async fn lady_of_the_lake_article_and_translator_regression() {
             rating: None,
             physical_format: None,
             confidence: 0.95,
+            merged_from: Vec::new(),
+            field_sources: BTreeMap::new(),
         }],
         search_results: vec![],
     });
@@ -818,6 +833,8 @@ async fn reject_all_restores_confirmed_outcome() {
             rating: None,
             physical_format: None,
             confidence: 0.95,
+            merged_from: Vec::new(),
+            field_sources: BTreeMap::new(),
         }],
         search_results: vec![],
     });
@@ -945,6 +962,8 @@ async fn reject_all_restores_none_outcome_for_fresh_book() {
             rating: None,
             physical_format: None,
             confidence: 0.7,
+            merged_from: Vec::new(),
+            field_sources: BTreeMap::new(),
         }],
     });
 
@@ -1042,6 +1061,8 @@ async fn apply_then_undo_restores_baseline_resolution_outcome() {
             rating: None,
             physical_format: None,
             confidence: 0.7,
+            merged_from: Vec::new(),
+            field_sources: BTreeMap::new(),
         }],
     });
 
@@ -1178,6 +1199,8 @@ async fn trust_untrust_recomputes_from_applied_candidate() {
             rating: None,
             physical_format: None,
             confidence: 0.95,
+            merged_from: Vec::new(),
+            field_sources: BTreeMap::new(),
         }],
         search_results: vec![],
     });
@@ -1211,6 +1234,8 @@ async fn trust_untrust_recomputes_from_applied_candidate() {
             rating: None,
             physical_format: None,
             confidence: 0.95,
+            merged_from: Vec::new(),
+            field_sources: BTreeMap::new(),
         },
     )
     .await;
@@ -1362,6 +1387,8 @@ async fn trust_during_review_untrust_recomputes_applied_candidate() {
             rating: None,
             physical_format: None,
             confidence: 0.95,
+            merged_from: Vec::new(),
+            field_sources: BTreeMap::new(),
         }],
         search_results: vec![],
     });
@@ -1460,6 +1487,8 @@ async fn trust_during_review_untrust_recomputes_with_identifiers() {
             rating: None,
             physical_format: None,
             confidence: 0.95,
+            merged_from: Vec::new(),
+            field_sources: BTreeMap::new(),
         }],
         search_results: vec![],
     });
@@ -1473,6 +1502,7 @@ async fn trust_during_review_untrust_recomputes_with_identifiers() {
     book.metadata_provenance.title = Some(FieldProvenance {
         origin: MetadataSource::User,
         protected: true,
+        applied_candidate_id: None,
     });
     book.resolution_outcome = Some(BookResolutionOutcome::Confirmed);
     book.metadata_status = MetadataStatus::Identified;
@@ -1566,6 +1596,8 @@ async fn trust_supersedes_active_review_run() {
             rating: None,
             physical_format: None,
             confidence: 0.95,
+            merged_from: Vec::new(),
+            field_sources: BTreeMap::new(),
         }],
         search_results: vec![],
     });
@@ -1724,6 +1756,8 @@ async fn untrust_original_bug_path_needs_review_with_identifiers() {
             rating: None,
             physical_format: None,
             confidence: 0.7,
+            merged_from: Vec::new(),
+            field_sources: BTreeMap::new(),
         }],
     });
 

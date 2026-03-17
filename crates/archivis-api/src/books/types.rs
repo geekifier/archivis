@@ -376,6 +376,8 @@ pub struct FieldProvenanceResponse {
     #[schema(value_type = Object)]
     pub origin: MetadataSource,
     pub protected: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub applied_candidate_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -557,6 +559,7 @@ impl From<FieldProvenance> for FieldProvenanceResponse {
         Self {
             origin: provenance.origin,
             protected: provenance.protected,
+            applied_candidate_id: provenance.applied_candidate_id,
         }
     }
 }

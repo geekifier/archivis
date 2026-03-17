@@ -74,7 +74,8 @@
         if (candidate.isbn != null) sel.identifiers = true;
         if (candidate.series != null) sel.series = true;
         if (candidate.publisher != null) sel.publisher = true;
-        if (candidate.description != null) sel.description = true;
+        if (candidate.description != null)
+          sel.description = !warningFields(candidate.match_reasons).has('description');
         if (candidate.cover_url != null) sel.cover = true;
         fieldSelections[candidate.id] = sel;
       }
@@ -185,6 +186,11 @@
             >
               {providerLabel(candidate.provider_name)}
             </span>
+            {#if candidate.is_composite}
+              <span class="inline-flex rounded-full bg-purple-100 px-2 py-0.5 text-xs font-medium text-purple-700 dark:bg-purple-900/30 dark:text-purple-300">
+                Merged
+              </span>
+            {/if}
             {#if candidate.tier}
               <span class="inline-flex rounded-full px-2 py-0.5 text-xs font-medium {tierColorClass(candidate.tier)}">
                 {tierLabel(candidate.tier)}

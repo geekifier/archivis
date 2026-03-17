@@ -417,6 +417,44 @@ describe('CandidateReview', () => {
     expect(screen.getByText('412')).toBeInTheDocument();
   });
 
+  it('renders "Merged" badge when `is_composite` is true', () => {
+    const candidate = createCandidateResponse({
+      id: 'c1',
+      status: 'pending',
+      is_composite: true,
+      title: 'Composite Candidate'
+    });
+    render(CandidateReview, {
+      props: {
+        book,
+        candidates: [candidate],
+        onapply: vi.fn<ApplyFn>(),
+        onreject: vi.fn<RejectFn>(),
+        onundo: vi.fn<UndoFn>(),
+      }
+    });
+    expect(screen.getByText('Merged')).toBeInTheDocument();
+  });
+
+  it('does not render "Merged" badge when `is_composite` is false', () => {
+    const candidate = createCandidateResponse({
+      id: 'c1',
+      status: 'pending',
+      is_composite: false,
+      title: 'Regular Candidate'
+    });
+    render(CandidateReview, {
+      props: {
+        book,
+        candidates: [candidate],
+        onapply: vi.fn<ApplyFn>(),
+        onreject: vi.fn<RejectFn>(),
+        onundo: vi.fn<UndoFn>(),
+      }
+    });
+    expect(screen.queryByText('Merged')).not.toBeInTheDocument();
+  });
+
   it('when a candidate is applied, pending candidates still show Apply/Reject buttons', () => {
     const applied = createCandidateResponse({
       id: 'c1',

@@ -1,6 +1,6 @@
 //! Integration tests for cover handling during resolution candidate application.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 use archivis_core::models::{Book, BookFile, BookFormat, IdentificationCandidate};
@@ -67,6 +67,8 @@ fn provider_meta_with_cover(cover_url: &str) -> ProviderMetadata {
         rating: None,
         physical_format: None,
         confidence: 0.95,
+        merged_from: Vec::new(),
+        field_sources: BTreeMap::new(),
     }
 }
 

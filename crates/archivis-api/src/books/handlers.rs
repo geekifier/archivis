@@ -71,6 +71,7 @@ fn user_field_provenance() -> FieldProvenance {
     FieldProvenance {
         origin: MetadataSource::User,
         protected: true,
+        applied_candidate_id: None,
     }
 }
 
@@ -1999,6 +2000,7 @@ mod tests {
         book.metadata_provenance.title = Some(FieldProvenance {
             origin: MetadataSource::Provider("seed".into()),
             protected: false,
+            applied_candidate_id: None,
         });
         BookRepository::create(state.db_pool(), &book)
             .await
@@ -2037,6 +2039,7 @@ mod tests {
         book.metadata_provenance.title = Some(FieldProvenance {
             origin: MetadataSource::Embedded,
             protected: true,
+            applied_candidate_id: None,
         });
         BookRepository::create(state.db_pool(), &book)
             .await

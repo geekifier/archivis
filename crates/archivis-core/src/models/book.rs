@@ -32,6 +32,8 @@ pub struct MetadataProvenance {
 pub struct FieldProvenance {
     pub origin: MetadataSource,
     pub protected: bool,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub applied_candidate_id: Option<Uuid>,
 }
 
 /// A logical book in the library. May have multiple associated files (formats),
@@ -240,6 +242,7 @@ mod tests {
             title: Some(FieldProvenance {
                 origin: MetadataSource::User,
                 protected: true,
+                applied_candidate_id: None,
             }),
             ..MetadataProvenance::default()
         };
@@ -249,5 +252,28 @@ mod tests {
             json,
             r#"{"title":{"origin":{"type":"user"},"protected":true}}"#
         );
+    }
+
+    #[test]
+    fn field_provenance_deserializes_without_candidate_id() {
+        // Old JSON without `applied_candidate_id` should deserialize with None.
+        let json = r#"{"origin":{"type":"provider","name":"hardcover"},"protected":false}"#;
+        let fp: FieldProvenance = serde_json::from_str(json).unwrap();
+        assert!(fp.applied_candidate_id.is_none());
+        assert!(!fp.protected);
+    }
+
+    #[test]
+    fn field_provenance_with_candidate_id_roundtrip() {
+        let id = Uuid::new_v4();
+        let fp = FieldProvenance {
+            origin: MetadataSource::Provider("hardcover".to_string()),
+            protected: false,
+            applied_candidate_id: Some(id),
+        };
+        let json = serde_json::to_string(&fp).unwrap();
+        assert!(json.contains("applied_candidate_id"));
+        let deser: FieldProvenance = serde_json::from_str(&json).unwrap();
+        assert_eq!(deser.applied_candidate_id, Some(id));
     }
 }

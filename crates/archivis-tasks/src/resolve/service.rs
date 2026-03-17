@@ -1072,8 +1072,6 @@ impl<S: StorageBackend> ResolutionService<S> {
                 .find(|entry| entry.series.name.eq_ignore_ascii_case(&prov_series.name))
                 .map(|entry| (entry.series.id, entry.position))
         });
-        let provider_provenance = provider_field_provenance(&provider_meta.provider_name);
-
         if plan.should_apply(PlannedField::Title) {
             if let Some(title) = sanitize_text(
                 provider_meta.title.as_deref().unwrap_or_default(),
@@ -1139,16 +1137,19 @@ impl<S: StorageBackend> ResolutionService<S> {
         let should_update_authors = plan.should_apply(PlannedField::Authors);
         let should_update_series = plan.should_apply(PlannedField::Series);
 
-        // Set provenance for all changed fields
-        set_scalar_provenance(&before_book, &mut book, &provider_provenance);
+        // Set per-field provenance for all changed fields
+        set_scalar_provenance(&before_book, &mut book, provider_meta, candidate_id);
         if book.title != before_book.title {
-            book.metadata_provenance.title = Some(provider_provenance.clone());
+            book.metadata_provenance.title =
+                Some(field_provenance_for(provider_meta, "title", candidate_id));
         }
         if should_update_authors {
-            book.metadata_provenance.authors = Some(provider_provenance.clone());
+            book.metadata_provenance.authors =
+                Some(field_provenance_for(provider_meta, "authors", candidate_id));
         }
         if should_update_series {
-            book.metadata_provenance.series = Some(provider_provenance.clone());
+            book.metadata_provenance.series =
+                Some(field_provenance_for(provider_meta, "series", candidate_id));
         }
 
         // Build changeset from actual mutations
@@ -1683,20 +1684,29 @@ impl<S: StorageBackend> ResolutionService<S> {
                     && !is_protected(provenance_snapshot.publisher.as_ref())))
             && provider_meta.publisher.is_some();
 
-        // Set provenance for changed scalar fields
-        let provider_prov = provider_field_provenance(&provider_meta.provider_name);
+        // Set per-field provenance for changed scalar fields
         if book.title != before_book.title {
-            book.metadata_provenance.title = Some(provider_prov.clone());
+            book.metadata_provenance.title =
+                Some(field_provenance_for(&provider_meta, "title", candidate_id));
         }
-        set_scalar_provenance(&before_book, &mut book, &provider_prov);
+        set_scalar_provenance(&before_book, &mut book, &provider_meta, candidate_id);
         if should_update_publisher {
-            book.metadata_provenance.publisher = Some(provider_prov.clone());
+            book.metadata_provenance.publisher = Some(field_provenance_for(
+                &provider_meta,
+                "publisher",
+                candidate_id,
+            ));
         }
         if should_update_authors {
-            book.metadata_provenance.authors = Some(provider_prov.clone());
+            book.metadata_provenance.authors = Some(field_provenance_for(
+                &provider_meta,
+                "authors",
+                candidate_id,
+            ));
         }
         if should_update_series {
-            book.metadata_provenance.series = Some(provider_prov.clone());
+            book.metadata_provenance.series =
+                Some(field_provenance_for(&provider_meta, "series", candidate_id));
         }
 
         let staged_cover = if should_apply_cover {
@@ -1707,7 +1717,11 @@ impl<S: StorageBackend> ResolutionService<S> {
                 {
                     Ok(staged) => {
                         book.cover_path = Some(staged.new_path.clone());
-                        book.metadata_provenance.cover = Some(provider_prov.clone());
+                        book.metadata_provenance.cover = Some(field_provenance_for(
+                            &provider_meta,
+                            "cover_url",
+                            candidate_id,
+                        ));
                         Some(staged)
                     }
                     Err(error) => {
@@ -1993,11 +2007,12 @@ impl<S: StorageBackend> ResolutionService<S> {
             .await
             .map_err(|e| TaskError::Failed(format!("failed to load book: {e}")))?;
 
-        // Provenance-guarded scalar field restore
+        // Provenance-guarded scalar field restore (candidate-ID primary, provider-name fallback)
         let mut title_restored = false;
         if let Some(ref entry) = changeset.title {
-            if provenance_matches_provider(
+            if provenance_matches_candidate(
                 book.metadata_provenance.title.as_ref(),
+                candidate_id,
                 &changeset.provider_name,
             ) {
                 book.title = entry.old_value.clone();
@@ -2011,10 +2026,11 @@ impl<S: StorageBackend> ResolutionService<S> {
                 book.sort_title = entry.old_value.clone();
             }
         }
-        undo_scalar_fields(&mut book, &changeset, &changeset.provider_name);
+        undo_scalar_fields(&mut book, &changeset, candidate_id);
         if let Some(ref entry) = changeset.publisher_id {
-            if provenance_matches_provider(
+            if provenance_matches_candidate(
                 book.metadata_provenance.publisher.as_ref(),
+                candidate_id,
                 &changeset.provider_name,
             ) {
                 book.publisher_id = entry.old_value;
@@ -2047,8 +2063,9 @@ impl<S: StorageBackend> ResolutionService<S> {
 
             // Restore authors if provenance still matches
             if let Some(ref entry) = changeset.authors {
-                if provenance_matches_provider(
+                if provenance_matches_candidate(
                     book.metadata_provenance.authors.as_ref(),
+                    candidate_id,
                     &changeset.provider_name,
                 ) {
                     BookRepository::clear_authors_conn(tx.as_mut(), book_id)
@@ -2096,8 +2113,9 @@ impl<S: StorageBackend> ResolutionService<S> {
 
             // Restore series if provenance still matches
             if let Some(ref entry) = changeset.series {
-                if provenance_matches_provider(
+                if provenance_matches_candidate(
                     book.metadata_provenance.series.as_ref(),
+                    candidate_id,
                     &changeset.provider_name,
                 ) {
                     BookRepository::clear_series_conn(tx.as_mut(), book_id)
@@ -2690,10 +2708,24 @@ fn decision_code(decision_reason: &str) -> &str {
         .trim()
 }
 
-fn provider_field_provenance(provider_name: &str) -> FieldProvenance {
+/// Build per-field provenance that respects cross-provider merge tracking.
+///
+/// If the field was filled from a different provider (recorded in
+/// `field_sources`), the provenance origin names that provider. Otherwise
+/// it defaults to the candidate's primary `provider_name`.
+fn field_provenance_for(
+    provider_meta: &ProviderMetadata,
+    source_key: &str,
+    candidate_id: Uuid,
+) -> FieldProvenance {
+    let provider_name = provider_meta
+        .field_sources
+        .get(source_key)
+        .unwrap_or(&provider_meta.provider_name);
     FieldProvenance {
-        origin: MetadataSource::Provider(provider_name.to_string()),
+        origin: MetadataSource::Provider(provider_name.clone()),
         protected: false,
+        applied_candidate_id: Some(candidate_id),
     }
 }
 
@@ -2709,15 +2741,23 @@ fn is_protected(provenance: Option<&FieldProvenance>) -> bool {
     provenance.is_some_and(|field| field.protected)
 }
 
-/// Check whether the current provenance still matches the provider that applied the field.
+/// Check if a field's provenance was set by a specific candidate.
 ///
-/// Returns `true` when the field is still owned by the given provider,
-/// meaning it's safe to restore on undo. Returns `false` if the user
-/// edited the field (provenance is `User`) or another provider overwrote it.
-fn provenance_matches_provider(current: Option<&FieldProvenance>, provider_name: &str) -> bool {
-    current.is_some_and(
-        |fp| matches!(&fp.origin, MetadataSource::Provider(name) if name == provider_name),
-    )
+/// Primary: match by `applied_candidate_id`.
+/// Legacy fallback: match by provider name when `applied_candidate_id` is absent
+/// (for old stored provenance before this feature was added).
+fn provenance_matches_candidate(
+    current: Option<&FieldProvenance>,
+    candidate_id: Uuid,
+    provider_name: &str,
+) -> bool {
+    current.is_some_and(|fp| {
+        fp.applied_candidate_id.map_or_else(
+            // Legacy: no `applied_candidate_id` — fall back to provider name match
+            || matches!(&fp.origin, MetadataSource::Provider(name) if name == provider_name),
+            |applied_id| applied_id == candidate_id,
+        )
+    })
 }
 
 fn candidate_authors_differ(current_authors: &[String], candidate: &ProviderMetadata) -> bool {
@@ -2928,7 +2968,7 @@ fn may_overwrite_core_with_log(ctx: &FieldApplyContext) -> bool {
 /// - `authors`, `series` — junction-table operations
 /// - `identifiers` — additive merge
 macro_rules! scalar_field_ops {
-    ( $( $field:ident { book: $book_field:ident, prov: $prov_field:ident } ),+ $(,)? ) => {
+    ( $( $field:ident { book: $book_field:ident, prov: $prov_field:ident, source_key: $source_key:expr } ),+ $(,)? ) => {
         /// Build changeset entries for scalar fields that differ between
         /// `before` and `after`.
         #[allow(clippy::clone_on_copy)]
@@ -2949,31 +2989,38 @@ macro_rules! scalar_field_ops {
             cs
         }
 
-        /// Set provenance for scalar fields that changed.
+        /// Set per-field provenance for scalar fields that changed,
+        /// respecting cross-provider `field_sources` tracking.
         fn set_scalar_provenance(
             before: &Book,
             book: &mut Book,
-            provider_prov: &FieldProvenance,
+            provider_meta: &ProviderMetadata,
+            candidate_id: Uuid,
         ) {
             $(
                 if book.$book_field != before.$book_field {
-                    book.metadata_provenance.$prov_field = Some(provider_prov.clone());
+                    book.metadata_provenance.$prov_field = Some(
+                        field_provenance_for(provider_meta, $source_key, candidate_id)
+                    );
                 }
             )+
         }
 
         /// Undo scalar fields from changeset, guarded by provenance.
+        ///
+        /// Primary match: `applied_candidate_id`. Legacy fallback: provider name.
         #[allow(clippy::clone_on_copy)]
         fn undo_scalar_fields(
             book: &mut Book,
             changeset: &ApplyChangeset,
-            provider_name: &str,
+            candidate_id: Uuid,
         ) {
             $(
                 if let Some(ref entry) = changeset.$book_field {
-                    if provenance_matches_provider(
+                    if provenance_matches_candidate(
                         book.metadata_provenance.$prov_field.as_ref(),
-                        provider_name,
+                        candidate_id,
+                        &changeset.provider_name,
                     ) {
                         book.$book_field = entry.old_value.clone();
                         book.metadata_provenance.$prov_field = entry.old_provenance.clone();
@@ -2985,12 +3032,12 @@ macro_rules! scalar_field_ops {
 }
 
 scalar_field_ops! {
-    subtitle         { book: subtitle,         prov: subtitle },
-    description      { book: description,      prov: description },
-    language         { book: language,         prov: language },
-    page_count       { book: page_count,       prov: page_count },
-    publication_year { book: publication_year, prov: publication_year },
-    cover_path       { book: cover_path,       prov: cover },
+    subtitle         { book: subtitle,         prov: subtitle,         source_key: "subtitle" },
+    description      { book: description,      prov: description,      source_key: "description" },
+    language         { book: language,         prov: language,         source_key: "language" },
+    page_count       { book: page_count,       prov: page_count,       source_key: "page_count" },
+    publication_year { book: publication_year, prov: publication_year, source_key: "publication_year" },
+    cover_path       { book: cover_path,       prov: cover,            source_key: "cover_url" },
 }
 
 /// Fields are split into two categories:
@@ -3194,6 +3241,8 @@ fn build_metadata_query(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use archivis_core::models::{IdentifierType, ResolutionState};
     use archivis_db::{CandidateRepository, ResolutionRunRepository};
     use archivis_metadata::{MetadataProvider, ProviderAuthor, ProviderError, ProviderRegistry};
@@ -3822,6 +3871,8 @@ mod tests {
             rating: None,
             physical_format: None,
             confidence: 0.9,
+            merged_from: Vec::new(),
+            field_sources: BTreeMap::new(),
         }
     }
 
@@ -3860,6 +3911,8 @@ mod tests {
             rating: None,
             physical_format: None,
             confidence: 0.95,
+            merged_from: Vec::new(),
+            field_sources: BTreeMap::new(),
         }
     }
 
@@ -4282,6 +4335,8 @@ mod tests {
             rating: None,
             physical_format: None,
             confidence: 0.95,
+            merged_from: Vec::new(),
+            field_sources: BTreeMap::new(),
         };
         assert!(
             !candidate_authors_differ(&current, &candidate),
@@ -4312,6 +4367,8 @@ mod tests {
             rating: None,
             physical_format: None,
             confidence: 0.95,
+            merged_from: Vec::new(),
+            field_sources: BTreeMap::new(),
         };
         assert!(candidate_authors_differ(&current, &candidate));
     }
@@ -4345,6 +4402,8 @@ mod tests {
             rating: None,
             physical_format: None,
             confidence: 0.95,
+            merged_from: Vec::new(),
+            field_sources: BTreeMap::new(),
         };
         assert!(
             !candidate_authors_differ(&current, &candidate),
@@ -4375,6 +4434,8 @@ mod tests {
             rating: None,
             physical_format: None,
             confidence: 0.95,
+            merged_from: Vec::new(),
+            field_sources: BTreeMap::new(),
         };
         assert!(
             candidate_authors_differ(&current, &candidate),
@@ -4511,6 +4572,8 @@ mod tests {
             rating: None,
             physical_format: None,
             confidence: 0.95,
+            merged_from: Vec::new(),
+            field_sources: BTreeMap::new(),
         }
     }
 
@@ -4727,26 +4790,32 @@ mod tests {
             title: Some(FieldProvenance {
                 origin: MetadataSource::Embedded,
                 protected: true,
+                applied_candidate_id: None,
             }),
             subtitle: Some(FieldProvenance {
                 origin: MetadataSource::Embedded,
                 protected: true,
+                applied_candidate_id: None,
             }),
             description: Some(FieldProvenance {
                 origin: MetadataSource::Embedded,
                 protected: true,
+                applied_candidate_id: None,
             }),
             language: Some(FieldProvenance {
                 origin: MetadataSource::Embedded,
                 protected: true,
+                applied_candidate_id: None,
             }),
             page_count: Some(FieldProvenance {
                 origin: MetadataSource::Embedded,
                 protected: true,
+                applied_candidate_id: None,
             }),
             publication_year: Some(FieldProvenance {
                 origin: MetadataSource::Embedded,
                 protected: true,
+                applied_candidate_id: None,
             }),
             ..Default::default()
         };
@@ -4784,6 +4853,7 @@ mod tests {
             title: Some(FieldProvenance {
                 origin: MetadataSource::Embedded,
                 protected: true,
+                applied_candidate_id: None,
             }),
             ..Default::default()
         };
@@ -4826,6 +4896,8 @@ mod tests {
             rating: None,
             physical_format: None,
             confidence: 0.9,
+            merged_from: Vec::new(),
+            field_sources: BTreeMap::new(),
         };
 
         let ctx = FieldApplyContext {
@@ -4909,6 +4981,8 @@ mod tests {
             rating: None,
             physical_format: None,
             confidence: 0.90,
+            merged_from: Vec::new(),
+            field_sources: BTreeMap::new(),
         };
 
         let meta_json = serde_json::to_value(&provider_meta).unwrap();
@@ -4995,6 +5069,8 @@ mod tests {
             rating: None,
             physical_format: None,
             confidence: 0.80,
+            merged_from: Vec::new(),
+            field_sources: BTreeMap::new(),
         };
 
         let meta_json = serde_json::to_value(&provider_meta).unwrap();
@@ -5082,6 +5158,8 @@ mod tests {
             rating: None,
             physical_format: None,
             confidence: 0.95,
+            merged_from: Vec::new(),
+            field_sources: BTreeMap::new(),
         };
 
         let meta_json = serde_json::to_value(&provider_meta).unwrap();
@@ -5187,6 +5265,8 @@ mod tests {
             rating: None,
             physical_format: None,
             confidence: 0.95,
+            merged_from: Vec::new(),
+            field_sources: BTreeMap::new(),
         };
 
         let meta_json = serde_json::to_value(&provider_meta).unwrap();
@@ -5245,6 +5325,7 @@ mod tests {
         book.metadata_provenance.authors = Some(FieldProvenance {
             origin: MetadataSource::User,
             protected: true,
+            applied_candidate_id: None,
         });
         BookRepository::create(&pool, &book).await.unwrap();
 
@@ -5288,6 +5369,8 @@ mod tests {
             rating: None,
             physical_format: None,
             confidence: 0.95,
+            merged_from: Vec::new(),
+            field_sources: BTreeMap::new(),
         };
 
         let meta_json = serde_json::to_value(&provider_meta).unwrap();
@@ -5369,6 +5452,8 @@ mod tests {
             rating: None,
             physical_format: None,
             confidence: 0.90,
+            merged_from: Vec::new(),
+            field_sources: BTreeMap::new(),
         };
 
         let meta_json = serde_json::to_value(&provider_meta).unwrap();
@@ -5481,6 +5566,8 @@ mod tests {
             rating: None,
             physical_format: None,
             confidence: 0.93,
+            merged_from: Vec::new(),
+            field_sources: BTreeMap::new(),
         };
         let mut candidate = IdentificationCandidate::new(
             book.id,
@@ -5884,5 +5971,137 @@ mod tests {
             final_book.metadata_user_trusted,
             "book should remain trusted"
         );
+    }
+
+    // ── Test helper for `ProviderMetadata` ──────────────────────────
+
+    fn make_metadata(
+        provider_name: &str,
+        title: &str,
+        authors: &[&str],
+        description: Option<&str>,
+        confidence: f32,
+    ) -> ProviderMetadata {
+        ProviderMetadata {
+            provider_name: provider_name.to_string(),
+            title: Some(title.to_string()),
+            subtitle: None,
+            authors: authors
+                .iter()
+                .map(|name| ProviderAuthor {
+                    name: (*name).to_string(),
+                    role: Some("author".to_string()),
+                })
+                .collect(),
+            description: description.map(str::to_string),
+            language: None,
+            publisher: None,
+            publication_year: None,
+            identifiers: vec![],
+            subjects: vec![],
+            series: None,
+            page_count: None,
+            cover_url: None,
+            rating: None,
+            physical_format: None,
+            confidence,
+            merged_from: Vec::new(),
+            field_sources: BTreeMap::new(),
+        }
+    }
+
+    // ── Per-field provenance tests ───────────────────────────────────
+
+    #[test]
+    fn field_provenance_for_uses_field_sources_when_present() {
+        let mut meta = make_metadata("open_library", "Dune", &["Frank Herbert"], None, 0.9);
+        meta.field_sources
+            .insert("description".to_string(), "hardcover".to_string());
+
+        let candidate_id = Uuid::new_v4();
+        let prov = field_provenance_for(&meta, "description", candidate_id);
+        assert_eq!(
+            prov.origin,
+            MetadataSource::Provider("hardcover".to_string()),
+            "field sourced from different provider should use that provider name"
+        );
+        assert_eq!(prov.applied_candidate_id, Some(candidate_id));
+    }
+
+    #[test]
+    fn field_provenance_for_defaults_to_primary_provider() {
+        let meta = make_metadata("open_library", "Dune", &["Frank Herbert"], None, 0.9);
+        let candidate_id = Uuid::new_v4();
+        let prov = field_provenance_for(&meta, "title", candidate_id);
+        assert_eq!(
+            prov.origin,
+            MetadataSource::Provider("open_library".to_string()),
+            "field not in field_sources should use primary provider name"
+        );
+        assert_eq!(prov.applied_candidate_id, Some(candidate_id));
+    }
+
+    #[test]
+    fn provenance_matches_candidate_by_id() {
+        let candidate_id = Uuid::new_v4();
+        let fp = FieldProvenance {
+            origin: MetadataSource::Provider("hardcover".to_string()),
+            protected: false,
+            applied_candidate_id: Some(candidate_id),
+        };
+        assert!(provenance_matches_candidate(
+            Some(&fp),
+            candidate_id,
+            "open_library" // different provider name — should still match by ID
+        ));
+    }
+
+    #[test]
+    fn provenance_matches_candidate_rejects_different_id() {
+        let fp = FieldProvenance {
+            origin: MetadataSource::Provider("hardcover".to_string()),
+            protected: false,
+            applied_candidate_id: Some(Uuid::new_v4()),
+        };
+        assert!(!provenance_matches_candidate(
+            Some(&fp),
+            Uuid::new_v4(), // different candidate ID
+            "hardcover"
+        ));
+    }
+
+    #[test]
+    fn provenance_matches_candidate_legacy_fallback_by_provider() {
+        let fp = FieldProvenance {
+            origin: MetadataSource::Provider("hardcover".to_string()),
+            protected: false,
+            applied_candidate_id: None, // legacy: no candidate ID
+        };
+        assert!(
+            provenance_matches_candidate(Some(&fp), Uuid::new_v4(), "hardcover"),
+            "legacy provenance without candidate ID should fall back to provider name"
+        );
+    }
+
+    #[test]
+    fn provenance_matches_candidate_legacy_rejects_different_provider() {
+        let fp = FieldProvenance {
+            origin: MetadataSource::Provider("hardcover".to_string()),
+            protected: false,
+            applied_candidate_id: None,
+        };
+        assert!(
+            !provenance_matches_candidate(Some(&fp), Uuid::new_v4(), "open_library"),
+            "legacy fallback should reject when provider name doesn't match"
+        );
+    }
+
+    #[test]
+    fn provenance_matches_candidate_none_returns_false() {
+        assert!(!provenance_matches_candidate(
+            None,
+            Uuid::new_v4(),
+            "hardcover"
+        ));
     }
 }

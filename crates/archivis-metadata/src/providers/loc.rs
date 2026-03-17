@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
@@ -286,6 +287,8 @@ impl LocProvider {
             rating: None,
             physical_format: None,
             confidence,
+            merged_from: Vec::new(),
+            field_sources: BTreeMap::new(),
         }
     }
 }

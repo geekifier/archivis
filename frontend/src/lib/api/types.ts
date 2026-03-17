@@ -141,6 +141,7 @@ export type MetadataSource =
 export interface FieldProvenance {
   origin: MetadataSource;
   protected: boolean;
+  applied_candidate_id?: string;
 }
 
 export interface MetadataProvenance {
@@ -538,6 +539,7 @@ export interface CandidateResponse {
   disputes: string[];
   status: 'pending' | 'applied' | 'rejected';
   tier?: string;
+  is_composite: boolean;
 }
 
 /** Response from triggering metadata refresh for a book. */

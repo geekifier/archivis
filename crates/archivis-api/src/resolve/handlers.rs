@@ -580,6 +580,7 @@ fn candidate_to_response(candidate: IdentificationCandidate) -> CandidateRespons
         disputes: candidate.disputes,
         status: candidate.status.to_string(),
         tier: candidate.tier,
+        is_composite: meta.is_some_and(|m| !m.merged_from.is_empty()),
     }
 }
 

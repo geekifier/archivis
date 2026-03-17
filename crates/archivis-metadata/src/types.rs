@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::collections::BTreeMap;
 
 use archivis_core::isbn::{validate_isbn, IsbnType};
 use archivis_core::models::IdentifierType;
@@ -88,6 +89,12 @@ pub struct ProviderMetadata {
     pub physical_format: Option<String>,
     /// Provider's self-assessed match confidence (0.0-1.0).
     pub confidence: f32,
+    /// Provider names whose data was merged into this candidate (cross-provider merge).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub merged_from: Vec<String>,
+    /// Maps field name → provider name for fields filled from a different provider.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub field_sources: BTreeMap<String, String>,
 }
 
 /// An author as returned by a metadata provider.
@@ -321,6 +328,8 @@ mod tests {
             rating: Some(4.5),
             physical_format: None,
             confidence: 0.95,
+            merged_from: Vec::new(),
+            field_sources: BTreeMap::new(),
         };
 
         let json = serde_json::to_string(&metadata).unwrap();
@@ -358,6 +367,8 @@ mod tests {
             rating: None,
             physical_format: None,
             confidence: 0.0,
+            merged_from: Vec::new(),
+            field_sources: BTreeMap::new(),
         };
 
         let json = serde_json::to_string(&metadata).unwrap();
@@ -536,5 +547,14 @@ mod tests {
         assert!(ISBN13_ONLY_CAPS.supports_isbn());
         assert!(ISBN10_ONLY_CAPS.supports_isbn());
         assert!(!NO_ISBN_CAPS.supports_isbn());
+    }
+
+    #[test]
+    fn provider_metadata_deserializes_without_merge_fields() {
+        // Old JSON without `merged_from` and `field_sources` should deserialize with empty collections.
+        let json = r#"{"provider_name":"test","title":"Dune","subtitle":null,"authors":[],"description":null,"language":null,"publisher":null,"publication_year":null,"identifiers":[],"subjects":[],"series":null,"page_count":null,"cover_url":null,"rating":null,"physical_format":null,"confidence":0.9}"#;
+        let meta: ProviderMetadata = serde_json::from_str(json).unwrap();
+        assert!(meta.merged_from.is_empty());
+        assert!(meta.field_sources.is_empty());
     }
 }

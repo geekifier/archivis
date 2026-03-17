@@ -40,6 +40,8 @@ pub struct CandidateResponse {
     pub disputes: Vec<String>,
     pub status: String,
     pub tier: Option<String>,
+    /// Whether this candidate was merged from multiple providers.
+    pub is_composite: bool,
 }
 
 /// Response from triggering metadata refresh for a book.

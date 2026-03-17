@@ -145,6 +145,7 @@ export function createCandidateResponse(overrides?: Partial<CandidateResponse>):
     disputes: [],
     status: 'pending',
     tier: undefined,
+    is_composite: false,
     ...overrides
   };
 }

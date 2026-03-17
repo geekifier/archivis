@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -449,6 +450,8 @@ impl HardcoverProvider {
             rating,
             physical_format,
             confidence: 0.95,
+            merged_from: Vec::new(),
+            field_sources: BTreeMap::new(),
         }
     }
 
@@ -551,6 +554,8 @@ impl HardcoverProvider {
             rating,
             physical_format,
             confidence,
+            merged_from: Vec::new(),
+            field_sources: BTreeMap::new(),
         }
     }
 }

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -215,6 +215,7 @@ impl OpenLibraryProvider {
 
     /// Build a `ProviderMetadata` from an edition, optional work, and
     /// resolved author names.
+    #[allow(clippy::too_many_lines)]
     fn build_metadata_from_edition(
         edition: &OlEdition,
         work: Option<&OlWork>,
@@ -342,6 +343,8 @@ impl OpenLibraryProvider {
             rating: None, // Open Library doesn't provide ratings in edition/work API.
             physical_format: edition.physical_format.clone(),
             confidence: 0.95,
+            merged_from: Vec::new(),
+            field_sources: BTreeMap::new(),
         }
     }
 
@@ -452,6 +455,8 @@ impl OpenLibraryProvider {
                     rating: None,
                     physical_format: None, // Search results are work-level.
                     confidence,
+                    merged_from: Vec::new(),
+                    field_sources: BTreeMap::new(),
                 }
             })
             .collect()

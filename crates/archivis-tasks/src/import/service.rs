@@ -748,6 +748,7 @@ fn protected_field(origin: MetadataSource) -> FieldProvenance {
     FieldProvenance {
         origin,
         protected: true,
+        applied_candidate_id: None,
     }
 }
 

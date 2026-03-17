@@ -761,6 +761,29 @@ fn text_matches_language(text: &str, lang: &str) -> bool {
     detected_639_1 == lang
 }
 
+/// Check whether `metadata.description` is written in a language that
+/// contradicts `metadata.language`. When a confident mismatch is found
+/// and `signals` does not already contain `LanguageMismatch`, apply the
+/// penalty, push a reason, and insert the signal. Idempotent — safe to
+/// call multiple times on the same candidate.
+fn check_language_mismatch(candidate: &mut ScoredCandidate) {
+    if candidate.signals.contains(&MatchSignal::LanguageMismatch) {
+        return;
+    }
+    if let (Some(lang), Some(desc)) = (
+        &candidate.metadata.language,
+        &candidate.metadata.description,
+    ) {
+        if !text_matches_language(desc, lang) {
+            candidate.score = (candidate.score - LANGUAGE_MISMATCH_PENALTY).clamp(0.0, 1.0);
+            candidate
+                .match_reasons
+                .push(format!("Description language mismatch (expected: {lang})"));
+            candidate.signals.insert(MatchSignal::LanguageMismatch);
+        }
+    }
+}
+
 /// Score an individual candidate based on the query and existing metadata.
 fn score_candidate(
     candidate: &mut ScoredCandidate,
@@ -858,25 +881,16 @@ fn score_candidate(
     // the penalty via headroom above 1.0.
     score = score.clamp(0.0, 1.0);
 
-    // ── Description language mismatch penalty ──
-    // Applied after clamping so the penalty always reduces the visible score.
-    if let (Some(lang), Some(desc)) = (
-        &candidate.metadata.language,
-        &candidate.metadata.description,
-    ) {
-        if !text_matches_language(desc, lang) {
-            score -= LANGUAGE_MISMATCH_PENALTY;
-            reasons.push(format!("Description language mismatch (expected: {lang})"));
-            signals.insert(MatchSignal::LanguageMismatch);
-        }
-    }
-
-    // Re-clamp after penalty (score could go negative with stacked penalties).
-    score = score.clamp(0.0, 1.0);
-
+    // Assign before language check so `check_language_mismatch` can
+    // operate on the candidate directly.
     candidate.score = score;
     candidate.match_reasons = reasons;
     candidate.signals = signals;
+
+    // ── Description language mismatch penalty ──
+    // Applied after clamping so the penalty always reduces the visible score.
+    // The helper clamps internally, so no additional re-clamp needed.
+    check_language_mismatch(candidate);
 }
 
 /// Check whether a candidate's identifiers contain the given ISBN.
@@ -943,7 +957,11 @@ fn deduplicate_and_boost(candidates: &mut Vec<ScoredCandidate>) {
                 };
 
                 let loser_metadata = candidates[loser_idx].metadata.clone();
-                merge_metadata(&mut candidates[winner_idx].metadata, &loser_metadata);
+                let lang_affected =
+                    merge_metadata(&mut candidates[winner_idx].metadata, &loser_metadata);
+                if lang_affected {
+                    check_language_mismatch(&mut candidates[winner_idx]);
+                }
                 candidates[winner_idx]
                     .match_reasons
                     .push("Same-provider duplicate merged".to_string());
@@ -1049,11 +1067,12 @@ fn deduplicate_and_boost(candidates: &mut Vec<ScoredCandidate>) {
             );
 
             // Merge losers into winner in deterministic order (already sorted).
+            let mut lang_affected = false;
             for &loser_idx in &loser_indices {
                 let loser_name = candidates[loser_idx].provider_name.clone();
                 let loser_metadata = candidates[loser_idx].metadata.clone();
                 let mut reasons = std::mem::take(&mut candidates[winner_idx].match_reasons);
-                merge_metadata_cross_provider(
+                lang_affected |= merge_metadata_cross_provider(
                     &mut candidates[winner_idx].metadata,
                     &loser_metadata,
                     &mut reasons,
@@ -1062,6 +1081,11 @@ fn deduplicate_and_boost(candidates: &mut Vec<ScoredCandidate>) {
                 candidates[winner_idx].match_reasons = reasons;
                 consumed[loser_idx] = true;
                 claimed[loser_idx] = true;
+            }
+
+            // Revalidate after all losers merged, before cross-provider bonus.
+            if lang_affected {
+                check_language_mismatch(&mut candidates[winner_idx]);
             }
 
             // Apply bonus once to winner.
@@ -1195,44 +1219,62 @@ fn book_match_strength(a: &ScoredCandidate, b: &ScoredCandidate) -> BookMatch {
 /// Covers the 9 text/scalar fields shared by both same-provider and
 /// cross-provider merge paths. Does NOT touch cover, identifiers, or
 /// subjects — those have merge-strategy-specific handling.
-fn fill_metadata_gaps(target: &mut ProviderMetadata, source: &ProviderMetadata) {
-    if target.subtitle.is_none() {
+fn fill_metadata_gaps(
+    target: &mut ProviderMetadata,
+    source: &ProviderMetadata,
+) -> Vec<&'static str> {
+    let mut filled = Vec::new();
+    if target.subtitle.is_none() && source.subtitle.is_some() {
         target.subtitle.clone_from(&source.subtitle);
+        filled.push("subtitle");
     }
-    if target.description.is_none() {
+    if target.description.is_none() && source.description.is_some() {
         target.description.clone_from(&source.description);
+        filled.push("description");
     }
-    if target.language.is_none() {
+    if target.language.is_none() && source.language.is_some() {
         target.language.clone_from(&source.language);
+        filled.push("language");
     }
-    if target.publisher.is_none() {
+    if target.publisher.is_none() && source.publisher.is_some() {
         target.publisher.clone_from(&source.publisher);
+        filled.push("publisher");
     }
-    if target.publication_year.is_none() {
+    if target.publication_year.is_none() && source.publication_year.is_some() {
         target.publication_year = source.publication_year;
+        filled.push("publication_year");
     }
-    if target.series.is_none() {
+    if target.series.is_none() && source.series.is_some() {
         target.series.clone_from(&source.series);
+        filled.push("series");
     }
-    if target.page_count.is_none() {
+    if target.page_count.is_none() && source.page_count.is_some() {
         target.page_count = source.page_count;
+        filled.push("page_count");
     }
-    if target.rating.is_none() {
+    if target.rating.is_none() && source.rating.is_some() {
         target.rating = source.rating;
+        filled.push("rating");
     }
-    if target.subjects.is_empty() {
+    if target.subjects.is_empty() && !source.subjects.is_empty() {
         target.subjects.clone_from(&source.subjects);
+        filled.push("subjects");
     }
-    if target.physical_format.is_none() {
+    if target.physical_format.is_none() && source.physical_format.is_some() {
         target.physical_format.clone_from(&source.physical_format);
+        filled.push("physical_format");
     }
+    filled
 }
 
 /// Merge unique data from `source` into `target`.
 ///
 /// Only fills in fields that are `None` or empty in the target.
-fn merge_metadata(target: &mut ProviderMetadata, source: &ProviderMetadata) {
-    fill_metadata_gaps(target, source);
+fn merge_metadata(target: &mut ProviderMetadata, source: &ProviderMetadata) -> bool {
+    let filled = fill_metadata_gaps(target, source);
+    let lang_affected = filled
+        .iter()
+        .any(|&f| f == "description" || f == "language");
 
     if target.cover_url.is_none() {
         target.cover_url.clone_from(&source.cover_url);
@@ -1247,6 +1289,8 @@ fn merge_metadata(target: &mut ProviderMetadata, source: &ProviderMetadata) {
             target.identifiers.push(source_id.clone());
         }
     }
+
+    lang_affected
 }
 
 /// Check whether a candidate has multiple corroborating signals.
@@ -1376,8 +1420,19 @@ fn merge_metadata_cross_provider(
     target: &mut ProviderMetadata,
     source: &ProviderMetadata,
     match_reasons: &mut Vec<String>,
-) {
-    fill_metadata_gaps(target, source);
+) -> bool {
+    let filled = fill_metadata_gaps(target, source);
+    let lang_affected = filled
+        .iter()
+        .any(|&f| f == "description" || f == "language");
+
+    // ── Merge provenance tracking ──
+    target.merged_from.push(source.provider_name.clone());
+    for field_name in filled {
+        target
+            .field_sources
+            .insert(field_name.to_string(), source.provider_name.clone());
+    }
 
     // ── Cover: provider-priority selection ──
     let target_has_cover = target.cover_url.is_some();
@@ -1385,6 +1440,9 @@ fn merge_metadata_cross_provider(
     match (target_has_cover, source_has_cover) {
         (false, true) => {
             target.cover_url.clone_from(&source.cover_url);
+            target
+                .field_sources
+                .insert("cover_url".to_string(), source.provider_name.clone());
             match_reasons.push(format!("Cover from {}", source.provider_name));
         }
         (true, true) => {
@@ -1392,6 +1450,9 @@ fn merge_metadata_cross_provider(
             let source_rank = cover_provider_rank(&source.provider_name);
             if source_rank > target_rank {
                 target.cover_url.clone_from(&source.cover_url);
+                target
+                    .field_sources
+                    .insert("cover_url".to_string(), source.provider_name.clone());
                 match_reasons.push(format!("Cover from {}", source.provider_name));
             }
         }
@@ -1424,6 +1485,8 @@ fn merge_metadata_cross_provider(
             !identifier_type_belongs_to_provider(id.identifier_type, source_provider)
         }
     });
+
+    lang_affected
 }
 
 /// Check whether a non-portable identifier type is native to a given provider.
@@ -1480,6 +1543,8 @@ fn filter_unsupported_candidates(candidates: &mut Vec<ScoredCandidate>) {
 mod tests {
     use async_trait::async_trait;
 
+    use std::collections::BTreeMap;
+
     use super::*;
     use crate::errors::ProviderError;
     use crate::provider::MetadataProvider;
@@ -1524,6 +1589,8 @@ mod tests {
             rating: None,
             physical_format: None,
             confidence,
+            merged_from: Vec::new(),
+            field_sources: BTreeMap::new(),
         }
     }
 
@@ -2043,6 +2110,8 @@ mod tests {
             rating: None,
             physical_format: None,
             confidence: 0.9,
+            merged_from: Vec::new(),
+            field_sources: BTreeMap::new(),
         };
 
         let source = ProviderMetadata {
@@ -2074,9 +2143,11 @@ mod tests {
             rating: Some(4.5),
             physical_format: None,
             confidence: 0.9,
+            merged_from: Vec::new(),
+            field_sources: BTreeMap::new(),
         };
 
-        merge_metadata(&mut target, &source);
+        let _ = merge_metadata(&mut target, &source);
 
         // Filled from source.
         assert_eq!(target.description.as_deref(), Some("A sci-fi classic"));
@@ -4990,6 +5061,8 @@ mod tests {
             rating: None,
             physical_format: None,
             confidence: 0.9,
+            merged_from: Vec::new(),
+            field_sources: BTreeMap::new(),
         };
         let fc = FieldCounts::of(&meta);
         assert_eq!(
@@ -5463,6 +5536,523 @@ mod tests {
         assert_eq!(
             candidates[0].metadata.authors[0].name, "Anna Lee Huber",
             "ALL-CAPS author name from search should be normalized"
+        );
+    }
+
+    // ── Merge provenance tracking tests ──────────────────────────────
+
+    #[test]
+    fn fill_metadata_gaps_returns_filled_field_names() {
+        let mut target = make_metadata("open_library", "Dune", &["Frank Herbert"], None, 0.9);
+        target.description = None;
+        target.publisher = None;
+        target.page_count = None;
+
+        let mut source = make_metadata("hardcover", "Dune", &["Frank Herbert"], None, 0.85);
+        source.description = Some("A sci-fi classic".to_string());
+        source.publisher = Some("Chilton Books".to_string());
+        source.page_count = Some(412);
+        // Fields that target already has — should NOT appear in filled
+        source.subtitle = Some("Should be ignored".to_string());
+
+        // subtitle on target is None, so it WILL be filled (source has it)
+        // ... actually, let's set target subtitle to something so it's NOT filled
+        target.subtitle = Some("Existing subtitle".to_string());
+
+        let filled = fill_metadata_gaps(&mut target, &source);
+        assert!(
+            filled.contains(&"description"),
+            "description should be in filled"
+        );
+        assert!(
+            filled.contains(&"publisher"),
+            "publisher should be in filled"
+        );
+        assert!(
+            filled.contains(&"page_count"),
+            "page_count should be in filled"
+        );
+        assert!(
+            !filled.contains(&"subtitle"),
+            "subtitle should NOT be in filled (target had one)"
+        );
+        assert_eq!(filled.len(), 3);
+    }
+
+    #[test]
+    fn cross_provider_merge_populates_merged_from() {
+        let mut ol = make_metadata(
+            "open_library",
+            "Dune",
+            &["Frank Herbert"],
+            Some("9780441172719"),
+            0.9,
+        );
+        ol.description = None;
+
+        let mut hc = make_metadata(
+            "hardcover",
+            "Dune",
+            &["Frank Herbert"],
+            Some("9780441172719"),
+            0.85,
+        );
+        hc.description = Some("A masterpiece".to_string());
+
+        let mut candidates = vec![
+            ScoredCandidate {
+                metadata: ol,
+                score: 0.9,
+                provider_name: "open_library".to_string(),
+                match_reasons: Vec::new(),
+                signals: HashSet::new(),
+                tier: CandidateMatchTier::WeakMatch,
+                field_count: 0,
+            },
+            ScoredCandidate {
+                metadata: hc,
+                score: 0.85,
+                provider_name: "hardcover".to_string(),
+                match_reasons: Vec::new(),
+                signals: HashSet::new(),
+                tier: CandidateMatchTier::WeakMatch,
+                field_count: 0,
+            },
+        ];
+
+        deduplicate_and_boost(&mut candidates);
+
+        assert_eq!(candidates.len(), 1);
+        let winner = &candidates[0];
+        assert!(
+            winner
+                .metadata
+                .merged_from
+                .contains(&"hardcover".to_string()),
+            "merged_from should contain the loser provider name"
+        );
+    }
+
+    #[test]
+    fn cross_provider_merge_populates_field_sources() {
+        let mut ol = make_metadata(
+            "open_library",
+            "Dune",
+            &["Frank Herbert"],
+            Some("9780441172719"),
+            0.9,
+        );
+        ol.description = None;
+        ol.publisher = None;
+
+        let mut hc = make_metadata(
+            "hardcover",
+            "Dune",
+            &["Frank Herbert"],
+            Some("9780441172719"),
+            0.85,
+        );
+        hc.description = Some("A masterpiece".to_string());
+        hc.publisher = Some("Chilton Books".to_string());
+
+        let mut candidates = vec![
+            ScoredCandidate {
+                metadata: ol,
+                score: 0.9,
+                provider_name: "open_library".to_string(),
+                match_reasons: Vec::new(),
+                signals: HashSet::new(),
+                tier: CandidateMatchTier::WeakMatch,
+                field_count: 0,
+            },
+            ScoredCandidate {
+                metadata: hc,
+                score: 0.85,
+                provider_name: "hardcover".to_string(),
+                match_reasons: Vec::new(),
+                signals: HashSet::new(),
+                tier: CandidateMatchTier::WeakMatch,
+                field_count: 0,
+            },
+        ];
+
+        deduplicate_and_boost(&mut candidates);
+
+        assert_eq!(candidates.len(), 1);
+        let winner = &candidates[0];
+        assert_eq!(
+            winner
+                .metadata
+                .field_sources
+                .get("description")
+                .map(String::as_str),
+            Some("hardcover"),
+            "description should be sourced from hardcover"
+        );
+        assert_eq!(
+            winner
+                .metadata
+                .field_sources
+                .get("publisher")
+                .map(String::as_str),
+            Some("hardcover"),
+            "publisher should be sourced from hardcover"
+        );
+        // Title was on the winner — should NOT be in field_sources
+        assert!(
+            !winner.metadata.field_sources.contains_key("title"),
+            "title from the winner should not appear in field_sources"
+        );
+    }
+
+    #[test]
+    fn cross_provider_merge_cover_from_loser_in_field_sources() {
+        let mut ol = make_metadata(
+            "open_library",
+            "Dune",
+            &["Frank Herbert"],
+            Some("9780441172719"),
+            0.9,
+        );
+        ol.cover_url = None;
+
+        let mut hc = make_metadata(
+            "hardcover",
+            "Dune",
+            &["Frank Herbert"],
+            Some("9780441172719"),
+            0.85,
+        );
+        hc.cover_url = Some("https://covers.hardcover.app/dune.jpg".to_string());
+
+        let mut candidates = vec![
+            ScoredCandidate {
+                metadata: ol,
+                score: 0.9,
+                provider_name: "open_library".to_string(),
+                match_reasons: Vec::new(),
+                signals: HashSet::new(),
+                tier: CandidateMatchTier::WeakMatch,
+                field_count: 0,
+            },
+            ScoredCandidate {
+                metadata: hc,
+                score: 0.85,
+                provider_name: "hardcover".to_string(),
+                match_reasons: Vec::new(),
+                signals: HashSet::new(),
+                tier: CandidateMatchTier::WeakMatch,
+                field_count: 0,
+            },
+        ];
+
+        deduplicate_and_boost(&mut candidates);
+
+        assert_eq!(candidates.len(), 1);
+        let winner = &candidates[0];
+        assert_eq!(
+            winner
+                .metadata
+                .field_sources
+                .get("cover_url")
+                .map(String::as_str),
+            Some("hardcover"),
+            "cover_url should be sourced from hardcover when loser provided it"
+        );
+    }
+
+    #[test]
+    fn same_provider_merge_no_merged_from() {
+        // Two results from the same provider — merge_metadata (not cross-provider) is used.
+        // merged_from should stay empty.
+        let ol1 = make_metadata(
+            "open_library",
+            "Dune",
+            &["Frank Herbert"],
+            Some("9780441172719"),
+            0.9,
+        );
+        let mut ol2 = make_metadata(
+            "open_library",
+            "Dune",
+            &["Frank Herbert"],
+            Some("9780441172719"),
+            0.85,
+        );
+        ol2.description = Some("Duplicate edition".to_string());
+
+        let mut candidates = vec![
+            ScoredCandidate {
+                metadata: ol1,
+                score: 0.9,
+                provider_name: "open_library".to_string(),
+                match_reasons: Vec::new(),
+                signals: HashSet::new(),
+                tier: CandidateMatchTier::WeakMatch,
+                field_count: 0,
+            },
+            ScoredCandidate {
+                metadata: ol2,
+                score: 0.85,
+                provider_name: "open_library".to_string(),
+                match_reasons: Vec::new(),
+                signals: HashSet::new(),
+                tier: CandidateMatchTier::WeakMatch,
+                field_count: 0,
+            },
+        ];
+
+        deduplicate_and_boost(&mut candidates);
+
+        assert_eq!(candidates.len(), 1);
+        let winner = &candidates[0];
+        assert!(
+            winner.metadata.merged_from.is_empty(),
+            "same-provider merge should not populate merged_from"
+        );
+        assert!(
+            winner.metadata.field_sources.is_empty(),
+            "same-provider merge should not populate field_sources"
+        );
+    }
+
+    // ── Language mismatch after merge tests ──
+
+    /// Polish text long enough for `whatlang` to detect reliably.
+    const POLISH_DESCRIPTION: &str = "Andrzej Sapkowski, arcymistrz polskiej fantastyki, \
+        stworzył niezwykły świat pełen magii, elfów i intryg politycznych. \
+        Krew elfów to pierwsza część sagi o Wiedźminie, w której Geralt z Rivii \
+        musi stawić czoła nowym zagrożeniom.";
+
+    const ENGLISH_DESCRIPTION: &str = "A science fiction classic exploring the politics \
+        and ecology of a desert planet. Set on the planet Arrakis, the story follows \
+        the young Paul Atreides as he navigates dangerous political intrigue.";
+
+    #[test]
+    fn language_mismatch_detected_after_cross_provider_merge() {
+        // LOC candidate: language="en", no description (mirrors real LOC behaviour).
+        // OL candidate: language="en", Polish description.
+        // After cross-provider merge the LOC winner gap-fills description from OL.
+        let isbn = "9788375780635";
+        let mut loc = make_metadata(
+            "loc",
+            "The Last Wish",
+            &["Andrzej Sapkowski"],
+            Some(isbn),
+            0.9,
+        );
+        loc.language = Some("en".to_string());
+        // LOC has no description — this is the gap that triggers the bug.
+
+        let mut ol = make_metadata(
+            "open_library",
+            "The Last Wish",
+            &["Andrzej Sapkowski"],
+            Some(isbn),
+            0.8,
+        );
+        ol.language = Some("en".to_string());
+        ol.description = Some(POLISH_DESCRIPTION.to_string());
+
+        let mut candidates = vec![
+            ScoredCandidate {
+                provider_name: "loc".to_string(),
+                metadata: loc,
+                score: 0.9,
+                match_reasons: Vec::new(),
+                signals: HashSet::new(),
+                tier: CandidateMatchTier::WeakMatch,
+                field_count: 0,
+            },
+            ScoredCandidate {
+                provider_name: "open_library".to_string(),
+                metadata: ol,
+                score: 0.8,
+                match_reasons: Vec::new(),
+                signals: HashSet::new(),
+                tier: CandidateMatchTier::WeakMatch,
+                field_count: 0,
+            },
+        ];
+
+        deduplicate_and_boost(&mut candidates);
+
+        assert_eq!(candidates.len(), 1, "should merge into one candidate");
+        let winner = &candidates[0];
+        assert!(
+            winner.signals.contains(&MatchSignal::LanguageMismatch),
+            "merged candidate should have LanguageMismatch signal"
+        );
+        assert!(
+            winner
+                .match_reasons
+                .iter()
+                .any(|r| r.contains("language mismatch")),
+            "should have mismatch reason: {:?}",
+            winner.match_reasons,
+        );
+        assert!(
+            winner.score < 1.0,
+            "score should be penalised, got {}",
+            winner.score,
+        );
+    }
+
+    #[test]
+    fn language_mismatch_detected_after_same_provider_merge() {
+        // Two candidates from the same provider sharing an ISBN.
+        // One has Polish description + no language, the other has language="en" + no description.
+        // After same-provider merge the winner has both → mismatch.
+        let isbn = "9788375780635";
+        let mut a = make_metadata(
+            "open_library",
+            "The Last Wish",
+            &["Andrzej Sapkowski"],
+            Some(isbn),
+            0.8,
+        );
+        a.description = Some(POLISH_DESCRIPTION.to_string());
+        // a.language is None
+
+        let mut b = make_metadata(
+            "open_library",
+            "The Last Wish",
+            &["Andrzej Sapkowski"],
+            Some(isbn),
+            0.85,
+        );
+        b.language = Some("en".to_string());
+        // b.description is None
+
+        let mut candidates = vec![
+            ScoredCandidate {
+                provider_name: "open_library".to_string(),
+                metadata: a,
+                score: 0.8,
+                match_reasons: Vec::new(),
+                signals: HashSet::new(),
+                tier: CandidateMatchTier::WeakMatch,
+                field_count: 0,
+            },
+            ScoredCandidate {
+                provider_name: "open_library".to_string(),
+                metadata: b,
+                score: 0.85,
+                match_reasons: Vec::new(),
+                signals: HashSet::new(),
+                tier: CandidateMatchTier::WeakMatch,
+                field_count: 0,
+            },
+        ];
+
+        deduplicate_and_boost(&mut candidates);
+
+        assert_eq!(candidates.len(), 1, "should merge into one candidate");
+        let winner = &candidates[0];
+        assert!(
+            winner.signals.contains(&MatchSignal::LanguageMismatch),
+            "merged candidate should have LanguageMismatch signal"
+        );
+    }
+
+    #[test]
+    fn language_mismatch_after_merge_fills_language() {
+        // Two candidates from different providers sharing an ISBN.
+        // First has Polish description + no language, second has no description + language="en".
+        // After cross-provider merge, gap-fill brings in `language` → mismatch.
+        let isbn = "9788375780635";
+        let mut primary = make_metadata(
+            "loc",
+            "The Last Wish",
+            &["Andrzej Sapkowski"],
+            Some(isbn),
+            0.9,
+        );
+        primary.description = Some(POLISH_DESCRIPTION.to_string());
+        // primary.language is None — gap-filled from secondary.
+
+        let mut secondary = make_metadata(
+            "open_library",
+            "The Last Wish",
+            &["Andrzej Sapkowski"],
+            Some(isbn),
+            0.8,
+        );
+        secondary.language = Some("en".to_string());
+        // secondary.description is None.
+
+        let mut candidates = vec![
+            ScoredCandidate {
+                provider_name: "loc".to_string(),
+                metadata: primary,
+                score: 0.9,
+                match_reasons: Vec::new(),
+                signals: HashSet::new(),
+                tier: CandidateMatchTier::WeakMatch,
+                field_count: 0,
+            },
+            ScoredCandidate {
+                provider_name: "open_library".to_string(),
+                metadata: secondary,
+                score: 0.8,
+                match_reasons: Vec::new(),
+                signals: HashSet::new(),
+                tier: CandidateMatchTier::WeakMatch,
+                field_count: 0,
+            },
+        ];
+
+        deduplicate_and_boost(&mut candidates);
+
+        assert_eq!(candidates.len(), 1, "should merge into one candidate");
+        let winner = &candidates[0];
+        assert!(
+            winner.signals.contains(&MatchSignal::LanguageMismatch),
+            "merged candidate should have LanguageMismatch after language gap-fill"
+        );
+    }
+
+    #[test]
+    fn no_false_positive_after_merge() {
+        // Same cross-provider structure but OL has an English description.
+        // No mismatch should be flagged.
+        let isbn = "9780441172719";
+        let mut loc = make_metadata("loc", "Dune", &["Frank Herbert"], Some(isbn), 0.9);
+        loc.language = Some("en".to_string());
+        // No description — gap-filled from OL.
+
+        let mut ol = make_metadata("open_library", "Dune", &["Frank Herbert"], Some(isbn), 0.8);
+        ol.language = Some("en".to_string());
+        ol.description = Some(ENGLISH_DESCRIPTION.to_string());
+
+        let mut candidates = vec![
+            ScoredCandidate {
+                provider_name: "loc".to_string(),
+                metadata: loc,
+                score: 0.9,
+                match_reasons: Vec::new(),
+                signals: HashSet::new(),
+                tier: CandidateMatchTier::WeakMatch,
+                field_count: 0,
+            },
+            ScoredCandidate {
+                provider_name: "open_library".to_string(),
+                metadata: ol,
+                score: 0.8,
+                match_reasons: Vec::new(),
+                signals: HashSet::new(),
+                tier: CandidateMatchTier::WeakMatch,
+                field_count: 0,
+            },
+        ];
+
+        deduplicate_and_boost(&mut candidates);
+
+        assert_eq!(candidates.len(), 1, "should merge into one candidate");
+        let winner = &candidates[0];
+        assert!(
+            !winner.signals.contains(&MatchSignal::LanguageMismatch),
+            "English description + English language should not trigger mismatch"
         );
     }
 }
