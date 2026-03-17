@@ -128,7 +128,7 @@ export function createBookDetail(overrides?: Partial<BookDetail>): BookDetail {
 export function createCandidateResponse(overrides?: Partial<CandidateResponse>): CandidateResponse {
   return {
     id: 'candidate-1',
-    provider_name: 'Open Library',
+    provider_name: 'open_library',
     score: 0.85,
     title: 'Candidate Title',
     authors: [{ name: 'Candidate Author', role: 'author' }],

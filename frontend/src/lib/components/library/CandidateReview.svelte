@@ -5,11 +5,12 @@
   import { Button } from '$lib/components/ui/button/index.js';
   import * as AlertDialog from '$lib/components/ui/alert-dialog/index.js';
   import * as Dialog from '$lib/components/ui/dialog/index.js';
+  import { providerColorClass, providerLabel } from '$lib/display.js';
   import {
     scoreColor,
     formatScore,
-    providerColorClass,
     hasChange,
+    namesMatch,
     getExcludedFields,
     tierColorClass,
     tierLabel,
@@ -182,7 +183,7 @@
                 candidate.provider_name
               )}"
             >
-              {candidate.provider_name}
+              {providerLabel(candidate.provider_name)}
             </span>
             {#if candidate.tier}
               <span class="inline-flex rounded-full px-2 py-0.5 text-xs font-medium {tierColorClass(candidate.tier)}">
@@ -312,7 +313,7 @@
                   {@const bookAuthors = book.authors.filter((a) => isAuthorRole(a.role))}
                   {@const candidateAuthorNames = candidateAuthors.map((a) => a.name).join(', ')}
                   {@const bookAuthorNames = bookAuthors.map((a) => a.name).join(', ')}
-                  {@const authorRowMatch = candidateAuthorNames === bookAuthorNames}
+                  {@const authorRowMatch = namesMatch(candidateAuthors.map((a) => a.name), bookAuthors.map((a) => a.name))}
                   {@const authorsIncluded = isFieldIncluded(candidate.id, 'authors')}
                   <!-- Author-role row -->
                   <tr class={authorRowMatch ? 'opacity-40' : !authorsIncluded ? 'opacity-40' : ''}>
@@ -342,7 +343,10 @@
                   {#each nonAuthorRoles as role (role)}
                     {@const candidateNames = candidate.authors.filter((a) => a.role === role).map((a) => a.name).join(', ')}
                     {@const bookNames = book.authors.filter((a) => a.role === role).map((a) => a.name).join(', ')}
-                    {@const contribMatch = candidateNames === bookNames}
+                    {@const contribMatch = namesMatch(
+                      candidate.authors.filter((a) => a.role === role).map((a) => a.name),
+                      book.authors.filter((a) => a.role === role).map((a) => a.name)
+                    )}
                     <tr class={contribMatch ? 'opacity-40' : !authorsIncluded ? 'opacity-40' : ''}>
                       <td class="py-1.5 pr-1">
                         {#if !contribMatch}
@@ -558,7 +562,7 @@
                     candidate.provider_name
                   )}"
                 >
-                  {candidate.provider_name}
+                  {providerLabel(candidate.provider_name)}
                 </span>
                 <span class="text-xs text-muted-foreground">
                   {formatScore(candidate.score)} score
@@ -602,7 +606,7 @@
                   candidate.provider_name
                 )}"
               >
-                {candidate.provider_name}
+                {providerLabel(candidate.provider_name)}
               </span>
               <span class="text-xs text-muted-foreground">
                 {candidate.title ?? 'No title'}

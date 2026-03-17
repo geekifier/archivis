@@ -6,10 +6,10 @@
   import * as AlertDialog from '$lib/components/ui/alert-dialog/index.js';
   import * as Select from '$lib/components/ui/select/index.js';
   import CoverImage from './CoverImage.svelte';
+  import { identifierLabel } from '$lib/display.js';
   import {
     placeholderHue,
     formatFileSize,
-    formatIdentifierType,
     formatFormatLabel
   } from '$lib/utils.js';
 
@@ -410,7 +410,7 @@
                 {#each book.identifiers as ident (ident.id)}
                   <div class="flex items-center gap-1.5 text-xs">
                     <span class="font-medium text-muted-foreground">
-                      {formatIdentifierType(ident.identifier_type)}:
+                      {identifierLabel(ident.identifier_type)}:
                     </span>
                     <span class="font-mono">{ident.value}</span>
                   </div>

@@ -2,8 +2,8 @@ import { describe, it, expect } from 'vitest';
 import {
   scoreColor,
   formatScore,
-  providerColorClass,
   hasChange,
+  namesMatch,
   getExcludedFields,
   tierColorClass,
   tierLabel
@@ -53,28 +53,6 @@ describe('formatScore', () => {
   });
 });
 
-describe('providerColorClass', () => {
-  it('returns blue class for Open Library', () => {
-    expect(providerColorClass('Open Library')).toContain('bg-blue-100');
-  });
-
-  it('is case-insensitive for Open Library', () => {
-    expect(providerColorClass('open library')).toContain('bg-blue-100');
-  });
-
-  it('returns purple class for Hardcover', () => {
-    expect(providerColorClass('Hardcover')).toContain('bg-purple-100');
-  });
-
-  it('is case-insensitive for Hardcover', () => {
-    expect(providerColorClass('hardcover')).toContain('bg-purple-100');
-  });
-
-  it('returns muted class for unknown providers', () => {
-    expect(providerColorClass('Unknown Provider')).toBe('bg-muted text-muted-foreground');
-  });
-});
-
 describe('hasChange', () => {
   it('returns true when values differ', () => {
     expect(hasChange('new value', 'old value')).toBe(true);
@@ -102,6 +80,40 @@ describe('hasChange', () => {
 
   it('returns true when book is null but candidate has value', () => {
     expect(hasChange('new value', null)).toBe(true);
+  });
+});
+
+describe('namesMatch', () => {
+  it('returns true for identical lists', () => {
+    expect(namesMatch(['Alice', 'Bob'], ['Alice', 'Bob'])).toBe(true);
+  });
+
+  it('returns true for same names in different order', () => {
+    expect(namesMatch(['Bob', 'Alice'], ['Alice', 'Bob'])).toBe(true);
+  });
+
+  it('is case-insensitive', () => {
+    expect(namesMatch(['alice', 'BOB'], ['Alice', 'Bob'])).toBe(true);
+  });
+
+  it('trims whitespace', () => {
+    expect(namesMatch(['  Alice ', 'Bob'], ['Alice', ' Bob '])).toBe(true);
+  });
+
+  it('returns false for different sets', () => {
+    expect(namesMatch(['Alice', 'Bob'], ['Alice', 'Charlie'])).toBe(false);
+  });
+
+  it('returns false for different sizes', () => {
+    expect(namesMatch(['Alice'], ['Alice', 'Bob'])).toBe(false);
+  });
+
+  it('returns true for two empty lists', () => {
+    expect(namesMatch([], [])).toBe(true);
+  });
+
+  it('returns false when one list is empty and the other is not', () => {
+    expect(namesMatch([], ['Alice'])).toBe(false);
   });
 });
 

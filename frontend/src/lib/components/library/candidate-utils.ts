@@ -33,14 +33,17 @@ export function formatScore(score: number): string {
   return `${Math.round(score * 100)}%`;
 }
 
-/** Return a Tailwind class string for a provider badge based on name. */
-export function providerColorClass(provider: string): string {
-  const lower = provider.toLowerCase();
-  if (lower.includes('open library'))
-    return 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400';
-  if (lower.includes('hardcover'))
-    return 'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-400';
-  return 'bg-muted text-muted-foreground';
+/** Order-independent, case-insensitive comparison of two name arrays. */
+export function namesMatch(a: string[], b: string[]): boolean {
+  const normalize = (names: string[]) =>
+    new Set(names.map((n) => n.trim().toLowerCase()));
+  const setA = normalize(a);
+  const setB = normalize(b);
+  if (setA.size !== setB.size) return false;
+  for (const name of setA) {
+    if (!setB.has(name)) return false;
+  }
+  return true;
 }
 
 /** True when the candidate value differs from the current book value. */

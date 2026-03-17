@@ -2,7 +2,6 @@ import { describe, it, expect } from 'vitest';
 import {
   placeholderHue,
   formatFileSize,
-  formatIdentifierType,
   formatMetadataSource
 } from './utils.js';
 
@@ -62,36 +61,6 @@ describe('formatFileSize', () => {
   });
 });
 
-describe('formatIdentifierType', () => {
-  it('maps isbn13 to ISBN-13', () => {
-    expect(formatIdentifierType('isbn13')).toBe('ISBN-13');
-  });
-
-  it('maps isbn10 to ISBN-10', () => {
-    expect(formatIdentifierType('isbn10')).toBe('ISBN-10');
-  });
-
-  it('maps asin to ASIN', () => {
-    expect(formatIdentifierType('asin')).toBe('ASIN');
-  });
-
-  it('maps google_books to Google Books', () => {
-    expect(formatIdentifierType('google_books')).toBe('Google Books');
-  });
-
-  it('maps open_library to Open Library', () => {
-    expect(formatIdentifierType('open_library')).toBe('Open Library');
-  });
-
-  it('maps hardcover to Hardcover', () => {
-    expect(formatIdentifierType('hardcover')).toBe('Hardcover');
-  });
-
-  it('passes through unknown types unchanged', () => {
-    expect(formatIdentifierType('custom_id')).toBe('custom_id');
-  });
-});
-
 describe('formatMetadataSource', () => {
   it('formats embedded source', () => {
     expect(formatMetadataSource({ type: 'embedded' })).toBe('Embedded');
@@ -101,8 +70,12 @@ describe('formatMetadataSource', () => {
     expect(formatMetadataSource({ type: 'filename' })).toBe('Filename');
   });
 
-  it('formats provider source with name', () => {
-    expect(formatMetadataSource({ type: 'provider', name: 'Open Library' })).toBe('Open Library');
+  it('formats provider source with name via providerLabel', () => {
+    expect(formatMetadataSource({ type: 'provider', name: 'open_library' })).toBe('Open Library');
+  });
+
+  it('formats provider source for loc as Library of Congress', () => {
+    expect(formatMetadataSource({ type: 'provider', name: 'loc' })).toBe('Library of Congress');
   });
 
   it('formats provider source without name', () => {

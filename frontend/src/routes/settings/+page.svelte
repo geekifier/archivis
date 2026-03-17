@@ -9,6 +9,7 @@
   import UserManagement from '$lib/components/settings/UserManagement.svelte';
   import MetadataRulesSettings from '$lib/components/settings/MetadataRulesSettings.svelte';
   import WatchedDirectoriesSettings from '$lib/components/settings/WatchedDirectoriesSettings.svelte';
+  import { sectionLabel } from '$lib/display.js';
 
   // Admin guard
   $effect(() => {
@@ -45,17 +46,6 @@
       }
     }
     return map;
-  }
-
-  function sectionLabel(section: string): string {
-    const labels: Record<string, string> = {
-      server: 'Server',
-      metadata: 'Metadata Providers',
-      'metadata.open_library': 'Open Library',
-      'metadata.hardcover': 'Hardcover',
-      isbn_scan: 'ISBN Scanning'
-    };
-    return labels[section] ?? section;
   }
 
   function isSubsection(section: string): boolean {

@@ -1,5 +1,6 @@
 import { type ClassValue, clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
+import { providerLabel } from '$lib/display.js';
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -28,19 +29,6 @@ export function formatFileSize(bytes: number): string {
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 }
 
-/** Format an identifier type slug into a display label. */
-export function formatIdentifierType(type: string): string {
-  const labels: Record<string, string> = {
-    isbn13: 'ISBN-13',
-    isbn10: 'ISBN-10',
-    asin: 'ASIN',
-    google_books: 'Google Books',
-    open_library: 'Open Library',
-    hardcover: 'Hardcover'
-  };
-  return labels[type] ?? type;
-}
-
 /** Format a book file format with optional spec version (e.g. "EPUB 3.0", "PDF 1.7"). */
 export function formatFormatLabel(format: string, formatVersion?: string | null): string {
   const label = format.toUpperCase();
@@ -55,7 +43,7 @@ export function formatMetadataSource(source: { type: string; name?: string }): s
     case 'filename':
       return 'Filename';
     case 'provider':
-      return source.name ?? 'Provider';
+      return source.name ? providerLabel(source.name) : 'Provider';
     case 'user':
       return 'User';
     case 'content_scan':

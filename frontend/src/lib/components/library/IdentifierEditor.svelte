@@ -1,43 +1,14 @@
-<script lang="ts" module>
-  /** Return a Tailwind class string for an identifier type badge. */
-  function typeColorClass(type: string): string {
-    switch (type) {
-      case 'isbn13':
-      case 'isbn10':
-        return 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400';
-      case 'asin':
-        return 'bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-400';
-      case 'google_books':
-        return 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400';
-      case 'open_library':
-        return 'bg-indigo-100 text-indigo-800 dark:bg-indigo-900/30 dark:text-indigo-400';
-      case 'hardcover':
-        return 'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-400';
-      default:
-        return 'bg-muted text-muted-foreground';
-    }
-  }
-</script>
-
 <script lang="ts">
   import type { BookDetail, IdentifierEntry } from '$lib/api/index.js';
   import { api, ApiError } from '$lib/api/index.js';
   import { Button } from '$lib/components/ui/button/index.js';
   import { Input } from '$lib/components/ui/input/index.js';
   import * as Select from '$lib/components/ui/select/index.js';
-  import { formatIdentifierType, formatMetadataSource } from '$lib/utils.js';
+  import { identifierLabel, identifierColorClass, identifierTypeOptions } from '$lib/display.js';
+  import { formatMetadataSource } from '$lib/utils.js';
   import type { IsbnValidation } from '$lib/utils/isbn.js';
   import { validateIsbn } from '$lib/utils/isbn.js';
   import { formatScore, scoreColor } from './candidate-utils.js';
-
-  const identifierTypeOptions: { value: string; label: string }[] = [
-    { value: 'isbn13', label: 'ISBN-13' },
-    { value: 'isbn10', label: 'ISBN-10' },
-    { value: 'asin', label: 'ASIN' },
-    { value: 'google_books', label: 'Google Books' },
-    { value: 'open_library', label: 'Open Library' },
-    { value: 'hardcover', label: 'Hardcover' }
-  ];
 
   interface Props {
     book: BookDetail;
@@ -197,10 +168,10 @@
                 <td class="py-2 pr-3">
                   <Select.Root type="single" bind:value={editType}>
                     <Select.Trigger class="h-8 w-28 text-xs">
-                      {identifierTypeOptions.find((o) => o.value === editType)?.label ?? editType}
+                      {identifierTypeOptions().find((o) => o.value === editType)?.label ?? editType}
                     </Select.Trigger>
                     <Select.Content>
-                      {#each identifierTypeOptions as option (option.value)}
+                      {#each identifierTypeOptions() as option (option.value)}
                         <Select.Item value={option.value} label={option.label} />
                       {/each}
                     </Select.Content>
@@ -298,11 +269,11 @@
                 <!-- Display mode row -->
                 <td class="py-2 pr-3">
                   <span
-                    class="inline-flex rounded-full px-2 py-0.5 text-xs font-medium {typeColorClass(
+                    class="inline-flex rounded-full px-2 py-0.5 text-xs font-medium {identifierColorClass(
                       ident.identifier_type
                     )}"
                   >
-                    {formatIdentifierType(ident.identifier_type)}
+                    {identifierLabel(ident.identifier_type)}
                   </span>
                 </td>
                 <td class="py-2 pr-3 font-mono text-xs">{ident.value}</td>
@@ -476,10 +447,10 @@
     <div class="flex items-start gap-2">
       <Select.Root type="single" bind:value={addType}>
         <Select.Trigger class="h-9 w-32 text-xs">
-          {identifierTypeOptions.find((o) => o.value === addType)?.label ?? addType}
+          {identifierTypeOptions().find((o) => o.value === addType)?.label ?? addType}
         </Select.Trigger>
         <Select.Content>
-          {#each identifierTypeOptions as option (option.value)}
+          {#each identifierTypeOptions() as option (option.value)}
             <Select.Item value={option.value} label={option.label} />
           {/each}
         </Select.Content>

@@ -98,7 +98,7 @@ describe('CandidateReview', () => {
   it('renders pending candidates with provider name, score, Apply/Reject buttons', () => {
     const candidate = createCandidateResponse({
       id: 'c1',
-      provider_name: 'Open Library',
+      provider_name: 'open_library',
       score: 0.85,
       status: 'pending',
       title: 'Candidate Title'
@@ -144,7 +144,7 @@ describe('CandidateReview', () => {
   it('renders rejected candidates section', () => {
     const rejected = createCandidateResponse({
       id: 'c2',
-      provider_name: 'Open Library',
+      provider_name: 'open_library',
       status: 'rejected',
       title: 'Rejected Title',
       score: 0.5
@@ -165,7 +165,7 @@ describe('CandidateReview', () => {
   it('renders applied candidates with Undo button', () => {
     const applied = createCandidateResponse({
       id: 'c3',
-      provider_name: 'Open Library',
+      provider_name: 'open_library',
       status: 'applied',
       score: 0.9
     });
@@ -332,6 +332,43 @@ describe('CandidateReview', () => {
     expect(screen.getByText('Strong ID match')).toBeInTheDocument();
   });
 
+  it('treats same authors in different order as a match (dimmed, no checkbox)', () => {
+    const bookWithAuthors = createBookDetail({
+      id: 'book-1',
+      title: 'Test Book',
+      authors: [
+        { id: 'a1', name: 'Alice Smith', sort_name: 'Smith, Alice', role: 'author', position: 0 },
+        { id: 'a2', name: 'Bob Jones', sort_name: 'Jones, Bob', role: 'author', position: 1 }
+      ]
+    });
+    const candidate = createCandidateResponse({
+      id: 'c1',
+      status: 'pending',
+      title: 'Test Book',
+      authors: [
+        { name: 'Bob Jones', role: 'author' },
+        { name: 'Alice Smith', role: 'author' }
+      ]
+    });
+    render(CandidateReview, {
+      props: {
+        book: bookWithAuthors,
+        candidates: [candidate],
+        onapply: vi.fn<ApplyFn>(),
+        onreject: vi.fn<RejectFn>(),
+        onundo: vi.fn<UndoFn>(),
+      }
+    });
+
+    // Find the Authors row
+    const authorsLabel = screen.getByText('Authors');
+    const authorsRow = authorsLabel.closest('tr')!;
+    // The row should be dimmed (opacity-40)
+    expect(authorsRow.className).toContain('opacity-40');
+    // No checkbox should be rendered in the row
+    expect(authorsRow.querySelector('input[type="checkbox"]')).toBeNull();
+  });
+
   it('renders non-author contributors as separate rows', () => {
     const candidate = createCandidateResponse({
       id: 'c1',
@@ -384,13 +421,13 @@ describe('CandidateReview', () => {
     const applied = createCandidateResponse({
       id: 'c1',
       status: 'applied',
-      provider_name: 'Open Library',
+      provider_name: 'open_library',
       score: 0.9
     });
     const pending = createCandidateResponse({
       id: 'c2',
       status: 'pending',
-      provider_name: 'Hardcover',
+      provider_name: 'hardcover',
       score: 0.7,
       title: 'Alternative Title'
     });
