@@ -4,7 +4,7 @@
 A fast, modern, self-hosted e-book collection manager.
 
 - Import ebooks via upload or directory scan
-- Automatic format detection and metadata extraction (EPUB, PDF)
+- Automatic format detection and metadata extraction (EPUB, MOBI, PDF)
 - Background import processing with real-time progress
 - Library browsing with grid and list views
 - Search (full-text), sort, and filter
@@ -12,6 +12,8 @@ A fast, modern, self-hosted e-book collection manager.
 - REST API with OpenAPI documentation
 - Single binary deployment, backed by embedded SQLite
 - Dark/light theme
+
+![Alert](./.github/assets/warning-01.svg)
 
 ## Quick Start
 

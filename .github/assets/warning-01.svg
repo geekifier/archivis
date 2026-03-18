@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="575" height="198" role="img">
+    <title>WARNING</title>
+    <desc>Generated markdown alert card</desc>
+    <rect x="0" y="0" width="575" height="198" rx="5" ry="5" fill="#1a1410" />
+    <rect x="0" y="0" width="5" height="198" fill="#f0883e" />
+    <g
+        font-family="'JetBrainsMono Nerd Font','JetBrains Mono','JetBrainsMono NF',ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace">
+        <text x="14" y="32" font-size="20" fill="#f0883e" dominant-baseline="middle">💀</text>
+        <text x="46" y="32" font-size="16" font-weight="700" fill="#f0883e"
+            dominant-baseline="middle">
+            WARNING
+        </text>
+
+        <text font-size="13" fill="#f0f6fc">
+
+            <tspan x="46" y="68">This is a PRE-RELEASE, actively-developed source code, provided </tspan>
+            <tspan x="46" y="86">AS IS, WITH NO WARRANTY OR ASSURANCES WHATSOEVER.</tspan>
+            <tspan x="46" y="122">There are no backwards compatibility or API stability guarantees.</tspan>
+            <tspan x="46" y="158">No detailed release notes until tagged releases begin.</tspan>
+            <tspan x="46" y="176">No guarantees of any future features, releases, or support.</tspan>
+        </text>
+    </g>
+</svg>
