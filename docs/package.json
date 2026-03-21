@@ -1,0 +1,14 @@
+{
+  "name": "archivis-docs",
+  "version": "0.1.0",
+  "description": "Documentation for the Archivis Project",
+  "license": "AGPL-3.0-only",
+  "devDependencies": {
+    "vitepress": "^1.6.4"
+  },
+  "scripts": {
+    "docs:dev": "vitepress dev --port 5175",
+    "docs:build": "vitepress build",
+    "docs:preview": "vitepress preview --port 5175"
+  }
+}

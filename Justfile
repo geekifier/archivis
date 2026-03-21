@@ -342,6 +342,20 @@ changelog:
 changelog-preview:
     git cliff --unreleased
 
+# ── Docs ─────────────────────────────────────────────────────────────────────
+
+# Run docs dev server (http://localhost:5175)
+docs-dev:
+    cd docs && npm run docs:dev
+
+# Build docs for production
+docs-build:
+    cd docs && npm run docs:build
+
+# Preview production docs build
+docs-preview:
+    cd docs && npm run docs:preview
+
 # ── CI ────────────────────────────────────────────────────────────────────────
 
 # Run full CI pipeline locally via act (requires Docker)

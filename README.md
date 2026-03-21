@@ -15,6 +15,8 @@ A fast, modern, self-hosted e-book collection manager.
 
 ![Alert](./.github/assets/warning-01.svg)
 
+:arrow_right: [Documentation Site](https://geekifier.github.io/archivis/)
+
 ## Quick Start
 
 ### Docker (recommended)
