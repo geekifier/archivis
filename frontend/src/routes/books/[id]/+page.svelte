@@ -5,6 +5,7 @@
     BookDetail,
     CandidateResponse,
     DuplicateLinkResponse,
+    ReadingProgressResponse,
     TaskProgressEvent,
     TaskStatus
   } from '$lib/api/index.js';
@@ -16,6 +17,7 @@
   import CoverUploadDialog from '$lib/components/library/CoverUploadDialog.svelte';
   import IdentifierEditor from '$lib/components/library/IdentifierEditor.svelte';
   import MergeDialog from '$lib/components/library/MergeDialog.svelte';
+  import ReadingProgressBar from '$lib/components/library/ReadingProgressBar.svelte';
   import { isAuthorRole } from '$lib/components/library/book-list-utils.js';
   import * as AlertDialog from '$lib/components/ui/alert-dialog/index.js';
   import { Button } from '$lib/components/ui/button/index.js';
@@ -64,6 +66,9 @@
   let flagging = $state(false);
   let flagError = $state<string | null>(null);
 
+  // --- Reading progress state ---
+  let readingProgress = $state<ReadingProgressResponse | null>(null);
+
   const bookId = $derived(page.params.id ?? '');
   const hue = $derived(placeholderHue(bookId));
   const coverVersion = $derived(
@@ -76,6 +81,9 @@
   const authors = $derived(book?.authors ?? []);
   const primaryAuthors = $derived(authors.filter((a) => isAuthorRole(a.role)));
   const otherContributors = $derived(authors.filter((a) => !isAuthorRole(a.role)));
+
+  const bookProgress = $derived(readingProgress?.progress ?? 0);
+  const progressFileId = $derived(readingProgress?.book_file_id ?? book?.files[0]?.id ?? '');
 
   const pendingCandidates = $derived(candidates.filter((c) => c.status === 'pending'));
   const needsTruncation = $derived(
@@ -106,9 +114,45 @@
       });
   }
 
+  function fetchReadingProgress() {
+    api.reader.getProgress(bookId).then((p) => {
+      readingProgress = p;
+    }).catch(() => {
+      readingProgress = null;
+    });
+  }
+
+  function handleProgressChange(newProgress: number) {
+    if (readingProgress) {
+      readingProgress = { ...readingProgress, progress: newProgress };
+    } else {
+      readingProgress = {
+        id: '',
+        book_id: bookId,
+        book_file_id: progressFileId,
+        progress: newProgress,
+        location: null,
+        device_id: null,
+        preferences: null,
+        started_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      };
+    }
+  }
+
   $effect(() => {
     void bookId;
     fetchBook();
+    fetchReadingProgress();
+  });
+
+  // Re-fetch reading progress when the tab becomes visible (e.g. after closing the reader tab)
+  $effect(() => {
+    function onVisible() {
+      if (!document.hidden) fetchReadingProgress();
+    }
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
   });
 
   function enterEditMode() {
@@ -878,6 +922,17 @@
             </div>
           {/if}
         </div>
+        <!-- Reading progress (below cover, above files) -->
+        {#if book.files.length > 0}
+          <div class="mt-2">
+            <ReadingProgressBar
+              bookId={book.id}
+              fileId={progressFileId}
+              progress={bookProgress}
+              onProgressChange={handleProgressChange}
+            />
+          </div>
+        {/if}
         <!-- Files section (below cover on desktop) -->
         {#if book.files.length > 0}
           <div class="mt-4 space-y-2">

@@ -92,6 +92,7 @@ function renderPage(
   mockApi.books.get.mockResolvedValue(book);
   mockApi.resolution.candidates.mockResolvedValue(candidates);
   mockApi.duplicates.forBook.mockResolvedValue([]);
+  mockApi.reader.getProgress.mockResolvedValue(null);
   mockApi.ui.sidebarCounts.mockResolvedValue({
     duplicates: 0, needs_review: 0, unidentified: 0, active_tasks: 0
   });
