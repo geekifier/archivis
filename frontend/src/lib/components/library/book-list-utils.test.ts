@@ -5,7 +5,8 @@ import {
   formatDate,
   formatAuthors,
   formatSeries,
-  formatFormats
+  formatFormats,
+  isAuthorRole
 } from './book-list-utils.js';
 import {
   createBookSummary,
@@ -75,6 +76,36 @@ describe('formatDate', () => {
   });
 });
 
+describe('isAuthorRole', () => {
+  it('returns true for undefined role', () => {
+    expect(isAuthorRole(undefined)).toBe(true);
+  });
+
+  it('returns true for null role', () => {
+    expect(isAuthorRole(null)).toBe(true);
+  });
+
+  it('returns true for empty string role', () => {
+    expect(isAuthorRole('')).toBe(true);
+  });
+
+  it('returns true for "author" role', () => {
+    expect(isAuthorRole('author')).toBe(true);
+  });
+
+  it('returns false for "translator"', () => {
+    expect(isAuthorRole('translator')).toBe(false);
+  });
+
+  it('returns false for "editor"', () => {
+    expect(isAuthorRole('editor')).toBe(false);
+  });
+
+  it('returns false for "illustrator"', () => {
+    expect(isAuthorRole('illustrator')).toBe(false);
+  });
+});
+
 describe('formatAuthors', () => {
   it('returns comma-separated author names', () => {
     const book = createBookSummary({
@@ -91,6 +122,23 @@ describe('formatAuthors', () => {
   it('returns empty string when authors array is empty', () => {
     const book = createBookSummary({ authors: [] });
     expect(formatAuthors(book)).toBe('');
+  });
+
+  it('excludes non-author contributors', () => {
+    const book = createBookSummary({
+      authors: [
+        createAuthorEntry({ name: 'Alice', role: 'author' }),
+        createAuthorEntry({ name: 'Bob', role: 'translator' })
+      ]
+    });
+    expect(formatAuthors(book)).toBe('Alice');
+  });
+
+  it('treats empty role as author', () => {
+    const book = createBookSummary({
+      authors: [createAuthorEntry({ name: 'Alice', role: '' })]
+    });
+    expect(formatAuthors(book)).toBe('Alice');
   });
 });
 

@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { BookSummary } from '$lib/api/index.js';
   import { placeholderHue } from '$lib/utils.js';
+  import { isAuthorRole } from './book-list-utils.js';
   import CoverImage from './CoverImage.svelte';
 
   interface Props {
@@ -12,7 +13,12 @@
 
   let { book, selectionMode = false, selected = false, onselect }: Props = $props();
 
-  const authors = $derived(book.authors?.map((a) => a.name).join(', ') ?? '');
+  const authors = $derived(
+    book.authors
+      ?.filter((a) => isAuthorRole(a.role))
+      .map((a) => a.name)
+      .join(', ') ?? ''
+  );
 
   const coverTs = $derived(book.updated_at ? Date.parse(book.updated_at) : 0);
   const coverSm = $derived(`/api/books/${book.id}/cover?size=sm&t=${coverTs}`);

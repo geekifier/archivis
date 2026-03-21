@@ -5,6 +5,7 @@
   import Pagination from '$lib/components/library/Pagination.svelte';
   import MergeDialog from '$lib/components/library/MergeDialog.svelte';
   import CoverImage from '$lib/components/library/CoverImage.svelte';
+  import { isAuthorRole } from '$lib/components/library/book-list-utils.js';
   import { placeholderHue } from '$lib/utils.js';
   import { goto } from '$app/navigation';
 
@@ -247,9 +248,9 @@
                 </div>
                 <div class="min-w-0">
                   <p class="line-clamp-2 text-sm font-medium">{link.book_a.title}</p>
-                  {#if link.book_a.authors && link.book_a.authors.length > 0}
+                  {#if link.book_a.authors?.some((a) => isAuthorRole(a.role))}
                     <p class="line-clamp-1 text-xs text-muted-foreground">
-                      {link.book_a.authors.map((a) => a.name).join(', ')}
+                      {link.book_a.authors.filter((a) => isAuthorRole(a.role)).map((a) => a.name).join(', ')}
                     </p>
                   {/if}
                 </div>
@@ -299,9 +300,9 @@
                 </div>
                 <div class="min-w-0">
                   <p class="line-clamp-2 text-sm font-medium">{link.book_b.title}</p>
-                  {#if link.book_b.authors && link.book_b.authors.length > 0}
+                  {#if link.book_b.authors?.some((a) => isAuthorRole(a.role))}
                     <p class="line-clamp-1 text-xs text-muted-foreground">
-                      {link.book_b.authors.map((a) => a.name).join(', ')}
+                      {link.book_b.authors.filter((a) => isAuthorRole(a.role)).map((a) => a.name).join(', ')}
                     </p>
                   {/if}
                 </div>

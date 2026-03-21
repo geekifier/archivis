@@ -13,7 +13,8 @@
     formatDate,
     formatAuthors,
     formatSeries,
-    formatFormats
+    formatFormats,
+    isAuthorRole
   } from './book-list-utils.js';
   import CoverImage from './CoverImage.svelte';
   import { placeholderHue } from '$lib/utils.js';
@@ -303,7 +304,7 @@
                   </span>
                 {/if}
               {:else if cell.column.id === 'authors'}
-                {@const authors = cell.row.original.authors ?? []}
+                {@const authors = (cell.row.original.authors ?? []).filter((a) => isAuthorRole(a.role))}
                 <span class="block truncate text-muted-foreground">
                   {#each authors as author, i (author.id)}
                     {#if i > 0},

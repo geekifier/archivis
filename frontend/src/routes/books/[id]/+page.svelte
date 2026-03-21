@@ -16,6 +16,7 @@
   import CoverUploadDialog from '$lib/components/library/CoverUploadDialog.svelte';
   import IdentifierEditor from '$lib/components/library/IdentifierEditor.svelte';
   import MergeDialog from '$lib/components/library/MergeDialog.svelte';
+  import { isAuthorRole } from '$lib/components/library/book-list-utils.js';
   import * as AlertDialog from '$lib/components/ui/alert-dialog/index.js';
   import { Button } from '$lib/components/ui/button/index.js';
   import * as Dialog from '$lib/components/ui/dialog/index.js';
@@ -73,8 +74,8 @@
   );
 
   const authors = $derived(book?.authors ?? []);
-  const primaryAuthors = $derived(authors.filter((a) => a.role === 'author'));
-  const otherContributors = $derived(authors.filter((a) => a.role !== 'author'));
+  const primaryAuthors = $derived(authors.filter((a) => isAuthorRole(a.role)));
+  const otherContributors = $derived(authors.filter((a) => !isAuthorRole(a.role)));
 
   const pendingCandidates = $derived(candidates.filter((c) => c.status === 'pending'));
   const needsTruncation = $derived(
@@ -494,7 +495,7 @@
         .map((b) => ({
           id: b.id,
           label: b.title,
-          sublabel: b.authors?.map((a) => a.name).join(', ')
+          sublabel: b.authors?.filter((a) => isAuthorRole(a.role)).map((a) => a.name).join(', ')
         }));
     } catch {
       return [];

@@ -6,6 +6,7 @@
   import * as AlertDialog from '$lib/components/ui/alert-dialog/index.js';
   import * as Select from '$lib/components/ui/select/index.js';
   import CoverImage from './CoverImage.svelte';
+  import { isAuthorRole } from './book-list-utils.js';
   import { identifierLabel } from '$lib/display.js';
   import {
     placeholderHue,
@@ -331,14 +332,14 @@
 
       <div
         class={diffClass(
-          book.authors.map((a) => a.name).join(', '),
-          otherBook.authors.map((a) => a.name).join(', ')
+          book.authors.filter((a) => isAuthorRole(a.role)).map((a) => a.name).join(', '),
+          otherBook.authors.filter((a) => isAuthorRole(a.role)).map((a) => a.name).join(', ')
         )}
       >
         <dt class="text-xs font-medium text-muted-foreground">Authors</dt>
         <dd>
-          {#if book.authors.length > 0}
-            {book.authors.map((a) => a.name).join(', ')}
+          {#if book.authors.filter((a) => isAuthorRole(a.role)).length > 0}
+            {book.authors.filter((a) => isAuthorRole(a.role)).map((a) => a.name).join(', ')}
           {:else}
             <span class="text-muted-foreground">--</span>
           {/if}

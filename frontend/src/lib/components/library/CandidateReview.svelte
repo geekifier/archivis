@@ -19,6 +19,7 @@
     warningFields,
     type CandidateFieldName
   } from './candidate-utils.js';
+  import { isAuthorRole } from './book-list-utils.js';
 
   interface Props {
     book: BookDetail;
@@ -51,10 +52,6 @@
   const rejectedCandidates = $derived(candidates.filter((c) => c.status === 'rejected'));
   const appliedCandidates = $derived(candidates.filter((c) => c.status === 'applied'));
   const hasExistingApply = $derived(appliedCandidates.length > 0);
-
-  function isAuthorRole(role: string | undefined | null): boolean {
-    return !role || role === 'author';
-  }
 
   function titleCase(s: string): string {
     return s.charAt(0).toUpperCase() + s.slice(1);

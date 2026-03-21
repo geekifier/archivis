@@ -34,9 +34,19 @@ export function formatDate(iso: string): string {
   });
 }
 
-/** Join a book's author names into a comma-separated string. */
+/** Check whether an author role represents a primary author (as opposed to a contributor). */
+export function isAuthorRole(role: string | undefined | null): boolean {
+  return !role || role === 'author';
+}
+
+/** Join a book's primary author names into a comma-separated string. */
 export function formatAuthors(book: BookSummary): string {
-  return book.authors?.map((a) => a.name).join(', ') ?? '';
+  return (
+    book.authors
+      ?.filter((a) => isAuthorRole(a.role))
+      .map((a) => a.name)
+      .join(', ') ?? ''
+  );
 }
 
 /** Format the primary series info for display. */
