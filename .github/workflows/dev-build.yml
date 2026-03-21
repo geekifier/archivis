@@ -6,6 +6,7 @@ on:
     paths-ignore:
       - '**.md'
       - '_docs/**'
+      - 'docs/**'
       - 'LICENSE'
       - 'Justfile'
       - 'docker-compose*.yml'
