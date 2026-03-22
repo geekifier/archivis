@@ -53,21 +53,23 @@ ensure_password() {
 # ── Subcommands ─────────────────────────────────────────────────────────────
 
 cmd_kill() {
-  local pid
-  pid=$(lsof -ti "tcp:${PORT}" 2>/dev/null || true)
-  if [[ -n "$pid" ]]; then
-    echo "Killing existing process on port ${PORT} (pid ${pid})..."
-    kill "$pid" 2>/dev/null || true
-    # Wait briefly for the process to exit
+  local pids
+  pids=$(lsof -ti "tcp:${PORT}" 2>/dev/null || true)
+  if [[ -n "$pids" ]]; then
+    # shellcheck disable=SC2086 # intentional word splitting on newline-separated PIDs
+    echo "Killing process(es) on port ${PORT} (pid ${pids//$'\n'/ })..."
+    kill $pids 2>/dev/null || true
+    # Wait briefly for processes to exit
     local i=0
-    while ((i < 10)) && kill -0 "$pid" 2>/dev/null; do
+    while ((i < 10)) && lsof -ti "tcp:${PORT}" >/dev/null 2>&1; do
       sleep 0.5
       i=$((i + 1))
     done
-    # Force-kill if still alive
-    if kill -0 "$pid" 2>/dev/null; then
-      echo "Process did not exit gracefully, sending SIGKILL..."
-      kill -9 "$pid" 2>/dev/null || true
+    # Force-kill if any still alive
+    pids=$(lsof -ti "tcp:${PORT}" 2>/dev/null || true)
+    if [[ -n "$pids" ]]; then
+      echo "Process(es) did not exit gracefully, sending SIGKILL..."
+      kill -9 $pids 2>/dev/null || true
     fi
   fi
 }

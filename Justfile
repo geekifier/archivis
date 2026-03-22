@@ -200,7 +200,7 @@ _dev-api-ensure-running:
     fi
 
     mkdir -p .local/clean
-    echo "Dev API not reachable at ${base_url}; starting 'just dev-resume' in background..." >&2
+    echo "Dev API not reachable at ${base_url}; starting backend in background..." >&2
     nohup just dev-resume-backend > .local/clean/dev-resume.log 2>&1 &
     ARCHIVIS_PORT="${ARCHIVIS_PORT:-9514}" ./scripts/dev-boot.sh wait
 
