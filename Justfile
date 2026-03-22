@@ -143,6 +143,10 @@ dev-clean-resume:
 # Alias for resuming the clean dev instance (no wipe/setup).
 dev-resume: dev-clean-resume
 
+# Resume backend only (no frontend, no wipe/setup). Used by dev-api.
+dev-resume-backend:
+    cargo run --package archivis-server -- --data-dir .local/clean --listen-address {{host}}
+
 # Wipe → backend only + create admin (no frontend)
 dev-clean-backend:
     #!/usr/bin/env bash
@@ -197,7 +201,7 @@ _dev-api-ensure-running:
 
     mkdir -p .local/clean
     echo "Dev API not reachable at ${base_url}; starting 'just dev-resume' in background..." >&2
-    nohup just dev-resume > .local/clean/dev-resume.log 2>&1 &
+    nohup just dev-resume-backend > .local/clean/dev-resume.log 2>&1 &
     ARCHIVIS_PORT="${ARCHIVIS_PORT:-9514}" ./scripts/dev-boot.sh wait
 
     if needs_setup; then
