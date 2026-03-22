@@ -155,7 +155,7 @@ pub(crate) fn validate_isbn13_checksum(isbn: &str) -> bool {
         };
         sum += if i % 2 == 0 { d } else { d * 3 };
     }
-    sum % 10 == 0
+    sum.is_multiple_of(10)
 }
 
 /// Compute the expected ISBN-13 check digit from the first 12 digits.
@@ -200,7 +200,7 @@ pub(crate) fn validate_isbn10_checksum(isbn: &str) -> bool {
         let weight = 10 - u32::try_from(i).expect("index <= 9");
         sum += val * weight;
     }
-    sum % 11 == 0
+    sum.is_multiple_of(11)
 }
 
 /// Compute the expected ISBN-10 check digit from the first 9 digits.

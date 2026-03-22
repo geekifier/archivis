@@ -445,13 +445,11 @@ impl<S: StorageBackend> ImportService<S> {
 
             if author_sim >= similarity::AUTHOR_MATCH_THRESHOLD {
                 let score = title_sim + author_sim;
-                if best_full.as_ref().map_or(true, |(_, s)| score > *s) {
+                if best_full.as_ref().is_none_or(|(_, s)| score > *s) {
                     best_full = Some((info, score));
                 }
             } else if title_sim >= similarity::TITLE_ONLY_DUPLICATE_THRESHOLD
-                && best_title_only
-                    .as_ref()
-                    .map_or(true, |(_, s)| title_sim > *s)
+                && best_title_only.as_ref().is_none_or(|(_, s)| title_sim > *s)
             {
                 best_title_only = Some((info, title_sim));
             }

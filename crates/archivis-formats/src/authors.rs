@@ -51,7 +51,7 @@ pub fn split_author_string(raw: &str) -> Vec<String> {
     // 3. "Last, First" comma-pair detection
     if trimmed.contains(", ") {
         let tokens: Vec<&str> = trimmed.split(", ").collect();
-        if tokens.len() >= 2 && tokens.len() % 2 == 0 && is_last_first_pattern(&tokens) {
+        if tokens.len() >= 2 && tokens.len().is_multiple_of(2) && is_last_first_pattern(&tokens) {
             return tokens
                 .chunks(2)
                 .map(|pair| format!("{} {}", pair[1].trim(), pair[0].trim()))

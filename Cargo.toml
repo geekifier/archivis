@@ -17,7 +17,7 @@ version = "0.1.0"
 edition = "2021"
 license = "AGPL-3.0-or-later"
 repository = "https://github.com/geekifier/archivis"
-rust-version = "1.80"
+rust-version = "1.87"
 
 [workspace.dependencies]
 # Internal crates
@@ -98,7 +98,7 @@ image = { version = "0.25", default-features = false, features = [
 ] }
 
 # SVG rasterization for cover thumbnails
-resvg = "0.44"
+resvg = "0.47"
 
 # IP network parsing (CIDR)
 ipnet = "2"
