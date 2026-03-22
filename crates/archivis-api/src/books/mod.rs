@@ -1,4 +1,5 @@
 pub(crate) mod handlers;
+pub(crate) mod scope;
 pub mod types;
 
 use axum::routing::{delete, get, post, put};
@@ -13,6 +14,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(handlers::list_books))
         // Batch routes (no {id} path param)
+        .route("/selection-scope", post(handlers::issue_selection_scope))
         .route("/batch-update", post(handlers::batch_update_books))
         .route("/batch-tags", post(handlers::batch_set_tags))
         .route(

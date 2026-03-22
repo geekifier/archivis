@@ -222,6 +222,20 @@ impl SeriesRepository {
         Ok(series)
     }
 
+    /// Find a series by name (case-insensitive exact match).
+    pub async fn find_by_name(pool: &SqlitePool, name: &str) -> Result<Option<Series>, DbError> {
+        let row = sqlx::query_as!(
+            SeriesRow,
+            "SELECT id, name, description FROM series WHERE name = ? COLLATE NOCASE",
+            name,
+        )
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| DbError::Query(e.to_string()))?;
+
+        row.map(SeriesRow::into_series).transpose()
+    }
+
     pub async fn delete(pool: &SqlitePool, id: Uuid) -> Result<(), DbError> {
         let id_str = id.to_string();
         let result = sqlx::query!("DELETE FROM series WHERE id = ?", id_str)

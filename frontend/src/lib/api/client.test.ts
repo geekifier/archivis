@@ -429,7 +429,7 @@ describe('API client', () => {
       fetchSpy.mockResolvedValueOnce(mockResponse({ updated_count: 1, errors: [] }));
 
       await api.books.batchUpdate({
-        book_ids: ['book-1'],
+        selection: { mode: 'ids', ids: ['book-1'] },
         updates: { language: 'en' }
       });
 

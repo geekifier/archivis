@@ -1,4 +1,11 @@
-export { api, getSessionToken, setSessionToken, onCountsChanged, ApiError } from './client.js';
+export {
+  api,
+  getSessionToken,
+  setSessionToken,
+  onCountsChanged,
+  ApiError,
+  isBatchAsync
+} from './client.js';
 export type {
   AddIdentifierRequest,
   AddWatchedDirectoryRequest,
@@ -6,7 +13,10 @@ export type {
   AuthorEntry,
   AuthorResponse,
   AuthStatusResponse,
+  BatchAsyncResponse,
   BatchIsbnScanResponse,
+  BatchResult,
+  BatchSyncResponse,
   BookAuthorLink,
   BookDetail,
   BookFormat,
@@ -32,7 +42,9 @@ export type {
   FsDetectionResponse,
   FsEntry,
   IdentifierEntry,
+  IssueSelectionScopeResponse,
   IsbnScanResponse,
+  LibraryFilterState,
   LoginRequest,
   LoginResponse,
   MergeRequest,
@@ -43,6 +55,8 @@ export type {
   PaginatedAuthors,
   PaginatedBooks,
   PaginatedDuplicates,
+  QueryWarning,
+  AmbiguousMatchEntry,
   PaginatedSeries,
   PaginatedTags,
   ReadingProgressResponse,
@@ -52,6 +66,7 @@ export type {
   ResolutionState,
   ScanManifestResponse,
   ScanTriggeredResponse,
+  SelectionSpec,
   SeriesEntry,
   SeriesResponse,
   SetBookAuthorsRequest,

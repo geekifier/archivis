@@ -1,3 +1,6 @@
+// utoipa `IntoParams` generates large stack arrays for structs with many params.
+#![allow(clippy::large_stack_arrays)]
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Deserializer, Serialize};
 use utoipa::{IntoParams, ToSchema};
@@ -5,10 +8,14 @@ use uuid::Uuid;
 use validator::Validate;
 
 use archivis_core::models::{
-    Book, BookFile, BookFormat, FieldProvenance, Identifier, IdentifierType, MetadataProvenance,
-    MetadataSource, MetadataStatus, ResolutionOutcome, ResolutionState, Tag,
+    Book, BookFile, BookFormat, FieldProvenance, Identifier, IdentifierType, LibraryFilterState,
+    MetadataProvenance, MetadataSource, MetadataStatus, ResolutionOutcome, ResolutionState, Tag,
+    TagMatchMode,
 };
-use archivis_db::{BookAuthorEntry, BookSeriesEntry, BookWithRelations, PaginatedResult};
+use archivis_db::{
+    AmbiguousMatch, BookAuthorEntry, BookSeriesEntry, BookWithRelations, PaginatedResult,
+    QueryWarning,
+};
 
 /// Deserializer that distinguishes between absent, `null`, and a present value.
 /// - Field absent in JSON: `None` (no change)
@@ -26,29 +33,168 @@ where
 // ── Query Parameters ────────────────────────────────────────────
 
 /// Query parameters for `GET /api/books`.
-#[derive(Debug, Deserialize, IntoParams)]
+#[derive(Debug, Default, Deserialize, IntoParams)]
 pub struct BookListParams {
+    // ── View controls ────────────────────────────────────────
     /// Page number (1-indexed).
     pub page: Option<u32>,
     /// Results per page (max 100).
     pub per_page: Option<u32>,
-    /// Sort field: `added_at`, title, `sort_title`, `updated_at`, rating, `metadata_status`.
+    /// Sort field: `added_at`, `title`, `sort_title`, `updated_at`, `rating`,
+    /// `metadata_status`, `author`, `series`, `relevance`.
     pub sort_by: Option<String>,
-    /// Sort direction: asc or desc.
+    /// Sort direction: `asc` or `desc`.
     pub sort_order: Option<String>,
+    /// Comma-separated list of relations to include: `authors`, `series`, `tags`, `files`.
+    pub include: Option<String>,
+
+    // ── Filter fields (map 1:1 to `LibraryFilterState`) ─────
     /// Full-text search query.
     pub q: Option<String>,
-    /// Filter by book format (e.g. epub, pdf).
+    /// Filter by book format (e.g. `epub`, `pdf`).
     pub format: Option<String>,
     /// Filter by metadata status.
     pub status: Option<String>,
-    /// Filter by tag name.
-    pub tag: Option<String>,
     /// Filter by author ID.
     pub author_id: Option<Uuid>,
     /// Filter by series ID.
     pub series_id: Option<Uuid>,
-    /// Comma-separated list of relations to include: authors, series, tags, files.
+    /// Filter by publisher ID.
+    pub publisher_id: Option<Uuid>,
+    /// Comma-separated tag UUIDs.
+    pub tags: Option<String>,
+    /// Tag match mode: `any` (default) or `all`.
+    pub tag_match: Option<String>,
+    /// Filter by `metadata_user_trusted` flag.
+    pub trusted: Option<bool>,
+    /// Filter by `metadata_locked` flag.
+    pub locked: Option<bool>,
+    /// Filter by resolution state (e.g. `pending`, `resolved`).
+    pub resolution_state: Option<String>,
+    /// Filter by resolution outcome (e.g. `matched`, `no_match`).
+    pub resolution_outcome: Option<String>,
+    /// Filter by language code (exact match).
+    pub language: Option<String>,
+    /// Minimum publication year (inclusive).
+    pub year_min: Option<i32>,
+    /// Maximum publication year (inclusive).
+    pub year_max: Option<i32>,
+    /// Filter by cover presence.
+    pub has_cover: Option<bool>,
+    /// Filter by description presence.
+    pub has_description: Option<bool>,
+    /// Filter by having at least one identifier.
+    pub has_identifiers: Option<bool>,
+    /// Filter by ISBN (strips hyphens/spaces).
+    pub isbn: Option<String>,
+    /// Filter by ASIN.
+    pub asin: Option<String>,
+    /// Filter by Open Library ID.
+    pub open_library_id: Option<String>,
+    /// Filter by Hardcover ID.
+    pub hardcover_id: Option<String>,
+}
+
+impl BookListParams {
+    /// Convert query parameters into a canonical `LibraryFilterState`.
+    ///
+    /// Returns `Err` if more than one identifier filter is set or enum parsing fails.
+    pub fn into_filter_state(self) -> Result<(LibraryFilterState, BookListViewParams), String> {
+        let format = self
+            .format
+            .as_deref()
+            .map(str::parse)
+            .transpose()
+            .map_err(|e: String| e)?;
+
+        let metadata_status = self
+            .status
+            .as_deref()
+            .map(str::parse)
+            .transpose()
+            .map_err(|e: String| e)?;
+
+        let resolution_state = self
+            .resolution_state
+            .as_deref()
+            .map(str::parse)
+            .transpose()
+            .map_err(|e: String| e)?;
+
+        let resolution_outcome = self
+            .resolution_outcome
+            .as_deref()
+            .map(str::parse)
+            .transpose()
+            .map_err(|e: String| e)?;
+
+        let tag_ids: Vec<Uuid> = self
+            .tags
+            .as_deref()
+            .map(|s| {
+                s.split(',')
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(|s| Uuid::parse_str(s).map_err(|e| format!("invalid tag UUID: {e}")))
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .transpose()?
+            .unwrap_or_default();
+
+        let tag_match = match self.tag_match.as_deref() {
+            Some("all") => TagMatchMode::All,
+            _ => TagMatchMode::Any,
+        };
+
+        let mut filter = LibraryFilterState {
+            text_query: self.q,
+            author_id: self.author_id,
+            series_id: self.series_id,
+            publisher_id: self.publisher_id,
+            tag_ids,
+            tag_match,
+            format,
+            metadata_status,
+            resolution_state,
+            resolution_outcome,
+            trusted: self.trusted,
+            locked: self.locked,
+            language: self.language,
+            year_min: self.year_min,
+            year_max: self.year_max,
+            has_cover: self.has_cover,
+            has_description: self.has_description,
+            has_identifiers: self.has_identifiers,
+            isbn: self.isbn,
+            asin: self.asin,
+            open_library_id: self.open_library_id,
+            hardcover_id: self.hardcover_id,
+        };
+
+        filter.canonicalize();
+
+        if filter.active_identifier_count() > 1 {
+            return Err("at most one identifier filter may be active at a time".into());
+        }
+
+        let view = BookListViewParams {
+            page: self.page,
+            per_page: self.per_page,
+            sort_by: self.sort_by,
+            sort_order: self.sort_order,
+            include: self.include,
+        };
+
+        Ok((filter, view))
+    }
+}
+
+/// View-only parameters extracted from `BookListParams` (not part of filter state).
+pub struct BookListViewParams {
+    pub page: Option<u32>,
+    pub per_page: Option<u32>,
+    pub sort_by: Option<String>,
+    pub sort_order: Option<String>,
     pub include: Option<String>,
 }
 
@@ -167,11 +313,48 @@ pub struct UpdateIdentifierRequest {
     pub value: Option<String>,
 }
 
+// ── Selection / Scope ────────────────────────────────────────────
+
+/// How a batch operation selects its target books.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(tag = "mode", rename_all = "snake_case")]
+pub enum SelectionSpec {
+    /// Explicit list of book IDs.
+    Ids { ids: Vec<Uuid> },
+    /// Server-issued scope token covering "all matching" minus exclusions.
+    Scope {
+        scope_token: String,
+        #[serde(default)]
+        excluded_ids: Vec<Uuid>,
+    },
+}
+
+/// Request body for `POST /api/books/selection-scope`.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct IssueSelectionScopeRequest {
+    /// The filter state to issue a scope token for.
+    #[schema(value_type = Object)]
+    pub filters: LibraryFilterState,
+}
+
+/// Response from `POST /api/books/selection-scope`.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct IssueSelectionScopeResponse {
+    /// Opaque scope token encoding the filter state.
+    pub scope_token: String,
+    /// Number of books matching the filter at issuance time.
+    pub matching_count: u64,
+    /// Human-readable summary of the scope.
+    pub summary: String,
+}
+
+// ── Batch Operations ────────────────────────────────────────────
+
 /// Request body for `POST /api/books/batch-update`.
 #[derive(Debug, Deserialize, Validate, ToSchema)]
 pub struct BatchUpdateBooksRequest {
-    /// IDs of books to update (max 100).
-    pub book_ids: Vec<Uuid>,
+    /// How to select books for this operation.
+    pub selection: SelectionSpec,
     /// Fields to update on all selected books.
     #[validate(nested)]
     pub updates: BatchBookFields,
@@ -200,8 +383,8 @@ pub struct BatchBookFields {
 /// Request body for `POST /api/books/batch-tags`.
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct BatchSetTagsRequest {
-    /// IDs of books to update (max 100).
-    pub book_ids: Vec<Uuid>,
+    /// How to select books for this operation.
+    pub selection: SelectionSpec,
     /// Tags to set or add.
     pub tags: Vec<BookTagLink>,
     /// "replace" (clear existing and set these) or "add" (add without removing existing).
@@ -218,26 +401,30 @@ pub enum BatchTagMode {
     Add,
 }
 
-/// Response for batch update operations.
-#[derive(Debug, Serialize, ToSchema)]
-pub struct BatchUpdateResponse {
+/// Synchronous batch result (HTTP 200) — used when <= 100 books.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct BatchSyncResponse {
     /// Number of books successfully updated.
     pub updated_count: u32,
     /// Per-book errors (if any).
     pub errors: Vec<BatchUpdateError>,
 }
 
-/// Response for batch tag update operations.
-#[derive(Debug, Serialize, ToSchema)]
-pub struct BatchTagsResponse {
-    /// Number of books successfully updated.
-    pub updated_count: u32,
-    /// Per-book errors (if any).
-    pub errors: Vec<BatchUpdateError>,
+/// Asynchronous batch result (HTTP 202) — used when > 100 books.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct BatchAsyncResponse {
+    /// ID of the enqueued background task.
+    pub task_id: Uuid,
+    /// The task type (`bulk_update` or `bulk_set_tags`).
+    pub task_type: String,
+    /// Number of books that will be processed.
+    pub matching_count: u64,
+    /// Human-readable message.
+    pub message: String,
 }
 
 /// An error that occurred while updating a single book in a batch.
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct BatchUpdateError {
     /// The book ID that failed.
     pub book_id: Uuid,
@@ -412,6 +599,95 @@ pub struct PaginatedBooks {
     pub page: u32,
     pub per_page: u32,
     pub total_pages: u32,
+    /// Warnings from DSL query resolution (ambiguous relations, unknown values, etc.).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub search_warnings: Vec<QueryWarningResponse>,
+}
+
+/// A warning from search query DSL resolution.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum QueryWarningResponse {
+    AmbiguousRelation {
+        field: String,
+        query: String,
+        match_count: usize,
+        matches: Vec<AmbiguousMatchResponse>,
+    },
+    UnknownRelation {
+        field: String,
+        query: String,
+    },
+    InvalidValue {
+        field: String,
+        value: String,
+        reason: String,
+    },
+    /// A DSL field operator was used without a value (e.g. `author:`).
+    EmptyFieldValue {
+        field: String,
+    },
+    /// A structured field operator appeared inside an OR group, which is not supported.
+    UnsupportedOrField {
+        field: String,
+        value: String,
+        negated: bool,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct AmbiguousMatchResponse {
+    pub id: String,
+    pub name: String,
+}
+
+impl From<QueryWarning> for QueryWarningResponse {
+    fn from(w: QueryWarning) -> Self {
+        match w {
+            QueryWarning::AmbiguousRelation {
+                field,
+                query,
+                match_count,
+                matches,
+            } => Self::AmbiguousRelation {
+                field,
+                query,
+                match_count,
+                matches: matches.into_iter().map(Into::into).collect(),
+            },
+            QueryWarning::UnknownRelation { field, query } => {
+                Self::UnknownRelation { field, query }
+            }
+            QueryWarning::InvalidValue {
+                field,
+                value,
+                reason,
+            } => Self::InvalidValue {
+                field,
+                value,
+                reason,
+            },
+            QueryWarning::EmptyFieldValue { field } => Self::EmptyFieldValue { field },
+            QueryWarning::UnsupportedOrField {
+                field,
+                value,
+                negated,
+            } => Self::UnsupportedOrField {
+                field,
+                value,
+                negated,
+            },
+        }
+    }
+}
+
+impl From<AmbiguousMatch> for AmbiguousMatchResponse {
+    fn from(m: AmbiguousMatch) -> Self {
+        Self {
+            id: m.id,
+            name: m.name,
+        }
+    }
 }
 
 // ── Conversions ─────────────────────────────────────────────────
@@ -589,6 +865,7 @@ impl<T: Into<BookSummary>> From<PaginatedResult<T>> for PaginatedBooks {
             page: result.page,
             per_page: result.per_page,
             total_pages: result.total_pages,
+            search_warnings: Vec::new(),
         }
     }
 }

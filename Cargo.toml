@@ -85,6 +85,8 @@ validator = { version = "0.20", features = ["derive"] }
 
 # Cryptography
 sha2 = "0.10"
+hmac = "0.12"
+base64 = "0.22"
 
 # MOBI/AZW3 parsing
 mobi-book = { git = "https://github.com/geekifier/mobi-book", version = "0.1.0" }

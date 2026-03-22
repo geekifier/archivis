@@ -70,8 +70,10 @@ export type SortField =
   | 'rating'
   | 'metadata_status'
   | 'author'
-  | 'series';
+  | 'series'
+  | 'relevance';
 export type SortOrder = 'asc' | 'desc';
+export type TagMatchMode = 'any' | 'all';
 
 export interface AuthorEntry {
   id: string;
@@ -197,12 +199,50 @@ export interface BookDetail {
   identifiers: IdentifierEntry[];
 }
 
+// --- Search warning types ---
+
+export interface AmbiguousMatchEntry {
+  id: string;
+  name: string;
+}
+
+export type QueryWarning =
+  | {
+      type: 'ambiguous_relation';
+      field: string;
+      query: string;
+      match_count: number;
+      matches: AmbiguousMatchEntry[];
+    }
+  | {
+      type: 'unknown_relation';
+      field: string;
+      query: string;
+    }
+  | {
+      type: 'invalid_value';
+      field: string;
+      value: string;
+      reason: string;
+    }
+  | {
+      type: 'empty_field_value';
+      field: string;
+    }
+  | {
+      type: 'unsupported_or_field';
+      field: string;
+      value: string;
+      negated: boolean;
+    };
+
 export interface PaginatedBooks {
   items: BookSummary[];
   total: number;
   page: number;
   per_page: number;
   total_pages: number;
+  search_warnings?: QueryWarning[];
 }
 
 export interface BookListParams {
@@ -214,6 +254,30 @@ export interface BookListParams {
   format?: BookFormat;
   status?: MetadataStatus;
   include?: string;
+  // Relation filters
+  author_id?: string;
+  series_id?: string;
+  publisher_id?: string;
+  tags?: string; // comma-separated UUIDs
+  tag_match?: TagMatchMode;
+  // State filters
+  trusted?: boolean;
+  locked?: boolean;
+  resolution_state?: ResolutionState;
+  resolution_outcome?: ResolutionOutcome;
+  // Content filters
+  language?: string;
+  year_min?: number;
+  year_max?: number;
+  // Presence filters
+  has_cover?: boolean;
+  has_description?: boolean;
+  has_identifiers?: boolean;
+  // Identifier lookup (at most one)
+  isbn?: string;
+  asin?: string;
+  open_library_id?: string;
+  hardcover_id?: string;
 }
 
 export interface AuthorListParams {
@@ -481,26 +545,84 @@ export interface DuplicateCountResponse {
   count: number;
 }
 
+// --- LibraryFilterState (mirrors Rust archivis-core::models::filter) ---
+
+export interface LibraryFilterState {
+  text_query: string | null;
+  author_id: string | null;
+  series_id: string | null;
+  publisher_id: string | null;
+  tag_ids: string[];
+  tag_match: TagMatchMode;
+  format: BookFormat | null;
+  metadata_status: MetadataStatus | null;
+  resolution_state: ResolutionState | null;
+  resolution_outcome: ResolutionOutcome | null;
+  trusted: boolean | null;
+  locked: boolean | null;
+  language: string | null;
+  year_min: number | null;
+  year_max: number | null;
+  has_cover: boolean | null;
+  has_description: boolean | null;
+  has_identifiers: boolean | null;
+  isbn: string | null;
+  asin: string | null;
+  open_library_id: string | null;
+  hardcover_id: string | null;
+}
+
+// --- Selection / Scope types ---
+
+export type SelectionSpec =
+  | { mode: 'ids'; ids: string[] }
+  | { mode: 'scope'; scope_token: string; excluded_ids: string[] };
+
+export interface IssueSelectionScopeRequest {
+  filters: LibraryFilterState;
+}
+
+export interface IssueSelectionScopeResponse {
+  scope_token: string;
+  matching_count: number;
+  summary: string;
+}
+
 // --- Batch update types ---
 
+export interface BatchBookFields {
+  language?: string;
+  rating?: number;
+  publisher_id?: string | null;
+}
+
 export interface BatchUpdateBooksRequest {
-  book_ids: string[];
-  updates: {
-    language?: string;
-    rating?: number;
-    publisher_id?: string | null;
-  };
+  selection: SelectionSpec;
+  updates: BatchBookFields;
 }
 
 export interface BatchSetTagsRequest {
-  book_ids: string[];
+  selection: SelectionSpec;
   tags: BookTagLink[];
   mode: 'replace' | 'add';
 }
 
-export interface BatchUpdateResponse {
+export interface BatchSyncResponse {
   updated_count: number;
   errors: Array<{ book_id: string; error: string }>;
+}
+
+export interface BatchAsyncResponse {
+  task_id: string;
+  task_type: string;
+  matching_count: number;
+  message: string;
+}
+
+export type BatchResult = BatchSyncResponse | BatchAsyncResponse;
+
+export function isBatchAsync(r: BatchResult): r is BatchAsyncResponse {
+  return 'task_id' in r;
 }
 
 // --- Resolution review types ---

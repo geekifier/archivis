@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { api, ApiError } from '$lib/api/index.js';
-  import type { TagEntry } from '$lib/api/index.js';
+  import { api, ApiError, isBatchAsync } from '$lib/api/index.js';
+  import type { TagEntry, SelectionSpec } from '$lib/api/index.js';
   import { Button } from '$lib/components/ui/button/index.js';
   import { Input } from '$lib/components/ui/input/index.js';
   import { Label } from '$lib/components/ui/label/index.js';
@@ -9,13 +9,18 @@
   import LanguageCombobox from './LanguageCombobox.svelte';
 
   interface Props {
-    bookIds: string[];
+    selection: SelectionSpec;
+    selectedCount: number;
     open: boolean;
     onclose: () => void;
+    /** Called after a synchronous (200) batch completes — parent should refresh the list. */
     onapply: () => void;
+    /** Called when one or more async (202) tasks are enqueued — parent should track them. */
+    onasync?: (taskIds: string[]) => void;
   }
 
-  let { bookIds, open = $bindable(), onclose, onapply }: Props = $props();
+  let { selection, selectedCount, open = $bindable(), onclose, onapply, onasync }: Props =
+    $props();
 
   // --- Field inclusion toggles ---
   let includeLanguage = $state(false);
@@ -127,6 +132,7 @@
     try {
       const errors: Array<{ book_id: string; error: string }> = [];
       let totalUpdated = 0;
+      const asyncTaskIds: string[] = [];
 
       // Batch update scalar fields
       if (includeLanguage || includeRating || includePublisher) {
@@ -140,12 +146,13 @@
           updates.publisher_id = editPublisher?.id ?? null;
         }
 
-        const result = await api.books.batchUpdate({
-          book_ids: bookIds,
-          updates
-        });
-        totalUpdated = Math.max(totalUpdated, result.updated_count);
-        errors.push(...result.errors);
+        const result = await api.books.batchUpdate({ selection, updates });
+        if (result.status === 202 && isBatchAsync(result.data)) {
+          asyncTaskIds.push(result.data.task_id);
+        } else if (!isBatchAsync(result.data)) {
+          totalUpdated = Math.max(totalUpdated, result.data.updated_count);
+          errors.push(...result.data.errors);
+        }
       }
 
       // Batch update tags
@@ -157,24 +164,39 @@
           return { tag_id: t.id };
         });
 
-        const result = await api.books.batchTags({
-          book_ids: bookIds,
-          tags: tagPayload,
-          mode: tagMode
-        });
-        totalUpdated = Math.max(totalUpdated, result.updated_count);
-        errors.push(...result.errors);
+        const result = await api.books.batchTags({ selection, tags: tagPayload, mode: tagMode });
+        if (result.status === 202 && isBatchAsync(result.data)) {
+          asyncTaskIds.push(result.data.task_id);
+        } else if (!isBatchAsync(result.data)) {
+          totalUpdated = Math.max(totalUpdated, result.data.updated_count);
+          errors.push(...result.data.errors);
+        }
       }
 
-      if (errors.length > 0) {
+      // Build result message
+      if (asyncTaskIds.length > 0 && totalUpdated === 0 && errors.length === 0) {
+        // Purely async — hand task IDs to parent for tracking
+        resultMessage =
+          asyncTaskIds.length === 1
+            ? 'Bulk operation enqueued as a background task.'
+            : `${asyncTaskIds.length} bulk operations enqueued as background tasks.`;
+      } else if (asyncTaskIds.length > 0) {
+        // Mixed: some sync, some async
+        resultMessage = `Updated ${totalUpdated} books; ${asyncTaskIds.length} additional operation(s) enqueued.`;
+      } else if (errors.length > 0) {
         resultMessage = `Updated ${totalUpdated} books, ${errors.length} error(s)`;
         applyError = errors.map((e) => `${e.book_id}: ${e.error}`).join('; ');
       } else {
         resultMessage = `Updated ${totalUpdated} books`;
       }
 
-      // Signal parent to refresh after short delay
+      // Close and signal parent after short delay
       setTimeout(() => {
+        if (asyncTaskIds.length > 0) {
+          onasync?.(asyncTaskIds);
+        }
+        // Always call onapply so the list refreshes (sync results need it immediately,
+        // and even after async enqueue the user benefits from a fresh list).
         onapply();
         handleClose();
       }, 1200);
@@ -194,7 +216,7 @@
 <Dialog.Root bind:open>
   <Dialog.Content class="max-w-lg">
     <Dialog.Header>
-      <Dialog.Title>Editing {bookIds.length} books</Dialog.Title>
+      <Dialog.Title>Editing {selectedCount.toLocaleString()} books</Dialog.Title>
       <Dialog.Description>
         Select fields to update across all selected books. Only checked fields will be modified.
       </Dialog.Description>

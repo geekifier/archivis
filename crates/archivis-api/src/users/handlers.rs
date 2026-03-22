@@ -284,6 +284,7 @@ mod tests {
             config_service,
             None,
             None,
+            [0u8; 32],
         )
     }
 

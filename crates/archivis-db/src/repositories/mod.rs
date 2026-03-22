@@ -9,6 +9,7 @@ mod metadata_rule;
 mod publisher;
 mod reading_progress;
 mod resolution_run;
+mod search_resolve;
 mod series;
 mod session;
 mod setting;
@@ -22,6 +23,7 @@ mod watched_directory;
 pub use author::{AuthorRepository, AuthorWithBookCount};
 pub use book::{
     BookAuthorEntry, BookRepository, BookSeriesEntry, BookWithAuthors, BookWithRelations,
+    RelationsBundle,
 };
 pub use book_file::BookFileRepository;
 pub use bookmark::BookmarkRepository;
@@ -32,6 +34,9 @@ pub use metadata_rule::MetadataRuleRepository;
 pub use publisher::PublisherRepository;
 pub use reading_progress::ReadingProgressRepository;
 pub use resolution_run::ResolutionRunRepository;
+pub use search_resolve::{
+    AmbiguousMatch, FtsColumnFilter, QueryWarning, ResolvedQuery, SearchResolver,
+};
 pub use series::{SeriesRepository, SeriesWithBookCount};
 pub use session::SessionRepository;
 pub use setting::SettingRepository;

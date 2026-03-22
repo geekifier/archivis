@@ -64,4 +64,88 @@ describe('filters store', () => {
       expect(filters.hasActiveFilters).toBe(false);
     });
   });
+
+  describe('toFilterState', () => {
+    it('returns empty LibraryFilterState when no filters are active', () => {
+      const state = filters.toFilterState();
+      expect(state.text_query).toBeNull();
+      expect(state.format).toBeNull();
+      expect(state.metadata_status).toBeNull();
+      expect(state.author_id).toBeNull();
+      expect(state.tag_ids).toEqual([]);
+      expect(state.tag_match).toBe('any');
+      expect(state.isbn).toBeNull();
+    });
+
+    it('includes text query when provided', () => {
+      const state = filters.toFilterState('hello world');
+      expect(state.text_query).toBe('hello world');
+    });
+
+    it('trims text query and returns null for whitespace-only', () => {
+      expect(filters.toFilterState('   ').text_query).toBeNull();
+      expect(filters.toFilterState('').text_query).toBeNull();
+      expect(filters.toFilterState().text_query).toBeNull();
+    });
+
+    it('includes all active filters', () => {
+      filters.setFormat('epub');
+      filters.setStatus('identified');
+      filters.setLanguage('en');
+      filters.setTrusted(true);
+      filters.setYearMin(2020);
+      filters.setYearMax(2025);
+      filters.setHasCover(true);
+
+      const state = filters.toFilterState('search');
+      expect(state.text_query).toBe('search');
+      expect(state.format).toBe('epub');
+      expect(state.metadata_status).toBe('identified');
+      expect(state.language).toBe('en');
+      expect(state.trusted).toBe(true);
+      expect(state.year_min).toBe(2020);
+      expect(state.year_max).toBe(2025);
+      expect(state.has_cover).toBe(true);
+    });
+
+    it('maps relation filters to IDs', () => {
+      filters.setAuthor({ id: 'author-1', name: 'Brandon Sanderson' });
+      filters.setSeries({ id: 'series-1', name: 'Stormlight' });
+      filters.setPublisher({ id: 'pub-1', name: 'Tor' });
+
+      const state = filters.toFilterState();
+      expect(state.author_id).toBe('author-1');
+      expect(state.series_id).toBe('series-1');
+      expect(state.publisher_id).toBe('pub-1');
+    });
+
+    it('maps tags to tag_ids array', () => {
+      filters.addTag({ id: 'tag-a', name: 'Fiction', category: null });
+      filters.addTag({ id: 'tag-b', name: 'Fantasy', category: null });
+      filters.setTagMatch('all');
+
+      const state = filters.toFilterState();
+      expect(state.tag_ids).toEqual(['tag-a', 'tag-b']);
+      expect(state.tag_match).toBe('all');
+    });
+
+    it('maps identifier type/value to the correct field', () => {
+      filters.setIdentifier('isbn', '978-0-13-468599-1');
+      const isbn = filters.toFilterState();
+      expect(isbn.isbn).toBe('978-0-13-468599-1');
+      expect(isbn.asin).toBeNull();
+
+      filters.setIdentifier('asin', 'B08N5WRWNW');
+      const asin = filters.toFilterState();
+      expect(asin.asin).toBe('B08N5WRWNW');
+      expect(asin.isbn).toBeNull();
+    });
+
+    it('snapshotKey changes when filters change', () => {
+      const snap1 = filters.snapshotKey();
+      filters.setFormat('pdf');
+      const snap2 = filters.snapshotKey();
+      expect(snap1).not.toBe(snap2);
+    });
+  });
 });

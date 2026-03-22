@@ -44,6 +44,8 @@ struct AppStateInner {
     watcher_service: Option<Arc<RwLock<WatcherService>>>,
     /// Optional — `None` when proxy auth is not configured.
     proxy_auth: Option<Arc<ProxyAuth>>,
+    /// HMAC key for signing scope tokens. Generated at startup, not persisted.
+    scope_signing_key: [u8; 32],
 }
 
 impl AppState {
@@ -60,6 +62,7 @@ impl AppState {
         config_service: Arc<ConfigService>,
         watcher_service: Option<Arc<RwLock<WatcherService>>>,
         proxy_auth: Option<Arc<ProxyAuth>>,
+        scope_signing_key: [u8; 32],
     ) -> Self {
         Self {
             inner: Arc::new(AppStateInner {
@@ -74,6 +77,7 @@ impl AppState {
                 config_service,
                 watcher_service,
                 proxy_auth,
+                scope_signing_key,
             }),
         }
     }
@@ -120,5 +124,9 @@ impl AppState {
 
     pub fn proxy_auth(&self) -> Option<&Arc<ProxyAuth>> {
         self.inner.proxy_auth.as_ref()
+    }
+
+    pub fn scope_signing_key(&self) -> &[u8; 32] {
+        &self.inner.scope_signing_key
     }
 }

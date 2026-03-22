@@ -383,6 +383,7 @@ mod tests {
             config_service,
             None,
             proxy_auth,
+            [0u8; 32],
         )
     }
 

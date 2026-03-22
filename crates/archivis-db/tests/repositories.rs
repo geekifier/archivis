@@ -1,13 +1,16 @@
 use archivis_core::models::{
     Author, Book, BookFile, BookFormat, Bookmark, IdentificationCandidate, Identifier,
-    IdentifierType, MetadataSource, MetadataStatus, Publisher, ResolutionRun, ResolutionState,
-    Series, Tag, User, UserRole, WatchMode,
+    IdentifierType, LibraryFilterState, MetadataSource, MetadataStatus, Publisher,
+    ResolutionOutcome, ResolutionRun, ResolutionState, Series, Tag, TagMatchMode, User, UserRole,
+    WatchMode,
 };
+use archivis_core::search_query::parse_search_query;
 use archivis_db::{
     create_pool, run_migrations, AuthorRepository, BookFileRepository, BookFilter, BookRepository,
     BookmarkRepository, CandidateRepository, DbPool, IdentifierRepository, PaginationParams,
-    ReadingProgressRepository, ResolutionRunRepository, SeriesRepository, SortOrder,
-    StatsRepository, TagRepository, UserRepository, WatchedDirectoryRepository,
+    PublisherRepository, QueryWarning, ReadingProgressRepository, ResolutionRunRepository,
+    SearchResolver, SeriesRepository, SortOrder, StatsRepository, TagRepository, UserRepository,
+    WatchedDirectoryRepository,
 };
 use chrono::{Duration, Utc};
 use tempfile::TempDir;
@@ -1673,4 +1676,1210 @@ async fn watched_directory_get_not_found() {
         .await
         .unwrap();
     assert!(result.is_none());
+}
+
+// ── BookFilter expanded tests ──────────────────────────────────
+
+/// Helper to seed a book with optional properties, returning its ID.
+async fn seed_book(pool: &DbPool, title: &str, f: impl FnOnce(&mut Book)) -> uuid::Uuid {
+    let mut book = test_book(title);
+    f(&mut book);
+    BookRepository::create(pool, &book).await.unwrap();
+    book.id
+}
+
+#[tokio::test]
+async fn filter_tag_any_mode() {
+    let (pool, _dir) = test_pool().await;
+    let tag_a = Tag::new("fantasy");
+    let tag_b = Tag::new("scifi");
+    TagRepository::create(&pool, &tag_a).await.unwrap();
+    TagRepository::create(&pool, &tag_b).await.unwrap();
+
+    let id1 = seed_book(&pool, "Fantasy Book", |_| {}).await;
+    let id2 = seed_book(&pool, "SciFi Book", |_| {}).await;
+    let _id3 = seed_book(&pool, "Romance Book", |_| {}).await;
+
+    BookRepository::add_tag(&pool, id1, tag_a.id).await.unwrap();
+    BookRepository::add_tag(&pool, id2, tag_b.id).await.unwrap();
+
+    let filter = BookFilter {
+        tags: Some(vec![tag_a.id.to_string(), tag_b.id.to_string()]),
+        tag_match: TagMatchMode::Any,
+        ..BookFilter::default()
+    };
+    let result = BookRepository::list(&pool, &PaginationParams::default(), &filter)
+        .await
+        .unwrap();
+
+    assert_eq!(result.total, 2);
+}
+
+#[tokio::test]
+async fn filter_tag_all_mode() {
+    let (pool, _dir) = test_pool().await;
+    let tag_a = Tag::new("fantasy");
+    let tag_b = Tag::new("epic");
+    TagRepository::create(&pool, &tag_a).await.unwrap();
+    TagRepository::create(&pool, &tag_b).await.unwrap();
+
+    let id1 = seed_book(&pool, "Both Tags", |_| {}).await;
+    let id2 = seed_book(&pool, "One Tag", |_| {}).await;
+
+    BookRepository::add_tag(&pool, id1, tag_a.id).await.unwrap();
+    BookRepository::add_tag(&pool, id1, tag_b.id).await.unwrap();
+    BookRepository::add_tag(&pool, id2, tag_a.id).await.unwrap();
+
+    let filter = BookFilter {
+        tags: Some(vec![tag_a.id.to_string(), tag_b.id.to_string()]),
+        tag_match: TagMatchMode::All,
+        ..BookFilter::default()
+    };
+    let result = BookRepository::list(&pool, &PaginationParams::default(), &filter)
+        .await
+        .unwrap();
+
+    assert_eq!(result.total, 1);
+    assert_eq!(result.items[0].title, "Both Tags");
+}
+
+#[tokio::test]
+async fn filter_identifier_lookup() {
+    let (pool, _dir) = test_pool().await;
+    let id1 = seed_book(&pool, "ISBN Book", |_| {}).await;
+    let _id2 = seed_book(&pool, "Other Book", |_| {}).await;
+
+    let ident = Identifier::new(
+        id1,
+        IdentifierType::Isbn13,
+        "9780451524935",
+        MetadataSource::User,
+        1.0,
+    );
+    IdentifierRepository::create(&pool, &ident).await.unwrap();
+
+    let filter = BookFilter {
+        identifier_types: Some(vec!["isbn13".into()]),
+        identifier_value: Some("9780451524935".into()),
+        ..BookFilter::default()
+    };
+    let result = BookRepository::list(&pool, &PaginationParams::default(), &filter)
+        .await
+        .unwrap();
+
+    assert_eq!(result.total, 1);
+    assert_eq!(result.items[0].title, "ISBN Book");
+}
+
+/// Regression: `LibraryFilterState.isbn` must match books stored as `isbn13`.
+#[tokio::test]
+async fn filter_isbn_via_library_filter_state_isbn13() {
+    let (pool, _dir) = test_pool().await;
+    let id1 = seed_book(&pool, "ISBN13 Book", |_| {}).await;
+    let _id2 = seed_book(&pool, "No Ident Book", |_| {}).await;
+
+    let ident = Identifier::new(
+        id1,
+        IdentifierType::Isbn13,
+        "9780451524935",
+        MetadataSource::User,
+        1.0,
+    );
+    IdentifierRepository::create(&pool, &ident).await.unwrap();
+
+    let lfs = LibraryFilterState {
+        isbn: Some("9780451524935".into()),
+        ..LibraryFilterState::default()
+    };
+    let filter = BookFilter::from(&lfs);
+    let result = BookRepository::list(&pool, &PaginationParams::default(), &filter)
+        .await
+        .unwrap();
+
+    assert_eq!(result.total, 1);
+    assert_eq!(result.items[0].title, "ISBN13 Book");
+}
+
+/// Regression: `LibraryFilterState.isbn` must also match books stored as `isbn10`.
+#[tokio::test]
+async fn filter_isbn_via_library_filter_state_isbn10() {
+    let (pool, _dir) = test_pool().await;
+    let id1 = seed_book(&pool, "ISBN10 Book", |_| {}).await;
+    let _id2 = seed_book(&pool, "Other Book", |_| {}).await;
+
+    let ident = Identifier::new(
+        id1,
+        IdentifierType::Isbn10,
+        "0451524934",
+        MetadataSource::User,
+        1.0,
+    );
+    IdentifierRepository::create(&pool, &ident).await.unwrap();
+
+    let lfs = LibraryFilterState {
+        isbn: Some("0451524934".into()),
+        ..LibraryFilterState::default()
+    };
+    let filter = BookFilter::from(&lfs);
+    let result = BookRepository::list(&pool, &PaginationParams::default(), &filter)
+        .await
+        .unwrap();
+
+    assert_eq!(result.total, 1);
+    assert_eq!(result.items[0].title, "ISBN10 Book");
+}
+
+/// Regression: `LibraryFilterState.isbn` with hyphenated input is canonicalized
+/// and matches the stored value.
+#[tokio::test]
+async fn filter_isbn_via_library_filter_state_canonicalized() {
+    let (pool, _dir) = test_pool().await;
+    let id1 = seed_book(&pool, "Hyphen Book", |_| {}).await;
+
+    let ident = Identifier::new(
+        id1,
+        IdentifierType::Isbn13,
+        "9783161484100",
+        MetadataSource::User,
+        1.0,
+    );
+    IdentifierRepository::create(&pool, &ident).await.unwrap();
+
+    // Input with hyphens — canonicalize strips them
+    let mut lfs = LibraryFilterState {
+        isbn: Some("978-3-16-148410-0".into()),
+        ..LibraryFilterState::default()
+    };
+    lfs.canonicalize();
+    assert_eq!(lfs.isbn.as_deref(), Some("9783161484100"));
+
+    let filter = BookFilter::from(&lfs);
+    let result = BookRepository::list(&pool, &PaginationParams::default(), &filter)
+        .await
+        .unwrap();
+
+    assert_eq!(result.total, 1);
+    assert_eq!(result.items[0].title, "Hyphen Book");
+}
+
+/// ASIN lookup via `LibraryFilterState` still works (single type, not expanded).
+#[tokio::test]
+async fn filter_asin_via_library_filter_state() {
+    let (pool, _dir) = test_pool().await;
+    let id1 = seed_book(&pool, "ASIN Book", |_| {}).await;
+
+    let ident = Identifier::new(
+        id1,
+        IdentifierType::Asin,
+        "B08N5WRWNW",
+        MetadataSource::User,
+        1.0,
+    );
+    IdentifierRepository::create(&pool, &ident).await.unwrap();
+
+    let lfs = LibraryFilterState {
+        asin: Some("B08N5WRWNW".into()),
+        ..LibraryFilterState::default()
+    };
+    let filter = BookFilter::from(&lfs);
+    let result = BookRepository::list(&pool, &PaginationParams::default(), &filter)
+        .await
+        .unwrap();
+
+    assert_eq!(result.total, 1);
+    assert_eq!(result.items[0].title, "ASIN Book");
+}
+
+#[tokio::test]
+async fn filter_locked() {
+    let (pool, _dir) = test_pool().await;
+    seed_book(&pool, "Locked", |b| b.metadata_locked = true).await;
+    seed_book(&pool, "Unlocked", |_| {}).await;
+
+    let filter = BookFilter {
+        locked: Some(true),
+        ..BookFilter::default()
+    };
+    let result = BookRepository::list(&pool, &PaginationParams::default(), &filter)
+        .await
+        .unwrap();
+
+    assert_eq!(result.total, 1);
+    assert_eq!(result.items[0].title, "Locked");
+}
+
+#[tokio::test]
+async fn filter_resolution_state() {
+    let (pool, _dir) = test_pool().await;
+    seed_book(&pool, "Done", |b| {
+        b.resolution_state = ResolutionState::Done;
+    })
+    .await;
+    seed_book(&pool, "Pending", |_| {}).await;
+
+    let filter = BookFilter {
+        resolution_state: Some(ResolutionState::Done),
+        ..BookFilter::default()
+    };
+    let result = BookRepository::list(&pool, &PaginationParams::default(), &filter)
+        .await
+        .unwrap();
+
+    assert_eq!(result.total, 1);
+    assert_eq!(result.items[0].title, "Done");
+}
+
+#[tokio::test]
+async fn filter_resolution_outcome() {
+    let (pool, _dir) = test_pool().await;
+    seed_book(&pool, "Confirmed", |b| {
+        b.resolution_outcome = Some(ResolutionOutcome::Confirmed);
+    })
+    .await;
+    seed_book(&pool, "No Outcome", |_| {}).await;
+
+    let filter = BookFilter {
+        resolution_outcome: Some(ResolutionOutcome::Confirmed),
+        ..BookFilter::default()
+    };
+    let result = BookRepository::list(&pool, &PaginationParams::default(), &filter)
+        .await
+        .unwrap();
+
+    assert_eq!(result.total, 1);
+    assert_eq!(result.items[0].title, "Confirmed");
+}
+
+#[tokio::test]
+async fn filter_language() {
+    let (pool, _dir) = test_pool().await;
+    seed_book(&pool, "English", |b| b.language = Some("en".into())).await;
+    seed_book(&pool, "German", |b| b.language = Some("de".into())).await;
+
+    let filter = BookFilter {
+        language: Some("en".into()),
+        ..BookFilter::default()
+    };
+    let result = BookRepository::list(&pool, &PaginationParams::default(), &filter)
+        .await
+        .unwrap();
+
+    assert_eq!(result.total, 1);
+    assert_eq!(result.items[0].title, "English");
+}
+
+#[tokio::test]
+async fn filter_year_range() {
+    let (pool, _dir) = test_pool().await;
+    seed_book(&pool, "Old", |b| b.publication_year = Some(1900)).await;
+    seed_book(&pool, "Recent", |b| b.publication_year = Some(2020)).await;
+    seed_book(&pool, "No Year", |_| {}).await;
+
+    let filter = BookFilter {
+        year_min: Some(2000),
+        year_max: Some(2025),
+        ..BookFilter::default()
+    };
+    let result = BookRepository::list(&pool, &PaginationParams::default(), &filter)
+        .await
+        .unwrap();
+
+    assert_eq!(result.total, 1);
+    assert_eq!(result.items[0].title, "Recent");
+}
+
+#[tokio::test]
+async fn filter_has_cover() {
+    let (pool, _dir) = test_pool().await;
+    seed_book(&pool, "With Cover", |b| {
+        b.cover_path = Some("/covers/book.jpg".into());
+    })
+    .await;
+    seed_book(&pool, "No Cover", |_| {}).await;
+
+    let filter = BookFilter {
+        has_cover: Some(true),
+        ..BookFilter::default()
+    };
+    let result = BookRepository::list(&pool, &PaginationParams::default(), &filter)
+        .await
+        .unwrap();
+
+    assert_eq!(result.total, 1);
+    assert_eq!(result.items[0].title, "With Cover");
+}
+
+#[tokio::test]
+async fn filter_has_description() {
+    let (pool, _dir) = test_pool().await;
+    seed_book(&pool, "With Desc", |b| {
+        b.description = Some("A great book".into());
+    })
+    .await;
+    seed_book(&pool, "No Desc", |_| {}).await;
+
+    let filter = BookFilter {
+        has_description: Some(true),
+        ..BookFilter::default()
+    };
+    let result = BookRepository::list(&pool, &PaginationParams::default(), &filter)
+        .await
+        .unwrap();
+
+    assert_eq!(result.total, 1);
+    assert_eq!(result.items[0].title, "With Desc");
+}
+
+#[tokio::test]
+async fn filter_has_identifiers() {
+    let (pool, _dir) = test_pool().await;
+    let id1 = seed_book(&pool, "Has ISBN", |_| {}).await;
+    let _id2 = seed_book(&pool, "No ISBN", |_| {}).await;
+
+    let ident = Identifier::new(
+        id1,
+        IdentifierType::Isbn13,
+        "9780451524935",
+        MetadataSource::User,
+        1.0,
+    );
+    IdentifierRepository::create(&pool, &ident).await.unwrap();
+
+    let filter = BookFilter {
+        has_identifiers: Some(true),
+        ..BookFilter::default()
+    };
+    let result = BookRepository::list(&pool, &PaginationParams::default(), &filter)
+        .await
+        .unwrap();
+
+    assert_eq!(result.total, 1);
+    assert_eq!(result.items[0].title, "Has ISBN");
+}
+
+#[tokio::test]
+async fn filter_combined() {
+    let (pool, _dir) = test_pool().await;
+
+    // Book that matches all filters
+    let id1 = seed_book(&pool, "Match", |b| {
+        b.language = Some("en".into());
+        b.cover_path = Some("/covers/match.jpg".into());
+    })
+    .await;
+    let file = BookFile::new(id1, BookFormat::Epub, "match.epub", 100, "hash-match", None);
+    BookFileRepository::create(&pool, &file).await.unwrap();
+
+    // Book that matches some but not all
+    seed_book(&pool, "Partial", |b| {
+        b.language = Some("en".into());
+    })
+    .await;
+
+    let filter = BookFilter {
+        format: Some(BookFormat::Epub),
+        language: Some("en".into()),
+        has_cover: Some(true),
+        ..BookFilter::default()
+    };
+    let result = BookRepository::list(&pool, &PaginationParams::default(), &filter)
+        .await
+        .unwrap();
+
+    assert_eq!(result.total, 1);
+    assert_eq!(result.items[0].title, "Match");
+}
+
+#[tokio::test]
+async fn count_and_list_agree() {
+    let (pool, _dir) = test_pool().await;
+    seed_book(&pool, "A", |b| b.language = Some("en".into())).await;
+    seed_book(&pool, "B", |b| b.language = Some("en".into())).await;
+    seed_book(&pool, "C", |b| b.language = Some("de".into())).await;
+
+    let filter = BookFilter {
+        language: Some("en".into()),
+        ..BookFilter::default()
+    };
+
+    let count = BookRepository::count(&pool, &filter).await.unwrap();
+    let list = BookRepository::list(&pool, &PaginationParams::default(), &filter)
+        .await
+        .unwrap();
+
+    assert_eq!(count, 2);
+    assert_eq!(u64::from(list.total), count);
+}
+
+#[tokio::test]
+async fn list_ids_matches_list() {
+    let (pool, _dir) = test_pool().await;
+    seed_book(&pool, "A", |b| b.language = Some("en".into())).await;
+    seed_book(&pool, "B", |b| b.language = Some("en".into())).await;
+    seed_book(&pool, "C", |b| b.language = Some("de".into())).await;
+
+    let filter = BookFilter {
+        language: Some("en".into()),
+        ..BookFilter::default()
+    };
+
+    let ids = BookRepository::list_ids(&pool, &filter).await.unwrap();
+    let list = BookRepository::list(&pool, &PaginationParams::default(), &filter)
+        .await
+        .unwrap();
+
+    assert_eq!(ids.len(), list.items.len());
+    let list_ids: Vec<_> = list.items.iter().map(|b| b.id).collect();
+    for id in &ids {
+        assert!(list_ids.contains(id));
+    }
+}
+
+#[tokio::test]
+async fn list_ids_returns_all_without_pagination() {
+    let (pool, _dir) = test_pool().await;
+    for i in 0..30 {
+        seed_book(&pool, &format!("Book {i}"), |_| {}).await;
+    }
+
+    let ids = BookRepository::list_ids(&pool, &BookFilter::default())
+        .await
+        .unwrap();
+    assert_eq!(ids.len(), 30);
+
+    // Paginated list with default 25 per_page returns only 25
+    let list = BookRepository::list(&pool, &PaginationParams::default(), &BookFilter::default())
+        .await
+        .unwrap();
+    assert_eq!(list.items.len(), 25);
+    assert_eq!(list.total, 30);
+}
+
+#[tokio::test]
+async fn filter_trusted() {
+    let (pool, _dir) = test_pool().await;
+    seed_book(&pool, "Trusted", |b| b.metadata_user_trusted = true).await;
+    seed_book(&pool, "Not Trusted", |_| {}).await;
+
+    let filter = BookFilter {
+        trusted: Some(true),
+        ..BookFilter::default()
+    };
+    let result = BookRepository::list(&pool, &PaginationParams::default(), &filter)
+        .await
+        .unwrap();
+
+    assert_eq!(result.total, 1);
+    assert_eq!(result.items[0].title, "Trusted");
+}
+
+#[tokio::test]
+async fn filter_publisher() {
+    let (pool, _dir) = test_pool().await;
+    let pub1 = Publisher::new("Tor Books");
+    archivis_db::PublisherRepository::create(&pool, &pub1)
+        .await
+        .unwrap();
+
+    seed_book(&pool, "Tor Book", |b| b.publisher_id = Some(pub1.id)).await;
+    seed_book(&pool, "Other Book", |_| {}).await;
+
+    let filter = BookFilter {
+        publisher_id: Some(pub1.id.to_string()),
+        ..BookFilter::default()
+    };
+    let result = BookRepository::list(&pool, &PaginationParams::default(), &filter)
+        .await
+        .unwrap();
+
+    assert_eq!(result.total, 1);
+    assert_eq!(result.items[0].title, "Tor Book");
+}
+
+// ── FTS V2 trigger tests ───────────────────────────────────────
+
+/// Helper: search for a query string and return matching titles.
+async fn fts_search_titles(pool: &DbPool, query: &str) -> Vec<String> {
+    let result = BookRepository::search(pool, query, &PaginationParams::default())
+        .await
+        .unwrap();
+    result.items.into_iter().map(|b| b.title).collect()
+}
+
+#[tokio::test]
+async fn fts_v2_book_with_all_relations() {
+    let (pool, _dir) = test_pool().await;
+
+    // Create related entities
+    let author = test_author("Brandon Sanderson");
+    AuthorRepository::create(&pool, &author).await.unwrap();
+    let series = Series::new("Cosmere");
+    SeriesRepository::create(&pool, &series).await.unwrap();
+    let publisher = Publisher::new("Tor Books");
+    PublisherRepository::create(&pool, &publisher)
+        .await
+        .unwrap();
+    let tag = Tag::new("fantasy");
+    TagRepository::create(&pool, &tag).await.unwrap();
+
+    // Create book with publisher
+    let book_id = seed_book(&pool, "The Way of Kings", |b| {
+        b.publisher_id = Some(publisher.id);
+    })
+    .await;
+
+    // Link relations
+    BookRepository::add_author(&pool, book_id, author.id, "author", 0)
+        .await
+        .unwrap();
+    BookRepository::add_series(&pool, book_id, series.id, Some(1.0))
+        .await
+        .unwrap();
+    BookRepository::add_tag(&pool, book_id, tag.id)
+        .await
+        .unwrap();
+
+    // Verify FTS contains all denormalized names
+    assert_eq!(
+        fts_search_titles(&pool, "Way Kings").await,
+        vec!["The Way of Kings"]
+    );
+    assert_eq!(
+        fts_search_titles(&pool, "Sanderson").await,
+        vec!["The Way of Kings"]
+    );
+    assert_eq!(
+        fts_search_titles(&pool, "Cosmere").await,
+        vec!["The Way of Kings"]
+    );
+    assert_eq!(
+        fts_search_titles(&pool, "Tor Books").await,
+        vec!["The Way of Kings"]
+    );
+    assert_eq!(
+        fts_search_titles(&pool, "fantasy").await,
+        vec!["The Way of Kings"]
+    );
+}
+
+#[tokio::test]
+async fn fts_v2_update_author_name() {
+    let (pool, _dir) = test_pool().await;
+    let mut author = test_author("Brandos Sandersun");
+    AuthorRepository::create(&pool, &author).await.unwrap();
+    let book_id = seed_book(&pool, "Mistborn", |_| {}).await;
+    BookRepository::add_author(&pool, book_id, author.id, "author", 0)
+        .await
+        .unwrap();
+
+    // Before rename
+    assert_eq!(
+        fts_search_titles(&pool, "Sandersun").await,
+        vec!["Mistborn"]
+    );
+    assert!(fts_search_titles(&pool, "Sanderson").await.is_empty());
+
+    // Rename author
+    author.name = "Brandon Sanderson".into();
+    AuthorRepository::update(&pool, &author).await.unwrap();
+
+    // After rename
+    assert!(fts_search_titles(&pool, "Sandersun").await.is_empty());
+    assert_eq!(
+        fts_search_titles(&pool, "Sanderson").await,
+        vec!["Mistborn"]
+    );
+}
+
+#[tokio::test]
+async fn fts_v2_update_series_name() {
+    let (pool, _dir) = test_pool().await;
+    let mut series = Series::new("Cosmear");
+    SeriesRepository::create(&pool, &series).await.unwrap();
+    let book_id = seed_book(&pool, "Elantris", |_| {}).await;
+    BookRepository::add_series(&pool, book_id, series.id, None)
+        .await
+        .unwrap();
+
+    assert_eq!(fts_search_titles(&pool, "Cosmear").await, vec!["Elantris"]);
+
+    series.name = "Cosmere".into();
+    SeriesRepository::update(&pool, &series).await.unwrap();
+
+    assert!(fts_search_titles(&pool, "Cosmear").await.is_empty());
+    assert_eq!(fts_search_titles(&pool, "Cosmere").await, vec!["Elantris"]);
+}
+
+#[tokio::test]
+async fn fts_v2_update_tag_name() {
+    let (pool, _dir) = test_pool().await;
+    let mut tag = Tag::new("fantsy");
+    TagRepository::create(&pool, &tag).await.unwrap();
+    let book_id = seed_book(&pool, "Warbreaker", |_| {}).await;
+    BookRepository::add_tag(&pool, book_id, tag.id)
+        .await
+        .unwrap();
+
+    assert_eq!(fts_search_titles(&pool, "fantsy").await, vec!["Warbreaker"]);
+
+    tag.name = "fantasy".into();
+    TagRepository::update(&pool, &tag).await.unwrap();
+
+    assert!(fts_search_titles(&pool, "fantsy").await.is_empty());
+    assert_eq!(
+        fts_search_titles(&pool, "fantasy").await,
+        vec!["Warbreaker"]
+    );
+}
+
+#[tokio::test]
+async fn fts_v2_update_publisher_name() {
+    let (pool, _dir) = test_pool().await;
+    let mut publisher = Publisher::new("Torr");
+    PublisherRepository::create(&pool, &publisher)
+        .await
+        .unwrap();
+    seed_book(&pool, "Steelheart", |b| {
+        b.publisher_id = Some(publisher.id);
+    })
+    .await;
+
+    assert_eq!(fts_search_titles(&pool, "Torr").await, vec!["Steelheart"]);
+
+    publisher.name = "Tor Books".into();
+    PublisherRepository::update(&pool, &publisher)
+        .await
+        .unwrap();
+
+    assert!(fts_search_titles(&pool, "Torr").await.is_empty());
+    assert_eq!(
+        fts_search_titles(&pool, "Tor Books").await,
+        vec!["Steelheart"]
+    );
+}
+
+#[tokio::test]
+async fn fts_v2_add_remove_tag() {
+    let (pool, _dir) = test_pool().await;
+    let tag = Tag::new("epic");
+    TagRepository::create(&pool, &tag).await.unwrap();
+    let book_id = seed_book(&pool, "Skyward", |_| {}).await;
+
+    // Before adding tag
+    assert!(fts_search_titles(&pool, "epic").await.is_empty());
+
+    // Add tag
+    BookRepository::add_tag(&pool, book_id, tag.id)
+        .await
+        .unwrap();
+    assert_eq!(fts_search_titles(&pool, "epic").await, vec!["Skyward"]);
+
+    // Remove tag via `clear_tags`
+    BookRepository::clear_tags(&pool, book_id).await.unwrap();
+    assert!(fts_search_titles(&pool, "epic").await.is_empty());
+}
+
+#[tokio::test]
+async fn fts_v2_add_remove_series() {
+    let (pool, _dir) = test_pool().await;
+    let series = Series::new("Skyward Flight");
+    SeriesRepository::create(&pool, &series).await.unwrap();
+    let book_id = seed_book(&pool, "Starsight", |_| {}).await;
+
+    assert!(fts_search_titles(&pool, "Skyward Flight").await.is_empty());
+
+    BookRepository::add_series(&pool, book_id, series.id, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        fts_search_titles(&pool, "Skyward Flight").await,
+        vec!["Starsight"]
+    );
+
+    BookRepository::clear_series(&pool, book_id).await.unwrap();
+    assert!(fts_search_titles(&pool, "Skyward Flight").await.is_empty());
+}
+
+#[tokio::test]
+async fn fts_v2_change_publisher() {
+    let (pool, _dir) = test_pool().await;
+    let pub1 = Publisher::new("Delacorte Press");
+    let pub2 = Publisher::new("Random House");
+    PublisherRepository::create(&pool, &pub1).await.unwrap();
+    PublisherRepository::create(&pool, &pub2).await.unwrap();
+
+    let mut book = test_book("Cytonic");
+    book.publisher_id = Some(pub1.id);
+    BookRepository::create(&pool, &book).await.unwrap();
+
+    assert_eq!(fts_search_titles(&pool, "Delacorte").await, vec!["Cytonic"]);
+    assert!(fts_search_titles(&pool, "Random House").await.is_empty());
+
+    // Change publisher
+    book.publisher_id = Some(pub2.id);
+    BookRepository::update(&pool, &book).await.unwrap();
+
+    assert!(fts_search_titles(&pool, "Delacorte").await.is_empty());
+    assert_eq!(
+        fts_search_titles(&pool, "Random House").await,
+        vec!["Cytonic"]
+    );
+}
+
+#[tokio::test]
+async fn fts_v2_search_by_series_name() {
+    let (pool, _dir) = test_pool().await;
+    let series = Series::new("Stormlight Archive");
+    SeriesRepository::create(&pool, &series).await.unwrap();
+
+    let book_id = seed_book(&pool, "Rhythm of War", |_| {}).await;
+    seed_book(&pool, "Unrelated Book", |_| {}).await;
+    BookRepository::add_series(&pool, book_id, series.id, None)
+        .await
+        .unwrap();
+
+    let titles = fts_search_titles(&pool, "Stormlight").await;
+    assert_eq!(titles, vec!["Rhythm of War"]);
+}
+
+#[tokio::test]
+async fn fts_v2_search_by_publisher_name() {
+    let (pool, _dir) = test_pool().await;
+    let publisher = Publisher::new("Dragonsteel Entertainment");
+    PublisherRepository::create(&pool, &publisher)
+        .await
+        .unwrap();
+
+    seed_book(&pool, "Tress of the Emerald Sea", |b| {
+        b.publisher_id = Some(publisher.id);
+    })
+    .await;
+    seed_book(&pool, "Another Book", |_| {}).await;
+
+    let titles = fts_search_titles(&pool, "Dragonsteel").await;
+    assert_eq!(titles, vec!["Tress of the Emerald Sea"]);
+}
+
+#[tokio::test]
+async fn fts_v2_search_by_tag_name() {
+    let (pool, _dir) = test_pool().await;
+    let tag = Tag::new("progression");
+    TagRepository::create(&pool, &tag).await.unwrap();
+
+    let book_id = seed_book(&pool, "Sufficiently Advanced Magic", |_| {}).await;
+    seed_book(&pool, "Some Other Book", |_| {}).await;
+    BookRepository::add_tag(&pool, book_id, tag.id)
+        .await
+        .unwrap();
+
+    let titles = fts_search_titles(&pool, "progression").await;
+    assert_eq!(titles, vec!["Sufficiently Advanced Magic"]);
+}
+
+// ── Search sort-default tests ──────────────────────────────────
+
+#[tokio::test]
+async fn search_default_sort_is_relevance() {
+    let (pool, _dir) = test_pool().await;
+
+    // Create two books; one has the term in the title (high relevance),
+    // the other only in the description (lower relevance).
+    let mut b1 = test_book("Zzz Unrelated Title");
+    b1.description = Some("sanderson".into());
+    BookRepository::create(&pool, &b1).await.unwrap();
+
+    let b2 = test_book("Sanderson Book");
+    BookRepository::create(&pool, &b2).await.unwrap();
+
+    // Default params → `search()` should use relevance sort, putting
+    // the title match first regardless of `added_at` order.
+    let result = BookRepository::search(&pool, "sanderson", &PaginationParams::default())
+        .await
+        .unwrap();
+
+    assert_eq!(result.items.len(), 2);
+    // Title match ranks higher than description-only match
+    assert_eq!(result.items[0].title, "Sanderson Book");
+}
+
+#[tokio::test]
+async fn search_explicit_sort_by_title_honored() {
+    let (pool, _dir) = test_pool().await;
+
+    seed_book(&pool, "Zebra", |b| {
+        b.description = Some("sanderson".into());
+    })
+    .await;
+    seed_book(&pool, "Alpha", |b| {
+        b.description = Some("sanderson".into());
+    })
+    .await;
+
+    let params = PaginationParams {
+        sort_by: "title".into(),
+        sort_order: SortOrder::Asc,
+        ..PaginationParams::default()
+    };
+    let result = BookRepository::search(&pool, "sanderson", &params)
+        .await
+        .unwrap();
+
+    assert_eq!(result.items.len(), 2);
+    assert_eq!(result.items[0].title, "Alpha");
+    assert_eq!(result.items[1].title, "Zebra");
+}
+
+#[tokio::test]
+async fn list_without_query_defaults_to_added_at() {
+    let (pool, _dir) = test_pool().await;
+
+    // Seed two books; first created = earlier `added_at`
+    seed_book(&pool, "First Added", |_| {}).await;
+    seed_book(&pool, "Second Added", |_| {}).await;
+
+    // Default params → `list()` should use `added_at DESC`
+    let result = BookRepository::list(&pool, &PaginationParams::default(), &BookFilter::default())
+        .await
+        .unwrap();
+
+    assert_eq!(result.items.len(), 2);
+    // DESC: most recently added first
+    assert_eq!(result.items[0].title, "Second Added");
+    assert_eq!(result.items[1].title, "First Added");
+}
+
+// ── count_scope: SQL-based exact count with exclusions ──────────────
+
+#[tokio::test]
+async fn count_scope_no_exclusions_matches_count() {
+    let (pool, _dir) = test_pool().await;
+    for i in 0..5 {
+        seed_book(&pool, &format!("Book {i}"), |_| {}).await;
+    }
+    let filter = BookFilter::default();
+    let count = BookRepository::count(&pool, &filter).await.unwrap();
+    let scoped = BookRepository::count_scope(&pool, &filter, &[])
+        .await
+        .unwrap();
+    assert_eq!(count, scoped);
+}
+
+#[tokio::test]
+async fn count_scope_subtracts_in_scope_exclusions() {
+    let (pool, _dir) = test_pool().await;
+    let mut ids = Vec::new();
+    for i in 0..5 {
+        ids.push(seed_book(&pool, &format!("Book {i}"), |_| {}).await);
+    }
+    let filter = BookFilter::default();
+    let scoped = BookRepository::count_scope(&pool, &filter, &[ids[0], ids[2]])
+        .await
+        .unwrap();
+    assert_eq!(scoped, 3);
+}
+
+#[tokio::test]
+async fn count_scope_ignores_duplicate_exclusions() {
+    let (pool, _dir) = test_pool().await;
+    let mut ids = Vec::new();
+    for i in 0..5 {
+        ids.push(seed_book(&pool, &format!("Book {i}"), |_| {}).await);
+    }
+    let filter = BookFilter::default();
+    // Same ID three times → should only subtract 1.
+    let scoped = BookRepository::count_scope(&pool, &filter, &[ids[0], ids[0], ids[0]])
+        .await
+        .unwrap();
+    assert_eq!(scoped, 4);
+}
+
+#[tokio::test]
+async fn count_scope_ignores_out_of_scope_exclusions() {
+    let (pool, _dir) = test_pool().await;
+    for i in 0..3 {
+        seed_book(&pool, &format!("Book {i}"), |_| {}).await;
+    }
+    let filter = BookFilter::default();
+    let bogus = [Uuid::new_v4(), Uuid::new_v4()];
+    let scoped = BookRepository::count_scope(&pool, &filter, &bogus)
+        .await
+        .unwrap();
+    assert_eq!(scoped, 3, "out-of-scope IDs must not reduce count");
+}
+
+#[tokio::test]
+async fn count_scope_mixed_duplicate_and_out_of_scope() {
+    let (pool, _dir) = test_pool().await;
+    let mut ids = Vec::new();
+    for i in 0..5 {
+        ids.push(seed_book(&pool, &format!("Book {i}"), |_| {}).await);
+    }
+    let filter = BookFilter::default();
+    // 1 real ID (duplicated) + 1 out-of-scope → effective exclusion = 1
+    let excluded = vec![ids[1], ids[1], Uuid::new_v4()];
+    let scoped = BookRepository::count_scope(&pool, &filter, &excluded)
+        .await
+        .unwrap();
+    assert_eq!(scoped, 4);
+}
+
+#[tokio::test]
+async fn count_scope_with_filter_and_exclusions() {
+    let (pool, _dir) = test_pool().await;
+    let mut en_ids = Vec::new();
+    for i in 0..4 {
+        en_ids.push(
+            seed_book(&pool, &format!("EN {i}"), |b| {
+                b.language = Some("en".into());
+            })
+            .await,
+        );
+    }
+    // These should not be counted even without exclusion.
+    for i in 0..2 {
+        seed_book(&pool, &format!("DE {i}"), |b| {
+            b.language = Some("de".into());
+        })
+        .await;
+    }
+
+    let filter = BookFilter {
+        language: Some("en".into()),
+        ..Default::default()
+    };
+    // Exclude 1 real en-book + 1 de-book (out of scope for this filter).
+    let de_book = Uuid::new_v4(); // doesn't even exist
+    let excluded = vec![en_ids[0], de_book];
+    let scoped = BookRepository::count_scope(&pool, &filter, &excluded)
+        .await
+        .unwrap();
+    assert_eq!(scoped, 3);
+}
+
+// ── FTS prefix search tests ───────────────────────────────────────
+
+#[tokio::test]
+async fn fts_prefix_search_partial_title() {
+    let (pool, _dir) = test_pool().await;
+    seed_book(&pool, "Mistborn: The Final Empire", |_| {}).await;
+    seed_book(&pool, "Dune", |_| {}).await;
+
+    let hits = fts_search_titles(&pool, "mistbo").await;
+    assert_eq!(hits, vec!["Mistborn: The Final Empire"]);
+}
+
+#[tokio::test]
+async fn fts_prefix_search_partial_author_name() {
+    let (pool, _dir) = test_pool().await;
+
+    let book_id = seed_book(&pool, "Wiedźmin", |_| {}).await;
+    let author = test_author("Andrzej Sapkowski");
+    AuthorRepository::create(&pool, &author).await.unwrap();
+    BookRepository::add_author(&pool, book_id, author.id, "author", 0)
+        .await
+        .unwrap();
+
+    let hits = fts_search_titles(&pool, "sapkow").await;
+    assert_eq!(hits, vec!["Wiedźmin"]);
+}
+
+#[tokio::test]
+async fn fts_prefix_search_full_word_still_works() {
+    let (pool, _dir) = test_pool().await;
+    seed_book(&pool, "Dune", |_| {}).await;
+
+    let hits = fts_search_titles(&pool, "dune").await;
+    assert_eq!(hits, vec!["Dune"]);
+}
+
+#[tokio::test]
+async fn fts_prefix_search_quoted_phrase_no_prefix() {
+    let (pool, _dir) = test_pool().await;
+
+    let book_id = seed_book(&pool, "Wiedźmin", |_| {}).await;
+    let author = test_author("Andrzej Sapkowski");
+    AuthorRepository::create(&pool, &author).await.unwrap();
+    BookRepository::add_author(&pool, book_id, author.id, "author", 0)
+        .await
+        .unwrap();
+
+    // Quoted partial should NOT match (exact phrase, no prefix)
+    let hits = fts_search_titles(&pool, r#""sapkow""#).await;
+    assert!(hits.is_empty(), "quoted partial must not prefix-match");
+}
+
+#[tokio::test]
+async fn fts_prefix_search_does_not_regress_relevance() {
+    let (pool, _dir) = test_pool().await;
+
+    // Title match should still rank above description-only match
+    let mut b1 = test_book("Zzz Unrelated Title");
+    b1.description = Some("sanderson".into());
+    BookRepository::create(&pool, &b1).await.unwrap();
+
+    let b2 = test_book("Sanderson Book");
+    BookRepository::create(&pool, &b2).await.unwrap();
+
+    let result = BookRepository::search(&pool, "sanderson", &PaginationParams::default())
+        .await
+        .unwrap();
+
+    assert_eq!(result.items.len(), 2);
+    assert_eq!(result.items[0].title, "Sanderson Book");
+}
+
+// ── SearchResolver: relation DSL semantics ─────────────────────
+
+#[tokio::test]
+async fn search_resolve_author_exact_match() {
+    let (pool, _dir) = test_pool().await;
+    let author = test_author("Stephen King");
+    AuthorRepository::create(&pool, &author).await.unwrap();
+
+    let parsed = parse_search_query("author:\"Stephen King\"");
+    let resolved = SearchResolver::resolve(&pool, &parsed).await.unwrap();
+
+    assert_eq!(resolved.author_id, Some(author.id));
+    assert!(resolved.fts_column_filters.is_empty());
+    assert!(resolved.warnings.is_empty());
+}
+
+#[tokio::test]
+async fn search_resolve_author_single_substring() {
+    let (pool, _dir) = test_pool().await;
+    let author = test_author("Stephen King");
+    AuthorRepository::create(&pool, &author).await.unwrap();
+
+    let parsed = parse_search_query("author:King");
+    let resolved = SearchResolver::resolve(&pool, &parsed).await.unwrap();
+
+    assert_eq!(resolved.author_id, Some(author.id));
+    assert!(resolved.fts_column_filters.is_empty());
+    assert!(resolved.warnings.is_empty());
+}
+
+#[tokio::test]
+async fn search_resolve_author_ambiguous_no_fts_fallback() {
+    let (pool, _dir) = test_pool().await;
+    let a1 = test_author("Stephen King");
+    let a2 = test_author("Martin Luther King");
+    AuthorRepository::create(&pool, &a1).await.unwrap();
+    AuthorRepository::create(&pool, &a2).await.unwrap();
+
+    let parsed = parse_search_query("author:King");
+    let resolved = SearchResolver::resolve(&pool, &parsed).await.unwrap();
+
+    assert!(resolved.author_id.is_none());
+    assert!(resolved.fts_column_filters.is_empty());
+    assert_eq!(resolved.warnings.len(), 1);
+    assert!(matches!(
+        &resolved.warnings[0],
+        QueryWarning::AmbiguousRelation { field, match_count, .. }
+        if field == "author" && *match_count == 2
+    ));
+}
+
+#[tokio::test]
+async fn search_resolve_author_unknown_no_fts_fallback() {
+    let (pool, _dir) = test_pool().await;
+
+    let parsed = parse_search_query("author:Nonexistent");
+    let resolved = SearchResolver::resolve(&pool, &parsed).await.unwrap();
+
+    assert!(resolved.author_id.is_none());
+    assert!(resolved.fts_column_filters.is_empty());
+    assert_eq!(resolved.warnings.len(), 1);
+    assert!(matches!(
+        &resolved.warnings[0],
+        QueryWarning::UnknownRelation { field, .. } if field == "author"
+    ));
+}
+
+#[tokio::test]
+async fn search_resolve_author_negated_exact_preserves_fts() {
+    let (pool, _dir) = test_pool().await;
+    let author = test_author("Stephen King");
+    AuthorRepository::create(&pool, &author).await.unwrap();
+
+    let parsed = parse_search_query("-author:\"Stephen King\"");
+    let resolved = SearchResolver::resolve(&pool, &parsed).await.unwrap();
+
+    assert!(resolved.author_id.is_none());
+    assert_eq!(resolved.fts_column_filters.len(), 1);
+    assert!(resolved.fts_column_filters[0].negated);
+    assert!(resolved.warnings.is_empty());
+}
+
+#[tokio::test]
+async fn search_resolve_series_ambiguous_no_fts_fallback() {
+    let (pool, _dir) = test_pool().await;
+    let s1 = Series::new("The Dark Tower");
+    let s2 = Series::new("The Dark Materials");
+    SeriesRepository::create(&pool, &s1).await.unwrap();
+    SeriesRepository::create(&pool, &s2).await.unwrap();
+
+    let parsed = parse_search_query("series:Dark");
+    let resolved = SearchResolver::resolve(&pool, &parsed).await.unwrap();
+
+    assert!(resolved.series_id.is_none());
+    assert!(resolved.fts_column_filters.is_empty());
+    assert_eq!(resolved.warnings.len(), 1);
+    assert!(matches!(
+        &resolved.warnings[0],
+        QueryWarning::AmbiguousRelation { field, match_count, .. }
+        if field == "series" && *match_count == 2
+    ));
+}
+
+#[tokio::test]
+async fn search_resolve_publisher_unknown_no_fts_fallback() {
+    let (pool, _dir) = test_pool().await;
+
+    let parsed = parse_search_query("publisher:Nonexistent");
+    let resolved = SearchResolver::resolve(&pool, &parsed).await.unwrap();
+
+    assert!(resolved.publisher_id.is_none());
+    assert!(resolved.fts_column_filters.is_empty());
+    assert_eq!(resolved.warnings.len(), 1);
+    assert!(matches!(
+        &resolved.warnings[0],
+        QueryWarning::UnknownRelation { field, .. } if field == "publisher"
+    ));
+}
+
+#[tokio::test]
+async fn search_resolve_tag_exact_ambiguous_no_fts_fallback() {
+    let (pool, _dir) = test_pool().await;
+    let t1 = Tag::with_category("fiction", "genre");
+    let t2 = Tag::with_category("fiction", "mood");
+    TagRepository::create(&pool, &t1).await.unwrap();
+    TagRepository::create(&pool, &t2).await.unwrap();
+
+    let parsed = parse_search_query("tag:fiction");
+    let resolved = SearchResolver::resolve(&pool, &parsed).await.unwrap();
+
+    assert!(resolved.tag_ids.is_empty());
+    assert!(resolved.fts_column_filters.is_empty());
+    assert_eq!(resolved.warnings.len(), 1);
+    assert!(matches!(
+        &resolved.warnings[0],
+        QueryWarning::AmbiguousRelation { field, match_count, .. }
+        if field == "tag" && *match_count == 2
+    ));
+}
+
+#[tokio::test]
+async fn search_resolve_tag_unknown_no_fts_fallback() {
+    let (pool, _dir) = test_pool().await;
+
+    let parsed = parse_search_query("tag:nonexistent");
+    let resolved = SearchResolver::resolve(&pool, &parsed).await.unwrap();
+
+    assert!(resolved.tag_ids.is_empty());
+    assert!(resolved.fts_column_filters.is_empty());
+    assert_eq!(resolved.warnings.len(), 1);
+    assert!(matches!(
+        &resolved.warnings[0],
+        QueryWarning::UnknownRelation { field, .. } if field == "tag"
+    ));
 }

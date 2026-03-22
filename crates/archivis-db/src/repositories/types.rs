@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 
-use archivis_core::models::{BookFormat, MetadataStatus};
+use archivis_core::models::{
+    BookFormat, MetadataStatus, ResolutionOutcome, ResolutionState, TagMatchMode,
+};
 
 /// Pagination parameters for list queries.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -25,6 +27,21 @@ impl Default for PaginationParams {
 impl PaginationParams {
     pub fn offset(&self) -> u32 {
         (self.page.saturating_sub(1)) * self.per_page
+    }
+
+    /// Resolve the effective `sort_by` given an optional caller-supplied value
+    /// and whether a text search query is active.
+    ///
+    /// - Explicit `sort_by` is always honored.
+    /// - When omitted: `"relevance"` if `has_query`, else `"added_at"`.
+    pub fn resolve_default_sort(explicit: Option<String>, has_query: bool) -> String {
+        explicit.unwrap_or_else(|| {
+            if has_query {
+                "relevance".into()
+            } else {
+                "added_at".into()
+            }
+        })
     }
 }
 
@@ -56,6 +73,8 @@ pub struct BookFilter {
     pub status: Option<MetadataStatus>,
     /// Filter by tag IDs.
     pub tags: Option<Vec<String>>,
+    /// How multiple tags should be matched (`Any` = OR, `All` = AND).
+    pub tag_match: TagMatchMode,
     /// Filter by author ID.
     pub author_id: Option<String>,
     /// Filter by series ID.
@@ -64,6 +83,34 @@ pub struct BookFilter {
     pub publisher_id: Option<String>,
     /// Filter by `metadata_user_trusted` flag.
     pub trusted: Option<bool>,
+    /// Filter by `metadata_locked` flag.
+    pub locked: Option<bool>,
+    /// Filter by resolution state.
+    pub resolution_state: Option<ResolutionState>,
+    /// Filter by resolution outcome.
+    pub resolution_outcome: Option<ResolutionOutcome>,
+    /// Filter by language code (exact match).
+    pub language: Option<String>,
+    /// Minimum publication year (inclusive).
+    pub year_min: Option<i32>,
+    /// Maximum publication year (inclusive).
+    pub year_max: Option<i32>,
+    /// Filter by cover presence.
+    pub has_cover: Option<bool>,
+    /// Filter by description presence.
+    pub has_description: Option<bool>,
+    /// Filter by having at least one identifier.
+    pub has_identifiers: Option<bool>,
+    /// Identifier type(s) for lookup (e.g. `["isbn13", "isbn10"]` or `["asin"]`).
+    /// When multiple types are provided, the query matches any of them (OR).
+    pub identifier_types: Option<Vec<String>>,
+    /// Identifier value for lookup (used with `identifier_types`).
+    pub identifier_value: Option<String>,
+    /// Tag IDs to exclude (negated tag filter from DSL).
+    pub neg_tag_ids: Option<Vec<String>>,
+    /// FTS5 column-qualified filters from DSL resolution.
+    /// Each tuple: (`column_name`, `search_term`, `is_negated`).
+    pub fts_column_filters: Vec<(String, String, bool)>,
 }
 
 /// Paginated query result.
@@ -90,5 +137,42 @@ impl<T> PaginatedResult<T> {
             per_page: params.per_page,
             total_pages,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_default_sort_search_without_explicit() {
+        assert_eq!(
+            PaginationParams::resolve_default_sort(None, true),
+            "relevance"
+        );
+    }
+
+    #[test]
+    fn resolve_default_sort_search_with_explicit_title() {
+        assert_eq!(
+            PaginationParams::resolve_default_sort(Some("title".into()), true),
+            "title"
+        );
+    }
+
+    #[test]
+    fn resolve_default_sort_no_search_without_explicit() {
+        assert_eq!(
+            PaginationParams::resolve_default_sort(None, false),
+            "added_at"
+        );
+    }
+
+    #[test]
+    fn resolve_default_sort_no_search_with_explicit() {
+        assert_eq!(
+            PaginationParams::resolve_default_sort(Some("rating".into()), false),
+            "rating"
+        );
     }
 }

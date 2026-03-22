@@ -64,6 +64,7 @@ mod openapi {
             super::books::handlers::add_identifier,
             super::books::handlers::update_identifier,
             super::books::handlers::delete_identifier,
+            super::books::handlers::issue_selection_scope,
             super::books::handlers::batch_update_books,
             super::books::handlers::batch_set_tags,
             super::books::handlers::serve_file_content,
@@ -197,12 +198,15 @@ mod openapi {
             super::books::types::PaginatedBooks,
             super::books::types::AddIdentifierRequest,
             super::books::types::UpdateIdentifierRequest,
+            super::books::types::SelectionSpec,
+            super::books::types::IssueSelectionScopeRequest,
+            super::books::types::IssueSelectionScopeResponse,
             super::books::types::BatchUpdateBooksRequest,
             super::books::types::BatchBookFields,
             super::books::types::BatchSetTagsRequest,
             super::books::types::BatchTagMode,
-            super::books::types::BatchUpdateResponse,
-            super::books::types::BatchTagsResponse,
+            super::books::types::BatchSyncResponse,
+            super::books::types::BatchAsyncResponse,
             super::books::types::BatchUpdateError,
             super::books::types::FieldProtectionRequest,
             // Authors
@@ -461,6 +465,7 @@ mod tests {
             config_service,
             None,
             None,
+            [0u8; 32],
         )
     }
 

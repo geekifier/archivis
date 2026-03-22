@@ -14,27 +14,34 @@ use archivis_formats::sanitize::{sanitize_text, SanitizeOptions};
 use archivis_formats::CoverData;
 
 use archivis_core::isbn::validate_isbn;
-use archivis_core::models::{Book, FieldProvenance, Identifier, IdentifierType, MetadataSource};
+use archivis_core::models::{
+    Book, BulkOperation, BulkTagEntry, BulkTagMode, BulkTaskPayload, BulkUpdateFields,
+    FieldProvenance, Identifier, IdentifierType, LibraryFilterState, MetadataSource, TaskType,
+};
+use archivis_core::search_query::{parse_search_query, QueryClause};
 
 use archivis_db::{
     AuthorRepository, BookFileRepository, BookFilter, BookRepository, CandidateRepository,
-    IdentifierRepository, PaginationParams, SeriesRepository, SortOrder, TagRepository,
+    IdentifierRepository, PaginationParams, RelationsBundle, SearchResolver, SeriesRepository,
+    SortOrder, TagRepository,
 };
 use archivis_storage::StorageBackend;
 use archivis_tasks::resolve::{
     compute_and_persist_quality_score, persist_recomputed_status, refresh_quality_score_best_effort,
 };
+use archivis_tasks::workers::{apply_bulk_update_to_book, BulkFieldError};
 
 use crate::auth::AuthUser;
 use crate::errors::ApiError;
 use crate::state::AppState;
 
 use super::types::{
-    AddIdentifierRequest, BatchBookFields, BatchSetTagsRequest, BatchTagMode, BatchTagsResponse,
-    BatchUpdateBooksRequest, BatchUpdateError, BatchUpdateResponse, BookDetail, BookListParams,
-    BookSummary, CoverParams, FieldProtectionRequest, OverrideStatusRequest, PaginatedBooks,
-    SetBookAuthorsRequest, SetBookSeriesRequest, SetBookTagsRequest, UpdateBookRequest,
-    UpdateIdentifierRequest,
+    AddIdentifierRequest, BatchAsyncResponse, BatchBookFields, BatchSetTagsRequest,
+    BatchSyncResponse, BatchTagMode, BatchUpdateBooksRequest, BatchUpdateError, BookDetail,
+    BookListParams, BookSummary, CoverParams, FieldProtectionRequest, IssueSelectionScopeRequest,
+    IssueSelectionScopeResponse, OverrideStatusRequest, PaginatedBooks, QueryWarningResponse,
+    SelectionSpec, SetBookAuthorsRequest, SetBookSeriesRequest, SetBookTagsRequest,
+    UpdateBookRequest, UpdateIdentifierRequest,
 };
 
 const USER_EDIT_TRIGGER: &str = "user_edit";
@@ -239,90 +246,267 @@ pub async fn list_books(
     AuthUser(_user): AuthUser,
     Query(params): Query<BookListParams>,
 ) -> Result<Json<PaginatedBooks>, ApiError> {
-    let per_page = params.per_page.unwrap_or(25).min(100);
-    let page = params.page.unwrap_or(1).max(1);
+    // Separate view params from filter state.
+    let (filter_state, view) = params.into_filter_state().map_err(ApiError::Validation)?;
 
-    let sort_order = match params.sort_order.as_deref() {
+    let per_page = view.per_page.unwrap_or(25).min(100);
+    let page = view.page.unwrap_or(1).max(1);
+
+    let sort_order = match view.sort_order.as_deref() {
         Some("asc") => SortOrder::Asc,
         _ => SortOrder::Desc,
     };
 
+    let pool = state.db_pool();
+
+    // Parse and resolve DSL operators in `text_query`.
+    let (filter_state, filter, warnings) = resolve_dsl(pool, filter_state).await?;
+
+    // Re-check `has_query` after DSL resolution (`text_query` may have changed).
+    let has_query = filter_state.text_query.is_some();
     let pagination = PaginationParams {
         page,
         per_page,
-        sort_by: params.sort_by.unwrap_or_else(|| "added_at".into()),
+        sort_by: PaginationParams::resolve_default_sort(view.sort_by, has_query),
         sort_order,
     };
 
-    let format = params
-        .format
-        .as_deref()
-        .map(str::parse)
-        .transpose()
-        .map_err(|e: String| ApiError::Validation(e))?;
-
-    let status = params
-        .status
-        .as_deref()
-        .map(str::parse)
-        .transpose()
-        .map_err(|e: String| ApiError::Validation(e))?;
-
-    let filter = BookFilter {
-        query: params.q,
-        format,
-        status,
-        tags: None,
-        author_id: params.author_id.map(|id| id.to_string()),
-        series_id: params.series_id.map(|id| id.to_string()),
-        publisher_id: None,
-        trusted: None,
-    };
-
-    let pool = state.db_pool();
     let result = BookRepository::list(pool, &pagination, &filter).await?;
 
     // Parse includes
-    let includes: HashSet<&str> = params
+    let includes: HashSet<&str> = view
         .include
         .as_deref()
         .map(|s| s.split(',').map(str::trim).collect())
         .unwrap_or_default();
 
     let mut books: PaginatedBooks = result.into();
+    books.search_warnings = warnings;
 
-    // Enrich with relations if requested
+    // Batch-load relations (replaces N+1 `get_with_relations` per book)
     if !includes.is_empty() {
+        let book_ids: Vec<Uuid> = books.items.iter().map(|b| b.id).collect();
+        let relations = BookRepository::batch_load_relations(pool, &book_ids, &includes).await?;
+
         for summary in &mut books.items {
-            enrich_summary(pool, summary, &includes).await?;
+            if let Some(bundle) = relations.get(&summary.id) {
+                apply_relations(summary, bundle);
+            }
         }
     }
 
     Ok(Json(books))
 }
 
-/// Populate optional relation fields on a `BookSummary` based on requested includes.
-async fn enrich_summary(
+/// Apply a pre-loaded `RelationsBundle` onto a `BookSummary`.
+fn apply_relations(summary: &mut BookSummary, bundle: &RelationsBundle) {
+    if let Some(ref authors) = bundle.authors {
+        summary.authors = Some(authors.iter().cloned().map(Into::into).collect());
+    }
+    if let Some(ref series) = bundle.series {
+        summary.series = Some(series.iter().cloned().map(Into::into).collect());
+    }
+    if let Some(ref tags) = bundle.tags {
+        summary.tags = Some(tags.iter().cloned().map(Into::into).collect());
+    }
+    if let Some(ref files) = bundle.files {
+        summary.files = Some(files.iter().cloned().map(Into::into).collect());
+    }
+}
+
+/// Parse DSL operators from `text_query`, resolve them against the DB,
+/// and merge results back into the filter state.
+///
+/// Returns the updated filter state, a `BookFilter` ready for DB queries,
+/// and any warnings from resolution.
+fn maybe_promote_lone_isbn_query(
+    filter_state: &mut LibraryFilterState,
+    parsed: &archivis_core::search_query::SearchQuery,
+) -> bool {
+    if filter_state.active_identifier_count() > 0 || !parsed.dropped_empty_fields.is_empty() {
+        return false;
+    }
+
+    let Some(raw_query) = filter_state.text_query.as_deref() else {
+        return false;
+    };
+
+    let [QueryClause::Text { negated: false, .. }] = parsed.clauses.as_slice() else {
+        return false;
+    };
+
+    let validation = validate_isbn(raw_query);
+    if !validation.valid {
+        return false;
+    }
+
+    filter_state.isbn = Some(validation.normalized);
+    filter_state.text_query = None;
+    true
+}
+
+async fn resolve_dsl(
     pool: &archivis_db::DbPool,
-    summary: &mut BookSummary,
-    includes: &HashSet<&str>,
-) -> Result<(), ApiError> {
-    let bwr = BookRepository::get_with_relations(pool, summary.id).await?;
+    mut filter_state: LibraryFilterState,
+) -> Result<(LibraryFilterState, BookFilter, Vec<QueryWarningResponse>), ApiError> {
+    let raw_query = filter_state.text_query.as_deref().unwrap_or("");
+    let parsed = parse_search_query(raw_query);
 
-    if includes.contains("authors") {
-        summary.authors = Some(bwr.authors.into_iter().map(Into::into).collect());
-    }
-    if includes.contains("series") {
-        summary.series = Some(bwr.series.into_iter().map(Into::into).collect());
-    }
-    if includes.contains("tags") {
-        summary.tags = Some(bwr.tags.into_iter().map(Into::into).collect());
-    }
-    if includes.contains("files") {
-        summary.files = Some(bwr.files.into_iter().map(Into::into).collect());
+    // Collect warnings for any empty field operators (e.g. `author:` with no value).
+    let dropped_warnings: Vec<QueryWarningResponse> = parsed
+        .dropped_empty_fields
+        .iter()
+        .map(|d| QueryWarningResponse::EmptyFieldValue {
+            field: d.field.as_str().to_owned(),
+        })
+        .collect();
+
+    // Treat a lone valid ISBN in the freeform search box like the existing ISBN filter.
+    if maybe_promote_lone_isbn_query(&mut filter_state, &parsed) {
+        let book_filter = BookFilter::from(&filter_state);
+        return Ok((filter_state, book_filter, dropped_warnings));
     }
 
-    Ok(())
+    // If there are no executable DSL clauses, skip resolution.
+    if parsed.clauses.is_empty() {
+        // Clear `text_query` when fields were dropped so the raw DSL string
+        // (e.g. "author:") does not leak into the FTS5 MATCH expression.
+        if !parsed.dropped_empty_fields.is_empty() {
+            filter_state.text_query = None;
+        }
+        let book_filter = BookFilter::from(&filter_state);
+        return Ok((filter_state, book_filter, dropped_warnings));
+    }
+
+    let resolved = SearchResolver::resolve(pool, &parsed).await?;
+
+    // Merge resolved relation IDs into `filter_state` (explicit params win).
+    merge_resolved_into_filter(&mut filter_state, &resolved);
+
+    let mut warnings: Vec<QueryWarningResponse> =
+        resolved.warnings.iter().cloned().map(Into::into).collect();
+    warnings.extend(dropped_warnings);
+
+    let book_filter = BookFilter::from_resolved(&filter_state, &resolved);
+    Ok((filter_state, book_filter, warnings))
+}
+
+/// Merge DSL-resolved values into `LibraryFilterState`.
+///
+/// Explicit query parameters (already set in `lfs`) take precedence over
+/// DSL-resolved values. Only fills in gaps.
+fn merge_resolved_into_filter(lfs: &mut LibraryFilterState, resolved: &archivis_db::ResolvedQuery) {
+    // Text query: always override with resolver's cleaned version
+    // (the resolver strips out extracted field operators).
+    lfs.text_query.clone_from(&resolved.text_query);
+
+    // Relations: only fill if not already set by explicit params.
+    if lfs.author_id.is_none() {
+        lfs.author_id = resolved.author_id;
+    }
+    if lfs.series_id.is_none() {
+        lfs.series_id = resolved.series_id;
+    }
+    if lfs.publisher_id.is_none() {
+        lfs.publisher_id = resolved.publisher_id;
+    }
+    if lfs.tag_ids.is_empty() && !resolved.tag_ids.is_empty() {
+        lfs.tag_ids.clone_from(&resolved.tag_ids);
+    }
+
+    // Scalars: only fill if not already set.
+    if lfs.format.is_none() {
+        lfs.format = resolved.format;
+    }
+    if lfs.metadata_status.is_none() {
+        lfs.metadata_status = resolved.metadata_status;
+    }
+    if lfs.resolution_state.is_none() {
+        lfs.resolution_state = resolved.resolution_state;
+    }
+    if lfs.resolution_outcome.is_none() {
+        lfs.resolution_outcome = resolved.resolution_outcome;
+    }
+    if lfs.trusted.is_none() {
+        lfs.trusted = resolved.trusted;
+    }
+    if lfs.locked.is_none() {
+        lfs.locked = resolved.locked;
+    }
+    if lfs.language.is_none() {
+        lfs.language.clone_from(&resolved.language);
+    }
+    if lfs.year_min.is_none() {
+        lfs.year_min = resolved.year_min;
+    }
+    if lfs.year_max.is_none() {
+        lfs.year_max = resolved.year_max;
+    }
+    if lfs.has_cover.is_none() {
+        lfs.has_cover = resolved.has_cover;
+    }
+    if lfs.has_description.is_none() {
+        lfs.has_description = resolved.has_description;
+    }
+    if lfs.has_identifiers.is_none() {
+        lfs.has_identifiers = resolved.has_identifiers;
+    }
+
+    // Identifiers: only fill if not already set.
+    if lfs.isbn.is_none() {
+        lfs.isbn.clone_from(&resolved.isbn);
+    }
+    if lfs.asin.is_none() {
+        lfs.asin.clone_from(&resolved.asin);
+    }
+    if lfs.open_library_id.is_none() {
+        lfs.open_library_id.clone_from(&resolved.open_library_id);
+    }
+    if lfs.hardcover_id.is_none() {
+        lfs.hardcover_id.clone_from(&resolved.hardcover_id);
+    }
+}
+
+/// POST /api/books/selection-scope — issue a signed scope token for promoted selection.
+#[utoipa::path(
+    post,
+    path = "/api/books/selection-scope",
+    tag = "books",
+    request_body = IssueSelectionScopeRequest,
+    responses(
+        (status = 200, description = "Scope token issued", body = IssueSelectionScopeResponse),
+        (status = 400, description = "Validation error"),
+        (status = 401, description = "Not authenticated"),
+    ),
+    security(("bearer" = []))
+)]
+pub async fn issue_selection_scope(
+    State(state): State<AppState>,
+    AuthUser(_user): AuthUser,
+    Json(body): Json<IssueSelectionScopeRequest>,
+) -> Result<Json<IssueSelectionScopeResponse>, ApiError> {
+    let mut filter = body.filters;
+    filter.canonicalize();
+
+    if filter.active_identifier_count() > 1 {
+        return Err(ApiError::Validation(
+            "at most one identifier filter may be active at a time".into(),
+        ));
+    }
+
+    // Resolve DSL operators so the scope token embeds concrete IDs.
+    let (filter, book_filter, _warnings) = resolve_dsl(state.db_pool(), filter).await?;
+    let matching_count = BookRepository::count(state.db_pool(), &book_filter).await?;
+
+    let scope_token = super::scope::sign_scope(state.scope_signing_key(), &filter);
+
+    let summary = format!("{matching_count} books matching current filters");
+
+    Ok(Json(IssueSelectionScopeResponse {
+        scope_token,
+        matching_count,
+        summary,
+    }))
 }
 
 /// GET /api/books/{id} — single book with all relations.
@@ -1453,15 +1637,106 @@ pub async fn delete_identifier(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// Validated + verified selection, ready for dispatch.
+enum ResolvedSelection {
+    /// Explicit book IDs (always small enough for sync execution).
+    Ids(Vec<Uuid>),
+    /// Scope with pre-computed matching count, no IDs materialized yet.
+    Scope {
+        filter: Box<archivis_core::models::LibraryFilterState>,
+        excluded_ids: Vec<Uuid>,
+        matching_count: u64,
+    },
+}
+
+impl ResolvedSelection {
+    /// Effective number of books that will be affected.
+    fn count(&self) -> u64 {
+        match self {
+            Self::Ids(ids) => ids.len() as u64,
+            Self::Scope { matching_count, .. } => *matching_count,
+        }
+    }
+
+    /// True when the scope is small enough for synchronous execution.
+    fn is_sync(&self) -> bool {
+        self.count() <= 100
+    }
+
+    /// Materialize concrete IDs. Only called on the sync path (<=100).
+    async fn into_ids(self, pool: &archivis_db::DbPool) -> Result<Vec<Uuid>, ApiError> {
+        match self {
+            Self::Ids(ids) => Ok(ids),
+            Self::Scope {
+                filter,
+                excluded_ids,
+                ..
+            } => {
+                let book_filter = BookFilter::from(filter.as_ref());
+                let ids = BookRepository::resolve_scope(pool, &book_filter, &excluded_ids).await?;
+                if ids.is_empty() {
+                    return Err(ApiError::Validation(
+                        "scope resolves to zero books after exclusions".into(),
+                    ));
+                }
+                Ok(ids)
+            }
+        }
+    }
+}
+
+/// Validate a `SelectionSpec` and compute matching count without materializing IDs.
+///
+/// For `Ids` mode: validates non-empty, returns IDs directly.
+/// For `Scope` mode: verifies the token signature, computes `count()` minus exclusion
+/// count (approximate — exact subtraction happens at execution time).
+async fn resolve_selection(
+    state: &AppState,
+    selection: &SelectionSpec,
+) -> Result<ResolvedSelection, ApiError> {
+    match selection {
+        SelectionSpec::Ids { ids } => {
+            if ids.is_empty() {
+                return Err(ApiError::Validation("ids must not be empty".into()));
+            }
+            Ok(ResolvedSelection::Ids(ids.clone()))
+        }
+        SelectionSpec::Scope {
+            scope_token,
+            excluded_ids,
+        } => {
+            let filter = super::scope::verify_scope(state.scope_signing_key(), scope_token)
+                .map_err(|e| ApiError::Validation(e.to_string()))?;
+            let book_filter = BookFilter::from(&filter);
+            let matching_count =
+                BookRepository::count_scope(state.db_pool(), &book_filter, excluded_ids).await?;
+            if matching_count == 0 {
+                return Err(ApiError::Validation(
+                    "scope resolves to zero books after exclusions".into(),
+                ));
+            }
+            Ok(ResolvedSelection::Scope {
+                filter: Box::new(filter),
+                excluded_ids: excluded_ids.clone(),
+                matching_count,
+            })
+        }
+    }
+}
+
 /// POST /api/books/batch-update -- batch update scalar fields on multiple books.
+///
+/// Accepts `SelectionSpec` (explicit IDs or scope token).
+/// Returns 200 for synchronous execution (<=100 books) or 202 for async (>100).
 #[utoipa::path(
     post,
     path = "/api/books/batch-update",
     tag = "books",
     request_body = BatchUpdateBooksRequest,
     responses(
-        (status = 200, description = "Batch update result", body = BatchUpdateResponse),
-        (status = 400, description = "Validation error (e.g. too many IDs)"),
+        (status = 200, description = "Synchronous batch result", body = BatchSyncResponse),
+        (status = 202, description = "Async task enqueued", body = BatchAsyncResponse),
+        (status = 400, description = "Validation error"),
         (status = 401, description = "Not authenticated"),
     ),
     security(("bearer" = []))
@@ -1470,25 +1745,66 @@ pub async fn batch_update_books(
     State(state): State<AppState>,
     AuthUser(_user): AuthUser,
     Json(body): Json<BatchUpdateBooksRequest>,
-) -> Result<Json<BatchUpdateResponse>, ApiError> {
+) -> Result<Response, ApiError> {
     body.validate()?;
 
-    if body.book_ids.is_empty() {
-        return Err(ApiError::Validation("book_ids must not be empty".into()));
-    }
-    if body.book_ids.len() > 100 {
-        return Err(ApiError::Validation(
-            "batch update supports at most 100 books per request".into(),
-        ));
+    let resolved = resolve_selection(&state, &body.selection).await?;
+
+    // Async path: >100 books → enqueue background task (no ID materialization)
+    if !resolved.is_sync() {
+        let matching_count = resolved.count();
+        let (filter, excluded_ids) = match resolved {
+            ResolvedSelection::Scope {
+                filter,
+                excluded_ids,
+                ..
+            } => (*filter, excluded_ids),
+            ResolvedSelection::Ids(_) => {
+                return Err(ApiError::Validation(
+                    "batch update with more than 100 books requires a scope token".into(),
+                ));
+            }
+        };
+
+        let payload = BulkTaskPayload {
+            filter,
+            excluded_ids,
+            operation: BulkOperation::Update {
+                fields: BulkUpdateFields {
+                    language: body.updates.language.clone(),
+                    rating: body.updates.rating,
+                    publisher_id: body.updates.publisher_id,
+                },
+            },
+        };
+
+        let payload_json = serde_json::to_value(&payload)
+            .map_err(|e| ApiError::Internal(format!("failed to serialize payload: {e}")))?;
+        let task_id = state
+            .task_queue()
+            .enqueue(TaskType::BulkUpdate, payload_json)
+            .await?;
+
+        return Ok((
+            StatusCode::ACCEPTED,
+            Json(BatchAsyncResponse {
+                task_id,
+                task_type: TaskType::BulkUpdate.to_string(),
+                matching_count,
+                message: format!("Bulk update enqueued for {matching_count} books"),
+            }),
+        )
+            .into_response());
     }
 
+    // Sync path: <=100 books → materialize IDs and execute immediately
     let pool = state.db_pool();
-    let sanitize_opts = SanitizeOptions::default();
+    let ids = resolved.into_ids(pool).await?;
     let mut updated_count: u32 = 0;
     let mut errors = Vec::new();
 
-    for &book_id in &body.book_ids {
-        match apply_batch_fields(pool, book_id, &body.updates, &sanitize_opts).await {
+    for &book_id in &ids {
+        match apply_batch_fields(pool, book_id, &body.updates).await {
             Ok(()) => updated_count += 1,
             Err(e) => errors.push(BatchUpdateError {
                 book_id,
@@ -1497,60 +1813,49 @@ pub async fn batch_update_books(
         }
     }
 
-    Ok(Json(BatchUpdateResponse {
+    Ok(Json(BatchSyncResponse {
         updated_count,
         errors,
-    }))
+    })
+    .into_response())
 }
 
 /// Apply batch field updates to a single book. Returns `Ok(())` on success.
+///
+/// Delegates to [`apply_bulk_update_to_book`] so that the API sync path and
+/// the background bulk worker share identical semantics (language validation,
+/// provenance stamping, quality-score refresh).
 async fn apply_batch_fields(
     pool: &archivis_db::DbPool,
     book_id: Uuid,
     fields: &BatchBookFields,
-    _sanitize_opts: &SanitizeOptions,
 ) -> Result<(), ApiError> {
-    let mut book = BookRepository::get_by_id(pool, book_id).await?;
-    let mut book_changed = false;
-
-    if let Some(ref language) = fields.language {
-        let new_language = validate_language(language)?;
-        if new_language != book.language {
-            book.language = new_language;
-            book.metadata_provenance.language = Some(user_field_provenance());
-            book_changed = true;
-        }
-    }
-    if let Some(rating) = fields.rating {
-        let new_rating = Some(rating);
-        if new_rating != book.rating {
-            book.rating = new_rating;
-            book_changed = true;
-        }
-    }
-    if let Some(ref pub_id) = fields.publisher_id {
-        if *pub_id != book.publisher_id {
-            book.publisher_id = *pub_id;
-            book.metadata_provenance.publisher = Some(user_field_provenance());
-            book_changed = true;
-        }
-    }
-
-    if book_changed {
-        BookRepository::update(pool, &book).await?;
-        refresh_quality_score_best_effort(pool, book_id).await;
-    }
-    Ok(())
+    let bulk_fields = BulkUpdateFields {
+        language: fields.language.clone(),
+        rating: fields.rating,
+        publisher_id: fields.publisher_id,
+    };
+    apply_bulk_update_to_book(pool, book_id, &bulk_fields)
+        .await
+        .map(|_| ())
+        .map_err(|e| match e {
+            BulkFieldError::Validation(msg) => ApiError::Validation(msg),
+            BulkFieldError::Db(msg) => ApiError::Internal(msg),
+        })
 }
 
 /// POST /api/books/batch-tags -- batch set or add tags on multiple books.
+///
+/// Accepts `SelectionSpec` (explicit IDs or scope token).
+/// Returns 200 for synchronous execution (<=100 books) or 202 for async (>100).
 #[utoipa::path(
     post,
     path = "/api/books/batch-tags",
     tag = "books",
     request_body = BatchSetTagsRequest,
     responses(
-        (status = 200, description = "Batch tag update result", body = BatchTagsResponse),
+        (status = 200, description = "Synchronous batch result", body = BatchSyncResponse),
+        (status = 202, description = "Async task enqueued", body = BatchAsyncResponse),
         (status = 400, description = "Validation error"),
         (status = 401, description = "Not authenticated"),
     ),
@@ -1560,39 +1865,96 @@ pub async fn batch_set_tags(
     State(state): State<AppState>,
     AuthUser(_user): AuthUser,
     Json(body): Json<BatchSetTagsRequest>,
-) -> Result<Json<BatchTagsResponse>, ApiError> {
-    if body.book_ids.is_empty() {
-        return Err(ApiError::Validation("book_ids must not be empty".into()));
-    }
-    if body.book_ids.len() > 100 {
-        return Err(ApiError::Validation(
-            "batch tag update supports at most 100 books per request".into(),
-        ));
-    }
-
+) -> Result<Response, ApiError> {
     let pool = state.db_pool();
 
-    // Resolve all tag IDs up front (shared across books).
+    // ── 1. Validate selection FIRST (before any tag side effects) ──
+    let resolved = resolve_selection(&state, &body.selection).await?;
+
+    // Validate tag input structure (no find_or_create yet — just check shape).
+    for link in &body.tags {
+        if link.tag_id.is_none() && link.name.is_none() {
+            return Err(ApiError::Validation(
+                "each tag must have either tag_id or name".into(),
+            ));
+        }
+    }
+
+    // ── 2. Now resolve tag IDs (find_or_create is safe since selection is valid) ──
     let mut tag_ids = Vec::with_capacity(body.tags.len());
     for link in &body.tags {
         let tag_id = if let Some(tid) = link.tag_id {
             TagRepository::get_by_id(pool, tid).await?;
             tid
-        } else if let Some(ref name) = link.name {
+        } else {
+            // name is guaranteed Some by the validation above.
+            let name = link.name.as_ref().unwrap();
             let tag = TagRepository::find_or_create(pool, name, link.category.as_deref()).await?;
             tag.id
-        } else {
-            return Err(ApiError::Validation(
-                "each tag must have either tag_id or name".into(),
-            ));
         };
         tag_ids.push(tag_id);
     }
 
+    // ── 3. Dispatch async or sync ──
+
+    // Async path: >100 books → enqueue background task (no ID materialization)
+    if !resolved.is_sync() {
+        let matching_count = resolved.count();
+        let (filter, excluded_ids) = match resolved {
+            ResolvedSelection::Scope {
+                filter,
+                excluded_ids,
+                ..
+            } => (*filter, excluded_ids),
+            ResolvedSelection::Ids(_) => {
+                return Err(ApiError::Validation(
+                    "batch tag update with more than 100 books requires a scope token".into(),
+                ));
+            }
+        };
+
+        let bulk_mode = match body.mode {
+            BatchTagMode::Replace => BulkTagMode::Replace,
+            BatchTagMode::Add => BulkTagMode::Add,
+        };
+
+        let payload = BulkTaskPayload {
+            filter,
+            excluded_ids,
+            operation: BulkOperation::SetTags {
+                mode: bulk_mode,
+                tags: tag_ids
+                    .iter()
+                    .map(|&tag_id| BulkTagEntry { tag_id })
+                    .collect(),
+            },
+        };
+
+        let payload_json = serde_json::to_value(&payload)
+            .map_err(|e| ApiError::Internal(format!("failed to serialize payload: {e}")))?;
+        let task_id = state
+            .task_queue()
+            .enqueue(TaskType::BulkSetTags, payload_json)
+            .await?;
+
+        return Ok((
+            StatusCode::ACCEPTED,
+            Json(BatchAsyncResponse {
+                task_id,
+                task_type: TaskType::BulkSetTags.to_string(),
+                matching_count,
+                message: format!("Bulk tag update enqueued for {matching_count} books"),
+            }),
+        )
+            .into_response());
+    }
+
+    // Sync path: <=100 books → materialize IDs and execute immediately
+    let ids = resolved.into_ids(pool).await?;
     let mut updated_count: u32 = 0;
     let mut errors = Vec::new();
 
-    for &book_id in &body.book_ids {
+    for &book_id in &ids {
         match apply_batch_tags(pool, book_id, &tag_ids, &body.mode).await {
             Ok(()) => updated_count += 1,
             Err(e) => errors.push(BatchUpdateError {
@@ -1602,10 +1964,11 @@ pub async fn batch_set_tags(
         }
     }
 
-    Ok(Json(BatchTagsResponse {
+    Ok(Json(BatchSyncResponse {
         updated_count,
         errors,
-    }))
+    })
+    .into_response())
 }
 
 /// Apply tag changes to a single book. Returns `Ok(())` on success.
@@ -1656,7 +2019,11 @@ mod tests {
     use archivis_tasks::queue::TaskQueue;
     use archivis_tasks::resolve::ResolutionService;
 
-    use crate::books::types::{BookAuthorLink, BookSeriesLink, FieldProtectionRequest};
+    use crate::books::types::{
+        BatchSetTagsRequest, BatchSyncResponse, BatchTagMode, BatchUpdateBooksRequest,
+        BookAuthorLink, BookSeriesLink, BookTagLink, FieldProtectionRequest,
+        IssueSelectionScopeRequest, SelectionSpec,
+    };
     use crate::settings::service::ConfigService;
     use crate::state::{ApiConfig, AppState};
 
@@ -1722,6 +2089,7 @@ mod tests {
             config_service,
             None,
             None,
+            [0u8; 32],
         )
     }
 
@@ -2335,5 +2703,827 @@ mod tests {
             "untrusted book should enter Pending after title edit"
         );
         assert!(!updated.metadata_user_trusted);
+    }
+
+    // ── Search sort-default regression ─────────────────────────
+
+    #[tokio::test]
+    async fn list_books_search_defaults_to_relevance_sort() {
+        let tmp = TempDir::new().unwrap();
+        let state = test_state(&tmp).await;
+
+        // Seed two books; one matches in title, the other only in description
+        let mut b1 = Book::new("Zzz Unrelated");
+        b1.description = Some("sanderson reference".into());
+        BookRepository::create(state.db_pool(), &b1).await.unwrap();
+
+        let b2 = Book::new("Sanderson Novel");
+        BookRepository::create(state.db_pool(), &b2).await.unwrap();
+
+        // q is set, sort_by is omitted → should use relevance
+        let params = BookListParams {
+            q: Some("sanderson".into()),
+            ..BookListParams::default()
+        };
+
+        let Json(result) = list_books(State(state.clone()), auth_user(), Query(params))
+            .await
+            .unwrap();
+
+        assert_eq!(result.items.len(), 2);
+        // Title match should rank first (relevance sort)
+        assert_eq!(result.items[0].title, "Sanderson Novel");
+    }
+
+    #[tokio::test]
+    async fn list_books_search_with_explicit_title_sort() {
+        let tmp = TempDir::new().unwrap();
+        let state = test_state(&tmp).await;
+
+        let mut b1 = Book::new("Zebra");
+        b1.description = Some("sanderson".into());
+        BookRepository::create(state.db_pool(), &b1).await.unwrap();
+
+        let mut b2 = Book::new("Alpha");
+        b2.description = Some("sanderson".into());
+        BookRepository::create(state.db_pool(), &b2).await.unwrap();
+
+        let params = BookListParams {
+            q: Some("sanderson".into()),
+            sort_by: Some("title".into()),
+            sort_order: Some("asc".into()),
+            ..BookListParams::default()
+        };
+
+        let Json(result) = list_books(State(state.clone()), auth_user(), Query(params))
+            .await
+            .unwrap();
+
+        assert_eq!(result.items.len(), 2);
+        assert_eq!(result.items[0].title, "Alpha");
+        assert_eq!(result.items[1].title, "Zebra");
+    }
+
+    #[tokio::test]
+    async fn list_books_no_search_defaults_to_added_at() {
+        let tmp = TempDir::new().unwrap();
+        let state = test_state(&tmp).await;
+
+        BookRepository::create(state.db_pool(), &Book::new("First"))
+            .await
+            .unwrap();
+        BookRepository::create(state.db_pool(), &Book::new("Second"))
+            .await
+            .unwrap();
+
+        let params = BookListParams::default();
+
+        let Json(result) = list_books(State(state.clone()), auth_user(), Query(params))
+            .await
+            .unwrap();
+
+        assert_eq!(result.items.len(), 2);
+        // Default DESC: most recent first
+        assert_eq!(result.items[0].title, "Second");
+        assert_eq!(result.items[1].title, "First");
+    }
+
+    // ── ISBN filter regression ────────────────────────────────────
+
+    #[tokio::test]
+    async fn list_books_isbn_filter_matches_isbn13() {
+        let tmp = TempDir::new().unwrap();
+        let state = test_state(&tmp).await;
+        let pool = state.db_pool();
+
+        let book = Book::new("ISBN13 Target");
+        BookRepository::create(pool, &book).await.unwrap();
+        let other = Book::new("No Identifier");
+        BookRepository::create(pool, &other).await.unwrap();
+
+        let ident = Identifier::new(
+            book.id,
+            IdentifierType::Isbn13,
+            "9780451524935",
+            MetadataSource::User,
+            1.0,
+        );
+        archivis_db::IdentifierRepository::create(pool, &ident)
+            .await
+            .unwrap();
+
+        let params = BookListParams {
+            isbn: Some("9780451524935".into()),
+            ..BookListParams::default()
+        };
+
+        let Json(result) = list_books(State(state.clone()), auth_user(), Query(params))
+            .await
+            .unwrap();
+
+        assert_eq!(result.total, 1);
+        assert_eq!(result.items[0].title, "ISBN13 Target");
+    }
+
+    #[tokio::test]
+    async fn list_books_isbn_filter_matches_isbn10() {
+        let tmp = TempDir::new().unwrap();
+        let state = test_state(&tmp).await;
+        let pool = state.db_pool();
+
+        let book = Book::new("ISBN10 Target");
+        BookRepository::create(pool, &book).await.unwrap();
+
+        let ident = Identifier::new(
+            book.id,
+            IdentifierType::Isbn10,
+            "0451524934",
+            MetadataSource::User,
+            1.0,
+        );
+        archivis_db::IdentifierRepository::create(pool, &ident)
+            .await
+            .unwrap();
+
+        let params = BookListParams {
+            isbn: Some("0451524934".into()),
+            ..BookListParams::default()
+        };
+
+        let Json(result) = list_books(State(state.clone()), auth_user(), Query(params))
+            .await
+            .unwrap();
+
+        assert_eq!(result.total, 1);
+        assert_eq!(result.items[0].title, "ISBN10 Target");
+    }
+
+    #[tokio::test]
+    async fn list_books_isbn_filter_normalizes_hyphens() {
+        let tmp = TempDir::new().unwrap();
+        let state = test_state(&tmp).await;
+        let pool = state.db_pool();
+
+        let book = Book::new("Hyphenated ISBN");
+        BookRepository::create(pool, &book).await.unwrap();
+
+        let ident = Identifier::new(
+            book.id,
+            IdentifierType::Isbn13,
+            "9783161484100",
+            MetadataSource::User,
+            1.0,
+        );
+        archivis_db::IdentifierRepository::create(pool, &ident)
+            .await
+            .unwrap();
+
+        // Pass ISBN with hyphens — the handler normalizes via `canonicalize()`
+        let params = BookListParams {
+            isbn: Some("978-3-16-148410-0".into()),
+            ..BookListParams::default()
+        };
+
+        let Json(result) = list_books(State(state.clone()), auth_user(), Query(params))
+            .await
+            .unwrap();
+
+        assert_eq!(result.total, 1);
+        assert_eq!(result.items[0].title, "Hyphenated ISBN");
+    }
+
+    #[tokio::test]
+    async fn list_books_bare_isbn_query_matches_isbn13() {
+        let tmp = TempDir::new().unwrap();
+        let state = test_state(&tmp).await;
+        let pool = state.db_pool();
+
+        let book = Book::new("Bare ISBN13 Target");
+        BookRepository::create(pool, &book).await.unwrap();
+        let other = Book::new("No Identifier");
+        BookRepository::create(pool, &other).await.unwrap();
+
+        let ident = Identifier::new(
+            book.id,
+            IdentifierType::Isbn13,
+            "9780451524935",
+            MetadataSource::User,
+            1.0,
+        );
+        archivis_db::IdentifierRepository::create(pool, &ident)
+            .await
+            .unwrap();
+
+        let params = BookListParams {
+            q: Some("9780451524935".into()),
+            ..BookListParams::default()
+        };
+
+        let Json(result) = list_books(State(state.clone()), auth_user(), Query(params))
+            .await
+            .unwrap();
+
+        assert_eq!(result.total, 1);
+        assert_eq!(result.items[0].title, "Bare ISBN13 Target");
+    }
+
+    #[tokio::test]
+    async fn list_books_bare_isbn_query_normalizes_hyphens() {
+        let tmp = TempDir::new().unwrap();
+        let state = test_state(&tmp).await;
+        let pool = state.db_pool();
+
+        let book = Book::new("Bare Hyphenated ISBN Target");
+        BookRepository::create(pool, &book).await.unwrap();
+
+        let ident = Identifier::new(
+            book.id,
+            IdentifierType::Isbn13,
+            "9783161484100",
+            MetadataSource::User,
+            1.0,
+        );
+        archivis_db::IdentifierRepository::create(pool, &ident)
+            .await
+            .unwrap();
+
+        let params = BookListParams {
+            q: Some("978-3-16-148410-0".into()),
+            ..BookListParams::default()
+        };
+
+        let Json(result) = list_books(State(state.clone()), auth_user(), Query(params))
+            .await
+            .unwrap();
+
+        assert_eq!(result.total, 1);
+        assert_eq!(result.items[0].title, "Bare Hyphenated ISBN Target");
+    }
+
+    // ── Phase 4: Scope / Selection / Batch tests ────────────────
+
+    /// Helper: extract a JSON body from a `Response`.
+    async fn json_body<T: serde::de::DeserializeOwned>(resp: Response) -> (StatusCode, T) {
+        let status = resp.status();
+        let bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let body: T = serde_json::from_slice(&bytes).unwrap();
+        (status, body)
+    }
+
+    /// Helper: create N books for batch testing.
+    async fn create_n_books(pool: &archivis_db::DbPool, n: usize) -> Vec<Uuid> {
+        let mut ids = Vec::with_capacity(n);
+        for i in 0..n {
+            let book = Book::new(format!("Batch Book {i}"));
+            BookRepository::create(pool, &book).await.unwrap();
+            ids.push(book.id);
+        }
+        ids
+    }
+
+    #[tokio::test]
+    async fn scope_issuance_returns_correct_matching_count() {
+        let tmp = TempDir::new().unwrap();
+        let state = test_state(&tmp).await;
+        let pool = state.db_pool();
+
+        // Create 5 books with language "en".
+        for i in 0..5 {
+            let mut book = Book::new(format!("EN Book {i}"));
+            book.language = Some("en".into());
+            BookRepository::create(pool, &book).await.unwrap();
+        }
+        // Create 3 books with language "de".
+        for i in 0..3 {
+            let mut book = Book::new(format!("DE Book {i}"));
+            book.language = Some("de".into());
+            BookRepository::create(pool, &book).await.unwrap();
+        }
+
+        let filter = archivis_core::models::LibraryFilterState {
+            language: Some("en".into()),
+            ..Default::default()
+        };
+
+        let Json(resp) = issue_selection_scope(
+            State(state.clone()),
+            auth_user(),
+            Json(IssueSelectionScopeRequest {
+                filters: filter.clone(),
+            }),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(resp.matching_count, 5);
+        assert!(!resp.scope_token.is_empty());
+    }
+
+    #[tokio::test]
+    async fn scope_exclusions_resolve_correctly() {
+        let tmp = TempDir::new().unwrap();
+        let state = test_state(&tmp).await;
+        let pool = state.db_pool();
+
+        let ids = create_n_books(pool, 10).await;
+
+        // Issue scope for all books (no filter).
+        let filter = archivis_core::models::LibraryFilterState::default();
+        let Json(scope_resp) = issue_selection_scope(
+            State(state.clone()),
+            auth_user(),
+            Json(IssueSelectionScopeRequest {
+                filters: filter.clone(),
+            }),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(scope_resp.matching_count, 10);
+
+        // Resolve with 3 exclusions → 7 books.
+        let excluded = vec![ids[0], ids[3], ids[7]];
+        let book_filter = BookFilter::from(&filter);
+        let resolved = BookRepository::resolve_scope(pool, &book_filter, &excluded)
+            .await
+            .unwrap();
+
+        assert_eq!(resolved.len(), 7);
+        for ex_id in &excluded {
+            assert!(!resolved.contains(ex_id));
+        }
+    }
+
+    #[tokio::test]
+    async fn ids_selection_lte_100_stays_synchronous() {
+        let tmp = TempDir::new().unwrap();
+        let state = test_state(&tmp).await;
+        let pool = state.db_pool();
+
+        let ids = create_n_books(pool, 3).await;
+
+        let resp = batch_update_books(
+            State(state.clone()),
+            auth_user(),
+            Json(BatchUpdateBooksRequest {
+                selection: SelectionSpec::Ids { ids: ids.clone() },
+                updates: super::super::types::BatchBookFields {
+                    language: Some("fr".into()),
+                    rating: None,
+                    publisher_id: None,
+                },
+            }),
+        )
+        .await
+        .unwrap();
+
+        let (status, body): (_, BatchSyncResponse) = json_body(resp).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.updated_count, 3);
+        assert!(body.errors.is_empty());
+
+        // Verify books were actually updated.
+        for &id in &ids {
+            let book = BookRepository::get_by_id(pool, id).await.unwrap();
+            assert_eq!(book.language.as_deref(), Some("fr"));
+        }
+    }
+
+    #[tokio::test]
+    async fn scope_selection_over_100_enqueues_async() {
+        let tmp = TempDir::new().unwrap();
+        let state = test_state(&tmp).await;
+        let pool = state.db_pool();
+
+        // Create 101 books.
+        create_n_books(pool, 101).await;
+
+        // Issue scope token covering all.
+        let filter = archivis_core::models::LibraryFilterState::default();
+        let Json(scope_resp) = issue_selection_scope(
+            State(state.clone()),
+            auth_user(),
+            Json(IssueSelectionScopeRequest {
+                filters: filter.clone(),
+            }),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(scope_resp.matching_count, 101);
+
+        let resp = batch_update_books(
+            State(state.clone()),
+            auth_user(),
+            Json(BatchUpdateBooksRequest {
+                selection: SelectionSpec::Scope {
+                    scope_token: scope_resp.scope_token,
+                    excluded_ids: vec![],
+                },
+                updates: super::super::types::BatchBookFields {
+                    language: Some("de".into()),
+                    rating: None,
+                    publisher_id: None,
+                },
+            }),
+        )
+        .await
+        .unwrap();
+
+        let (status, body): (_, super::super::types::BatchAsyncResponse) = json_body(resp).await;
+        assert_eq!(status, StatusCode::ACCEPTED);
+        assert_eq!(body.task_type, "bulk_update");
+        assert_eq!(body.matching_count, 101);
+    }
+
+    #[tokio::test]
+    async fn batch_tags_invalid_selection_does_not_create_tags() {
+        let tmp = TempDir::new().unwrap();
+        let state = test_state(&tmp).await;
+        let pool = state.db_pool();
+
+        let unique_tag = "should-not-exist-orphan-tag";
+
+        // Send batch-tags with empty IDs (should fail validation) but a new tag name.
+        let result = batch_set_tags(
+            State(state.clone()),
+            auth_user(),
+            Json(BatchSetTagsRequest {
+                selection: SelectionSpec::Ids { ids: vec![] },
+                tags: vec![BookTagLink {
+                    tag_id: None,
+                    name: Some(unique_tag.into()),
+                    category: None,
+                }],
+                mode: BatchTagMode::Add,
+            }),
+        )
+        .await;
+
+        assert!(result.is_err());
+
+        // Verify no new tag was created by searching for it.
+        let search_result = TagRepository::search(
+            pool,
+            Some(unique_tag),
+            None,
+            &archivis_db::PaginationParams::default(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            search_result.items.len(),
+            0,
+            "tag should not have been created on validation failure"
+        );
+    }
+
+    // ── Scope counting: duplicate / out-of-scope exclusions ──────────
+
+    #[tokio::test]
+    async fn scope_count_ignores_duplicate_and_out_of_scope_exclusions() {
+        let tmp = TempDir::new().unwrap();
+        let state = test_state(&tmp).await;
+        let pool = state.db_pool();
+
+        let ids = create_n_books(pool, 5).await;
+        let out_of_scope = Uuid::new_v4();
+
+        let filter = archivis_core::models::LibraryFilterState::default();
+        let Json(scope_resp) = issue_selection_scope(
+            State(state.clone()),
+            auth_user(),
+            Json(IssueSelectionScopeRequest {
+                filters: filter.clone(),
+            }),
+        )
+        .await
+        .unwrap();
+
+        // Exclude: one valid ID (duplicated), plus one ID that is not in the scope.
+        // Effective exclusion is 1 unique in-scope ID → 4 books affected.
+        let excluded = vec![ids[0], ids[0], out_of_scope];
+
+        let resp = batch_update_books(
+            State(state.clone()),
+            auth_user(),
+            Json(BatchUpdateBooksRequest {
+                selection: SelectionSpec::Scope {
+                    scope_token: scope_resp.scope_token,
+                    excluded_ids: excluded,
+                },
+                updates: super::super::types::BatchBookFields {
+                    language: Some("fr".into()),
+                    rating: None,
+                    publisher_id: None,
+                },
+            }),
+        )
+        .await
+        .unwrap();
+
+        let (status, body): (_, BatchSyncResponse) = json_body(resp).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.updated_count, 4);
+    }
+
+    #[tokio::test]
+    async fn scope_with_only_out_of_scope_exclusions_accepted() {
+        let tmp = TempDir::new().unwrap();
+        let state = test_state(&tmp).await;
+        let pool = state.db_pool();
+
+        create_n_books(pool, 3).await;
+
+        let filter = archivis_core::models::LibraryFilterState::default();
+        let Json(scope_resp) = issue_selection_scope(
+            State(state.clone()),
+            auth_user(),
+            Json(IssueSelectionScopeRequest {
+                filters: filter.clone(),
+            }),
+        )
+        .await
+        .unwrap();
+
+        // All exclusions are out-of-scope → no books removed, all 3 updated.
+        let excluded = vec![Uuid::new_v4(), Uuid::new_v4()];
+
+        let resp = batch_update_books(
+            State(state.clone()),
+            auth_user(),
+            Json(BatchUpdateBooksRequest {
+                selection: SelectionSpec::Scope {
+                    scope_token: scope_resp.scope_token,
+                    excluded_ids: excluded,
+                },
+                updates: super::super::types::BatchBookFields {
+                    language: Some("fr".into()),
+                    rating: None,
+                    publisher_id: None,
+                },
+            }),
+        )
+        .await
+        .unwrap();
+
+        let (status, body): (_, BatchSyncResponse) = json_body(resp).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.updated_count, 3);
+    }
+
+    // ── Bulk update parity: shared function tests ────────────────────
+
+    #[tokio::test]
+    async fn bulk_update_rejects_invalid_language() {
+        let tmp = TempDir::new().unwrap();
+        let state = test_state(&tmp).await;
+        let pool = state.db_pool();
+
+        let ids = create_n_books(pool, 1).await;
+
+        let fields = archivis_core::models::BulkUpdateFields {
+            language: Some("Klingon".into()),
+            rating: None,
+            publisher_id: None,
+        };
+
+        let result = apply_bulk_update_to_book(pool, ids[0], &fields).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, BulkFieldError::Validation(_)),
+            "expected Validation error, got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn bulk_update_stamps_provenance_and_refreshes_quality_score() {
+        let tmp = TempDir::new().unwrap();
+        let state = test_state(&tmp).await;
+        let pool = state.db_pool();
+
+        let ids = create_n_books(pool, 1).await;
+
+        let fields = archivis_core::models::BulkUpdateFields {
+            language: Some("fr".into()),
+            rating: None,
+            publisher_id: None,
+        };
+
+        let changed = apply_bulk_update_to_book(pool, ids[0], &fields)
+            .await
+            .unwrap();
+        assert!(changed);
+
+        let book = BookRepository::get_by_id(pool, ids[0]).await.unwrap();
+        assert_eq!(book.language.as_deref(), Some("fr"));
+
+        // Verify language provenance was stamped.
+        let prov = book
+            .metadata_provenance
+            .language
+            .as_ref()
+            .expect("language provenance should be set");
+        assert_eq!(prov.origin, MetadataSource::User);
+        assert!(prov.protected);
+
+        // Verify quality score was refreshed (computed and persisted).
+        assert!(
+            book.metadata_quality_score.is_some(),
+            "quality score should have been refreshed"
+        );
+    }
+
+    #[tokio::test]
+    async fn bulk_update_stamps_publisher_provenance() {
+        let tmp = TempDir::new().unwrap();
+        let state = test_state(&tmp).await;
+        let pool = state.db_pool();
+
+        let ids = create_n_books(pool, 1).await;
+
+        // Create a real publisher to satisfy the FK constraint.
+        let publisher = archivis_core::models::Publisher::new("Test Publisher");
+        archivis_db::PublisherRepository::create(pool, &publisher)
+            .await
+            .unwrap();
+        let pub_id = publisher.id;
+
+        let fields = archivis_core::models::BulkUpdateFields {
+            language: None,
+            rating: None,
+            publisher_id: Some(Some(pub_id)),
+        };
+
+        let changed = apply_bulk_update_to_book(pool, ids[0], &fields)
+            .await
+            .unwrap();
+        assert!(changed);
+
+        let book = BookRepository::get_by_id(pool, ids[0]).await.unwrap();
+        assert_eq!(book.publisher_id, Some(pub_id));
+
+        let prov = book
+            .metadata_provenance
+            .publisher
+            .as_ref()
+            .expect("publisher provenance should be set");
+        assert_eq!(prov.origin, MetadataSource::User);
+        assert!(prov.protected);
+    }
+
+    // ── Empty-field DSL regression tests ────────────────────────────
+
+    #[tokio::test]
+    async fn list_books_empty_field_returns_200_with_warning() {
+        let tmp = TempDir::new().unwrap();
+        let state = test_state(&tmp).await;
+
+        let result = list_books(
+            State(state.clone()),
+            auth_user(),
+            Query(BookListParams {
+                q: Some("author:".into()),
+                ..Default::default()
+            }),
+        )
+        .await;
+
+        let resp = result.expect("should be 200, not 500");
+        assert!(
+            resp.search_warnings
+                .iter()
+                .any(|w| matches!(w, QueryWarningResponse::EmptyFieldValue { field } if field == "author")),
+            "expected EmptyFieldValue warning for author, got: {:?}",
+            resp.search_warnings,
+        );
+    }
+
+    #[tokio::test]
+    async fn list_books_multiple_empty_fields() {
+        let tmp = TempDir::new().unwrap();
+        let state = test_state(&tmp).await;
+
+        let result = list_books(
+            State(state.clone()),
+            auth_user(),
+            Query(BookListParams {
+                q: Some("author: series:".into()),
+                ..Default::default()
+            }),
+        )
+        .await;
+
+        let resp = result.expect("should be 200, not 500");
+        assert_eq!(
+            resp.search_warnings.len(),
+            2,
+            "expected 2 warnings, got: {:?}",
+            resp.search_warnings,
+        );
+    }
+
+    #[tokio::test]
+    async fn list_books_empty_field_regression_all_types() {
+        let tmp = TempDir::new().unwrap();
+        let state = test_state(&tmp).await;
+
+        for q in ["author:", "series:", "publisher:", "tag:", "title:"] {
+            let result = list_books(
+                State(state.clone()),
+                auth_user(),
+                Query(BookListParams {
+                    q: Some(q.into()),
+                    ..Default::default()
+                }),
+            )
+            .await;
+
+            assert!(result.is_ok(), "q={q:?} returned error: {:?}", result.err(),);
+        }
+    }
+
+    // ── Unsupported field-OR DSL regression tests ────────────────
+
+    #[tokio::test]
+    async fn list_books_field_or_returns_200_with_unsupported_warning() {
+        let tmp = TempDir::new().unwrap();
+        let state = test_state(&tmp).await;
+
+        let result = list_books(
+            State(state.clone()),
+            auth_user(),
+            Query(BookListParams {
+                q: Some("author:asimov OR author:clarke".into()),
+                ..Default::default()
+            }),
+        )
+        .await;
+
+        let resp = result.expect("should be 200, not 500");
+        assert_eq!(
+            resp.search_warnings
+                .iter()
+                .filter(|w| matches!(w, QueryWarningResponse::UnsupportedOrField { .. }))
+                .count(),
+            2,
+            "expected 2 UnsupportedOrField warnings, got: {:?}",
+            resp.search_warnings,
+        );
+    }
+
+    #[tokio::test]
+    async fn list_books_mixed_or_keeps_text_warns_field() {
+        let tmp = TempDir::new().unwrap();
+        let state = test_state(&tmp).await;
+
+        let result = list_books(
+            State(state.clone()),
+            auth_user(),
+            Query(BookListParams {
+                q: Some("dune OR author:asimov".into()),
+                ..Default::default()
+            }),
+        )
+        .await;
+
+        let resp = result.expect("should be 200, not 500");
+        assert!(
+            resp.search_warnings.iter().any(|w| matches!(
+                w,
+                QueryWarningResponse::UnsupportedOrField { field, .. } if field == "author"
+            )),
+            "expected UnsupportedOrField warning, got: {:?}",
+            resp.search_warnings,
+        );
+    }
+
+    #[tokio::test]
+    async fn list_books_negated_field_or_warns() {
+        let tmp = TempDir::new().unwrap();
+        let state = test_state(&tmp).await;
+
+        let result = list_books(
+            State(state.clone()),
+            auth_user(),
+            Query(BookListParams {
+                q: Some("dune OR -author:asimov".into()),
+                ..Default::default()
+            }),
+        )
+        .await;
+
+        let resp = result.expect("should be 200, not 500");
+        assert!(
+            resp.search_warnings.iter().any(|w| matches!(
+                w,
+                QueryWarningResponse::UnsupportedOrField { negated, .. } if *negated
+            )),
+            "expected UnsupportedOrField with negated=true, got: {:?}",
+            resp.search_warnings,
+        );
     }
 }

@@ -1,9 +1,11 @@
 mod author;
 mod book;
 mod book_file;
+pub mod bulk;
 mod candidate;
 mod duplicate;
 mod enums;
+pub mod filter;
 mod identifier;
 pub mod metadata_rule;
 mod publisher;
@@ -18,6 +20,7 @@ mod watched_directory;
 pub use author::Author;
 pub use book::{generate_sort_title, normalize_title, Book, FieldProvenance, MetadataProvenance};
 pub use book_file::BookFile;
+pub use bulk::{BulkOperation, BulkTagEntry, BulkTagMode, BulkTaskPayload, BulkUpdateFields};
 pub use candidate::{
     ApplyChangeset, CandidateStatus, ChangesetAuthor, ChangesetEntry, ChangesetSeries,
     IdentificationCandidate,
@@ -27,6 +30,7 @@ pub use enums::{
     BookFormat, IdentifierType, MetadataSource, MetadataStatus, ResolutionOutcome, ResolutionState,
     ScoringProfile,
 };
+pub use filter::{LibraryFilterState, TagMatchMode};
 pub use identifier::Identifier;
 pub use metadata_rule::{MatchMode, MetadataRule, MetadataRuleType, RuleOutcome};
 pub use publisher::Publisher;

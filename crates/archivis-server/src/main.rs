@@ -18,7 +18,8 @@ use archivis_tasks::merge::MergeService;
 use archivis_tasks::queue::{self, TaskQueue, Worker};
 use archivis_tasks::resolve::ResolutionService;
 use archivis_tasks::workers::{
-    watcher_processor, ImportDirectoryWorker, ImportFileWorker, IsbnScanWorker, ResolveWorker,
+    watcher_processor, BulkSetTagsWorker, BulkUpdateWorker, ImportDirectoryWorker,
+    ImportFileWorker, IsbnScanWorker, ResolveWorker,
 };
 use clap::Parser;
 use config::{AppConfig, Cli};
@@ -391,6 +392,10 @@ async fn init_services_and_router(
         frontend_dir: config.frontend_dir.clone(),
     };
 
+    // Generate ephemeral scope signing key (not persisted — server restart
+    // invalidates outstanding scope tokens, which is the intended behavior).
+    let scope_signing_key: [u8; 32] = rand::random();
+
     // Keep a clone of the watcher handle for graceful shutdown.
     let watcher_handle = watcher_service.clone();
 
@@ -406,6 +411,7 @@ async fn init_services_and_router(
         config_service,
         watcher_service,
         proxy_auth,
+        scope_signing_key,
     );
     (archivis_api::build_router(state), watcher_handle)
 }
@@ -483,6 +489,16 @@ fn init_workers(
         Arc::new(
             IsbnScanWorker::new(isbn_scan_service).with_resolution_queue(Arc::clone(task_queue)),
         ),
+    );
+
+    // Bulk operation workers
+    workers.insert(
+        archivis_core::models::TaskType::BulkUpdate,
+        Arc::new(BulkUpdateWorker::new(db_pool.clone())),
+    );
+    workers.insert(
+        archivis_core::models::TaskType::BulkSetTags,
+        Arc::new(BulkSetTagsWorker::new(db_pool.clone())),
     );
 
     workers

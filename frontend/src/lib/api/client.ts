@@ -8,9 +8,9 @@ import type {
   AuthorResponse,
   AuthStatusResponse,
   BatchIsbnScanResponse,
+  BatchResult,
   BatchSetTagsRequest,
   BatchUpdateBooksRequest,
-  BatchUpdateResponse,
   BookDetail,
   BookListParams,
   BookmarkResponse,
@@ -32,6 +32,8 @@ import type {
   MetadataRuleResponse,
   RefreshAllMetadataResponse,
   RefreshMetadataResponse,
+  IssueSelectionScopeRequest,
+  IssueSelectionScopeResponse,
   IsbnScanResponse,
   LoginRequest,
   LoginResponse,
@@ -162,6 +164,46 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   }
 
   return (await response.json()) as T;
+}
+
+/**
+ * Like `request`, but also returns the HTTP status code.
+ * Used for endpoints that return different response shapes by status (e.g. 200 vs 202).
+ */
+async function requestWithStatus<T>(
+  method: string,
+  path: string,
+  body?: unknown
+): Promise<{ status: number; data: T }> {
+  const headers: Record<string, string> = {
+    Accept: 'application/json'
+  };
+
+  const token = getSessionToken();
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+
+  if (body !== undefined) {
+    headers['Content-Type'] = 'application/json';
+  }
+
+  const response = await fetch(`${BASE_URL}${path}`, {
+    method,
+    headers,
+    body: body !== undefined ? JSON.stringify(body) : undefined
+  });
+
+  if (!response.ok) {
+    const error = await parseApiError(response);
+    if (error.isUnauthorized) {
+      handleUnauthorized();
+    }
+    throw error;
+  }
+
+  const data = (await response.json()) as T;
+  return { status: response.status, data };
 }
 
 /** Type-safe API methods grouped by domain. */
@@ -303,16 +345,27 @@ export const api = {
       notifyCountsChanged();
     },
 
-    /** Batch update scalar fields across multiple books. */
-    async batchUpdate(data: BatchUpdateBooksRequest): Promise<BatchUpdateResponse> {
-      const result = await request<BatchUpdateResponse>('POST', '/books/batch-update', data);
+    /** Issue a signed scope token for the given filter state. */
+    issueSelectionScope(
+      data: IssueSelectionScopeRequest
+    ): Promise<IssueSelectionScopeResponse> {
+      return request<IssueSelectionScopeResponse>('POST', '/books/selection-scope', data);
+    },
+
+    /** Batch update scalar fields across selected books. Returns 200 (sync) or 202 (async). */
+    async batchUpdate(
+      data: BatchUpdateBooksRequest
+    ): Promise<{ status: number; data: BatchResult }> {
+      const result = await requestWithStatus<BatchResult>('POST', '/books/batch-update', data);
       notifyCountsChanged();
       return result;
     },
 
-    /** Batch update tags across multiple books. */
-    async batchTags(data: BatchSetTagsRequest): Promise<BatchUpdateResponse> {
-      const result = await request<BatchUpdateResponse>('POST', '/books/batch-tags', data);
+    /** Batch update tags across selected books. Returns 200 (sync) or 202 (async). */
+    async batchTags(
+      data: BatchSetTagsRequest
+    ): Promise<{ status: number; data: BatchResult }> {
+      const result = await requestWithStatus<BatchResult>('POST', '/books/batch-tags', data);
       notifyCountsChanged();
       return result;
     },
@@ -970,6 +1023,7 @@ export const api = {
 } as const;
 
 export { ApiError } from './errors.js';
+export { isBatchAsync } from './types.js';
 export type { SidebarCountsResponse } from './types.js';
 export type {
   AddIdentifierRequest,
@@ -979,10 +1033,13 @@ export type {
   AuthorListParams,
   AuthorResponse,
   AuthStatusResponse,
+  BatchAsyncResponse,
   BatchIsbnScanResponse,
   BatchSetTagsRequest,
+  BatchSyncResponse,
   BatchUpdateBooksRequest,
-  BatchUpdateResponse,
+  BatchBookFields,
+  BatchResult,
   BookAuthorLink,
   BookDetail,
   BookFormat,
@@ -1012,7 +1069,10 @@ export type {
   FsDetectionResponse,
   FsEntry,
   IdentifierEntry,
+  IssueSelectionScopeRequest,
+  IssueSelectionScopeResponse,
   IsbnScanResponse,
+  LibraryFilterState,
   LoginRequest,
   LoginResponse,
   MergeRequest,
@@ -1028,6 +1088,8 @@ export type {
   PaginatedSeries,
   PaginatedTags,
   PublisherResponse,
+  QueryWarning,
+  AmbiguousMatchEntry,
   ReadingProgressResponse,
   RefreshAllMetadataResponse,
   RefreshMetadataResponse,
@@ -1035,6 +1097,7 @@ export type {
   ResolutionState,
   ScanManifestResponse,
   ScanTriggeredResponse,
+  SelectionSpec,
   SeriesEntry,
   SeriesListParams,
   SeriesResponse,
@@ -1050,6 +1113,7 @@ export type {
   SortField,
   SortOrder,
   TagEntry,
+  TagMatchMode,
   TagResponse,
   TaskCreatedResponse,
   TaskProgressEvent,

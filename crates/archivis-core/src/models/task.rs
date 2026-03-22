@@ -13,6 +13,8 @@ pub enum TaskType {
     ImportDirectory,
     ResolveBook,
     ScanIsbn,
+    BulkUpdate,
+    BulkSetTags,
 }
 
 impl fmt::Display for TaskType {
@@ -22,6 +24,8 @@ impl fmt::Display for TaskType {
             Self::ImportDirectory => write!(f, "import_directory"),
             Self::ResolveBook => write!(f, "resolve_book"),
             Self::ScanIsbn => write!(f, "scan_isbn"),
+            Self::BulkUpdate => write!(f, "bulk_update"),
+            Self::BulkSetTags => write!(f, "bulk_set_tags"),
         }
     }
 }
@@ -35,6 +39,8 @@ impl FromStr for TaskType {
             "import_directory" => Ok(Self::ImportDirectory),
             "resolve_book" => Ok(Self::ResolveBook),
             "scan_isbn" => Ok(Self::ScanIsbn),
+            "bulk_update" => Ok(Self::BulkUpdate),
+            "bulk_set_tags" => Ok(Self::BulkSetTags),
             other => Err(format!("unknown task type: {other}")),
         }
     }
@@ -159,6 +165,8 @@ mod tests {
         assert_eq!(TaskType::ImportDirectory.to_string(), "import_directory");
         assert_eq!(TaskType::ResolveBook.to_string(), "resolve_book");
         assert_eq!(TaskType::ScanIsbn.to_string(), "scan_isbn");
+        assert_eq!(TaskType::BulkUpdate.to_string(), "bulk_update");
+        assert_eq!(TaskType::BulkSetTags.to_string(), "bulk_set_tags");
         assert_eq!(
             "import_file".parse::<TaskType>().unwrap(),
             TaskType::ImportFile,
@@ -172,6 +180,14 @@ mod tests {
             TaskType::ResolveBook,
         );
         assert_eq!("scan_isbn".parse::<TaskType>().unwrap(), TaskType::ScanIsbn,);
+        assert_eq!(
+            "bulk_update".parse::<TaskType>().unwrap(),
+            TaskType::BulkUpdate,
+        );
+        assert_eq!(
+            "bulk_set_tags".parse::<TaskType>().unwrap(),
+            TaskType::BulkSetTags,
+        );
         assert!("bogus".parse::<TaskType>().is_err());
     }
 
@@ -194,6 +210,18 @@ mod tests {
         assert_eq!(json3, r#""scan_isbn""#);
         let deserialized3: TaskType = serde_json::from_str(&json3).unwrap();
         assert_eq!(deserialized3, tt3);
+
+        let tt4 = TaskType::BulkUpdate;
+        let json4 = serde_json::to_string(&tt4).unwrap();
+        assert_eq!(json4, r#""bulk_update""#);
+        let deserialized4: TaskType = serde_json::from_str(&json4).unwrap();
+        assert_eq!(deserialized4, tt4);
+
+        let tt5 = TaskType::BulkSetTags;
+        let json5 = serde_json::to_string(&tt5).unwrap();
+        assert_eq!(json5, r#""bulk_set_tags""#);
+        let deserialized5: TaskType = serde_json::from_str(&json5).unwrap();
+        assert_eq!(deserialized5, tt5);
     }
 
     #[test]

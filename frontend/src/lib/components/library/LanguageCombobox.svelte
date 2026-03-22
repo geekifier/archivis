@@ -1,5 +1,6 @@
 <script lang="ts">
   import { Input } from '$lib/components/ui/input/index.js';
+  import { LANGUAGES } from '$lib/data/languages.js';
 
   interface Props {
     value: string;
@@ -11,59 +12,6 @@
 
   let { value = $bindable(), id, placeholder = 'Language', class: className, onchange }: Props =
     $props();
-
-  /** Common book languages: [ISO 639-1 code, English label]. */
-  const LANGUAGES: [string, string][] = [
-    ['ar', 'Arabic'],
-    ['bg', 'Bulgarian'],
-    ['ca', 'Catalan'],
-    ['cs', 'Czech'],
-    ['cy', 'Welsh'],
-    ['da', 'Danish'],
-    ['de', 'German'],
-    ['el', 'Greek'],
-    ['en', 'English'],
-    ['es', 'Spanish'],
-    ['et', 'Estonian'],
-    ['eu', 'Basque'],
-    ['fa', 'Persian'],
-    ['fi', 'Finnish'],
-    ['fr', 'French'],
-    ['ga', 'Irish'],
-    ['gl', 'Galician'],
-    ['he', 'Hebrew'],
-    ['hi', 'Hindi'],
-    ['hr', 'Croatian'],
-    ['hu', 'Hungarian'],
-    ['id', 'Indonesian'],
-    ['is', 'Icelandic'],
-    ['it', 'Italian'],
-    ['ja', 'Japanese'],
-    ['ka', 'Georgian'],
-    ['ko', 'Korean'],
-    ['la', 'Latin'],
-    ['lt', 'Lithuanian'],
-    ['lv', 'Latvian'],
-    ['mk', 'Macedonian'],
-    ['ms', 'Malay'],
-    ['nl', 'Dutch'],
-    ['no', 'Norwegian'],
-    ['pl', 'Polish'],
-    ['pt', 'Portuguese'],
-    ['ro', 'Romanian'],
-    ['ru', 'Russian'],
-    ['sk', 'Slovak'],
-    ['sl', 'Slovenian'],
-    ['sq', 'Albanian'],
-    ['sr', 'Serbian'],
-    ['sv', 'Swedish'],
-    ['th', 'Thai'],
-    ['tr', 'Turkish'],
-    ['uk', 'Ukrainian'],
-    ['ur', 'Urdu'],
-    ['vi', 'Vietnamese'],
-    ['zh', 'Chinese']
-  ];
 
   let query = $state('');
   let open = $state(false);

@@ -165,6 +165,22 @@ impl TagRepository {
         Ok(PaginatedResult::new(items, total as u32, params))
     }
 
+    /// Find tags by name (case-insensitive exact match).
+    ///
+    /// Returns a `Vec` because tags can share names across different categories.
+    pub async fn find_by_name(pool: &SqlitePool, name: &str) -> Result<Vec<Tag>, DbError> {
+        let rows = sqlx::query_as!(
+            TagRow,
+            "SELECT id, name, category FROM tags WHERE name = ? COLLATE NOCASE",
+            name,
+        )
+        .fetch_all(pool)
+        .await
+        .map_err(|e| DbError::Query(e.to_string()))?;
+
+        rows.into_iter().map(TagRow::into_tag).collect()
+    }
+
     pub async fn update(pool: &SqlitePool, tag: &Tag) -> Result<(), DbError> {
         let id = tag.id.to_string();
         let result = sqlx::query!(
