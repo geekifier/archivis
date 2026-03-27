@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id, name, category FROM tags ORDER BY category ASC LIMIT ? OFFSET ?",
+  "query": "SELECT t.id, t.name, t.category, (SELECT COUNT(*) FROM book_tags bt WHERE bt.tag_id = t.id) AS book_count FROM tags t ORDER BY t.category DESC, t.name ASC LIMIT ? OFFSET ?",
   "describe": {
     "columns": [
       {
@@ -17,6 +17,11 @@
         "name": "category",
         "ordinal": 2,
         "type_info": "Text"
+      },
+      {
+        "name": "book_count",
+        "ordinal": 3,
+        "type_info": "Integer"
       }
     ],
     "parameters": {
@@ -25,8 +30,9 @@
     "nullable": [
       false,
       false,
-      true
+      true,
+      false
     ]
   },
-  "hash": "bd65c2b801ce809e41a50805edc30bffe8696c2ed8c0f14e4ae67f382dce0103"
+  "hash": "3561361650717b114336dfd67921f2fc57daa538076257540488fe8920f3e17b"
 }

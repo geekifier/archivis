@@ -358,6 +358,16 @@ export interface TagResponse {
   id: string;
   name: string;
   category: string | null;
+  book_count: number;
+}
+
+export interface TagListParams {
+  page?: number;
+  per_page?: number;
+  sort_by?: 'name' | 'category' | 'book_count';
+  sort_order?: SortOrder;
+  q?: string;
+  category?: string;
 }
 
 export interface SeriesResponse {

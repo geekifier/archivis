@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT DISTINCT category FROM tags WHERE category IS NOT NULL AND category != '' ORDER BY category ASC",
+  "describe": {
+    "columns": [
+      {
+        "name": "category",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "5481618ff6c3449a5a01c379cfee60c48f7d9706c72795fbd90d19dc0244f98c"
+}

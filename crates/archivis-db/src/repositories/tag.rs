@@ -6,12 +6,18 @@ use uuid::Uuid;
 use super::book::TagRow;
 use super::types::{PaginatedResult, PaginationParams, SortOrder};
 
+/// A tag together with a pre-computed book count (from list/search queries).
+pub struct TagWithBookCount {
+    pub tag: Tag,
+    pub book_count: u32,
+}
+
 pub struct TagRepository;
 
-/// Helper to fetch a page of tag rows with a given ORDER BY clause.
-macro_rules! fetch_tag_rows {
+/// Helper to fetch a page of tag-with-count rows with a given ORDER BY clause.
+macro_rules! fetch_tag_count_rows {
     ($sql:literal, $pool:expr $(, $bind:expr)*) => {
-        sqlx::query_as!(TagRow, $sql $(, $bind)*)
+        sqlx::query_as!(TagWithCountRow, $sql $(, $bind)*)
             .fetch_all($pool)
             .await
             .map_err(|e| DbError::Query(e.to_string()))?
@@ -61,10 +67,29 @@ impl TagRepository {
         row.into_tag()
     }
 
+    /// Get a tag by ID with its book count.
+    pub async fn get_by_id_with_count(
+        pool: &SqlitePool,
+        id: Uuid,
+    ) -> Result<TagWithBookCount, DbError> {
+        let tag = Self::get_by_id(pool, id).await?;
+        let id_str = id.to_string();
+        let count = sqlx::query_scalar!("SELECT COUNT(*) FROM book_tags WHERE tag_id = ?", id_str,)
+            .fetch_one(pool)
+            .await
+            .map_err(|e| DbError::Query(e.to_string()))?;
+
+        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+        Ok(TagWithBookCount {
+            tag,
+            book_count: count as u32,
+        })
+    }
+
     pub async fn list(
         pool: &SqlitePool,
         params: &PaginationParams,
-    ) -> Result<PaginatedResult<Tag>, DbError> {
+    ) -> Result<PaginatedResult<TagWithBookCount>, DbError> {
         let limit = params.per_page;
         let offset = params.offset();
 
@@ -74,36 +99,36 @@ impl TagRepository {
             .map_err(|e| DbError::Query(e.to_string()))?;
 
         let rows = match (params.sort_by.as_str(), params.sort_order) {
-            ("category", SortOrder::Asc) => fetch_tag_rows!(
-                "SELECT id, name, category FROM tags ORDER BY category ASC LIMIT ? OFFSET ?",
-                pool,
-                limit,
-                offset
+            ("category", SortOrder::Asc) => fetch_tag_count_rows!(
+                "SELECT t.id, t.name, t.category, (SELECT COUNT(*) FROM book_tags bt WHERE bt.tag_id = t.id) AS book_count FROM tags t ORDER BY t.category ASC, t.name ASC LIMIT ? OFFSET ?",
+                pool, limit, offset
             ),
-            ("category", SortOrder::Desc) => fetch_tag_rows!(
-                "SELECT id, name, category FROM tags ORDER BY category DESC LIMIT ? OFFSET ?",
-                pool,
-                limit,
-                offset
+            ("category", SortOrder::Desc) => fetch_tag_count_rows!(
+                "SELECT t.id, t.name, t.category, (SELECT COUNT(*) FROM book_tags bt WHERE bt.tag_id = t.id) AS book_count FROM tags t ORDER BY t.category DESC, t.name ASC LIMIT ? OFFSET ?",
+                pool, limit, offset
             ),
-            (_, SortOrder::Desc) => fetch_tag_rows!(
-                "SELECT id, name, category FROM tags ORDER BY name DESC LIMIT ? OFFSET ?",
-                pool,
-                limit,
-                offset
+            ("book_count", SortOrder::Asc) => fetch_tag_count_rows!(
+                "SELECT t.id, t.name, t.category, (SELECT COUNT(*) FROM book_tags bt WHERE bt.tag_id = t.id) AS book_count FROM tags t ORDER BY book_count ASC, t.name ASC LIMIT ? OFFSET ?",
+                pool, limit, offset
+            ),
+            ("book_count", SortOrder::Desc) => fetch_tag_count_rows!(
+                "SELECT t.id, t.name, t.category, (SELECT COUNT(*) FROM book_tags bt WHERE bt.tag_id = t.id) AS book_count FROM tags t ORDER BY book_count DESC, t.name ASC LIMIT ? OFFSET ?",
+                pool, limit, offset
+            ),
+            (_, SortOrder::Desc) => fetch_tag_count_rows!(
+                "SELECT t.id, t.name, t.category, (SELECT COUNT(*) FROM book_tags bt WHERE bt.tag_id = t.id) AS book_count FROM tags t ORDER BY t.name DESC LIMIT ? OFFSET ?",
+                pool, limit, offset
             ),
             // Default: name ASC
-            _ => fetch_tag_rows!(
-                "SELECT id, name, category FROM tags ORDER BY name ASC LIMIT ? OFFSET ?",
-                pool,
-                limit,
-                offset
+            _ => fetch_tag_count_rows!(
+                "SELECT t.id, t.name, t.category, (SELECT COUNT(*) FROM book_tags bt WHERE bt.tag_id = t.id) AS book_count FROM tags t ORDER BY t.name ASC LIMIT ? OFFSET ?",
+                pool, limit, offset
             ),
         };
 
         let items = rows
             .into_iter()
-            .map(TagRow::into_tag)
+            .map(TagWithCountRow::into_tag_with_count)
             .collect::<Result<Vec<_>, _>>()?;
 
         #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
@@ -117,7 +142,7 @@ impl TagRepository {
         query: Option<&str>,
         category: Option<&str>,
         params: &PaginationParams,
-    ) -> Result<PaginatedResult<Tag>, DbError> {
+    ) -> Result<PaginatedResult<TagWithBookCount>, DbError> {
         let limit = params.per_page;
         let offset = params.offset();
 
@@ -138,31 +163,51 @@ impl TagRepository {
         .map_err(|e| DbError::Query(e.to_string()))?;
 
         let rows = match (params.sort_by.as_str(), params.sort_order) {
-            ("category", SortOrder::Asc) => fetch_tag_rows!(
-                "SELECT id, name, category FROM tags WHERE (? IS NULL OR name LIKE ? COLLATE NOCASE) AND (? IS NULL OR category = ? COLLATE NOCASE) ORDER BY category ASC LIMIT ? OFFSET ?",
+            ("category", SortOrder::Asc) => fetch_tag_count_rows!(
+                "SELECT t.id, t.name, t.category, (SELECT COUNT(*) FROM book_tags bt WHERE bt.tag_id = t.id) AS book_count FROM tags t WHERE (? IS NULL OR t.name LIKE ? COLLATE NOCASE) AND (? IS NULL OR t.category = ? COLLATE NOCASE) ORDER BY t.category ASC, t.name ASC LIMIT ? OFFSET ?",
                 pool, pattern, pattern, cat_filter, cat_filter, limit, offset
             ),
-            ("category", SortOrder::Desc) => fetch_tag_rows!(
-                "SELECT id, name, category FROM tags WHERE (? IS NULL OR name LIKE ? COLLATE NOCASE) AND (? IS NULL OR category = ? COLLATE NOCASE) ORDER BY category DESC LIMIT ? OFFSET ?",
+            ("category", SortOrder::Desc) => fetch_tag_count_rows!(
+                "SELECT t.id, t.name, t.category, (SELECT COUNT(*) FROM book_tags bt WHERE bt.tag_id = t.id) AS book_count FROM tags t WHERE (? IS NULL OR t.name LIKE ? COLLATE NOCASE) AND (? IS NULL OR t.category = ? COLLATE NOCASE) ORDER BY t.category DESC, t.name ASC LIMIT ? OFFSET ?",
                 pool, pattern, pattern, cat_filter, cat_filter, limit, offset
             ),
-            (_, SortOrder::Desc) => fetch_tag_rows!(
-                "SELECT id, name, category FROM tags WHERE (? IS NULL OR name LIKE ? COLLATE NOCASE) AND (? IS NULL OR category = ? COLLATE NOCASE) ORDER BY name DESC LIMIT ? OFFSET ?",
+            ("book_count", SortOrder::Asc) => fetch_tag_count_rows!(
+                "SELECT t.id, t.name, t.category, (SELECT COUNT(*) FROM book_tags bt WHERE bt.tag_id = t.id) AS book_count FROM tags t WHERE (? IS NULL OR t.name LIKE ? COLLATE NOCASE) AND (? IS NULL OR t.category = ? COLLATE NOCASE) ORDER BY book_count ASC, t.name ASC LIMIT ? OFFSET ?",
                 pool, pattern, pattern, cat_filter, cat_filter, limit, offset
             ),
-            _ => fetch_tag_rows!(
-                "SELECT id, name, category FROM tags WHERE (? IS NULL OR name LIKE ? COLLATE NOCASE) AND (? IS NULL OR category = ? COLLATE NOCASE) ORDER BY name ASC LIMIT ? OFFSET ?",
+            ("book_count", SortOrder::Desc) => fetch_tag_count_rows!(
+                "SELECT t.id, t.name, t.category, (SELECT COUNT(*) FROM book_tags bt WHERE bt.tag_id = t.id) AS book_count FROM tags t WHERE (? IS NULL OR t.name LIKE ? COLLATE NOCASE) AND (? IS NULL OR t.category = ? COLLATE NOCASE) ORDER BY book_count DESC, t.name ASC LIMIT ? OFFSET ?",
+                pool, pattern, pattern, cat_filter, cat_filter, limit, offset
+            ),
+            (_, SortOrder::Desc) => fetch_tag_count_rows!(
+                "SELECT t.id, t.name, t.category, (SELECT COUNT(*) FROM book_tags bt WHERE bt.tag_id = t.id) AS book_count FROM tags t WHERE (? IS NULL OR t.name LIKE ? COLLATE NOCASE) AND (? IS NULL OR t.category = ? COLLATE NOCASE) ORDER BY t.name DESC LIMIT ? OFFSET ?",
+                pool, pattern, pattern, cat_filter, cat_filter, limit, offset
+            ),
+            _ => fetch_tag_count_rows!(
+                "SELECT t.id, t.name, t.category, (SELECT COUNT(*) FROM book_tags bt WHERE bt.tag_id = t.id) AS book_count FROM tags t WHERE (? IS NULL OR t.name LIKE ? COLLATE NOCASE) AND (? IS NULL OR t.category = ? COLLATE NOCASE) ORDER BY t.name ASC LIMIT ? OFFSET ?",
                 pool, pattern, pattern, cat_filter, cat_filter, limit, offset
             ),
         };
 
         let items = rows
             .into_iter()
-            .map(TagRow::into_tag)
+            .map(TagWithCountRow::into_tag_with_count)
             .collect::<Result<Vec<_>, _>>()?;
 
         #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
         Ok(PaginatedResult::new(items, total as u32, params))
+    }
+
+    /// Return all distinct non-null, non-empty category values.
+    pub async fn list_categories(pool: &SqlitePool) -> Result<Vec<String>, DbError> {
+        let rows = sqlx::query_scalar!(
+            "SELECT DISTINCT category FROM tags WHERE category IS NOT NULL AND category != '' ORDER BY category ASC"
+        )
+        .fetch_all(pool)
+        .await
+        .map_err(|e| DbError::Query(e.to_string()))?;
+
+        Ok(rows.into_iter().flatten().collect())
     }
 
     /// Find tags by name (case-insensitive exact match).
@@ -262,5 +307,31 @@ impl TagRepository {
 
         Self::create(pool, &tag).await?;
         Ok(tag)
+    }
+}
+
+// ── Private row type for tag-with-count queries ─────────────────
+
+struct TagWithCountRow {
+    id: String,
+    name: String,
+    category: Option<String>,
+    book_count: i64,
+}
+
+impl TagWithCountRow {
+    fn into_tag_with_count(self) -> Result<TagWithBookCount, DbError> {
+        let id = Uuid::parse_str(&self.id)
+            .map_err(|e| DbError::Query(format!("invalid tag UUID: {e}")))?;
+        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+        let book_count = self.book_count as u32;
+        Ok(TagWithBookCount {
+            tag: Tag {
+                id,
+                name: self.name,
+                category: self.category,
+            },
+            book_count,
+        })
     }
 }

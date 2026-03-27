@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id, name, category FROM tags WHERE (? IS NULL OR name LIKE ? COLLATE NOCASE) AND (? IS NULL OR category = ? COLLATE NOCASE) ORDER BY category ASC LIMIT ? OFFSET ?",
+  "query": "SELECT t.id, t.name, t.category, (SELECT COUNT(*) FROM book_tags bt WHERE bt.tag_id = t.id) AS book_count FROM tags t ORDER BY t.name DESC LIMIT ? OFFSET ?",
   "describe": {
     "columns": [
       {
@@ -17,16 +17,22 @@
         "name": "category",
         "ordinal": 2,
         "type_info": "Text"
+      },
+      {
+        "name": "book_count",
+        "ordinal": 3,
+        "type_info": "Integer"
       }
     ],
     "parameters": {
-      "Right": 6
+      "Right": 2
     },
     "nullable": [
       false,
       false,
-      true
+      true,
+      false
     ]
   },
-  "hash": "900d15f83a1dce916f85db033be3caa2f52aa55c2e7ad5698d3a91228d85ac97"
+  "hash": "bbff82a516bbc367da744dbb3eb4cc8aa7132452cd87a140490be0e0e3d0428d"
 }

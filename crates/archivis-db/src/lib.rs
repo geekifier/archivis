@@ -11,5 +11,5 @@ pub use repositories::{
     PublisherRepository, QueryWarning, ReadingProgressRepository, RelationsBundle,
     ResolutionRunRepository, ResolvedQuery, SearchResolver, SeriesRepository, SeriesWithBookCount,
     SessionRepository, SettingRepository, SidebarCounts, SortOrder, StatsRepository, TagRepository,
-    TaskOverview, TaskRepository, UserRepository, WatchedDirectoryRepository,
+    TagWithBookCount, TaskOverview, TaskRepository, UserRepository, WatchedDirectoryRepository,
 };

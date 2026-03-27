@@ -54,6 +54,7 @@
     { href: '/', label: 'Library', icon: 'library' },
     { href: '/authors', label: 'Authors', icon: 'authors' },
     { href: '/series', label: 'Series', icon: 'series' },
+    { href: '/tags', label: 'Tags', icon: 'tags' },
     { href: '/import', label: 'Import', icon: 'import' },
     { href: '/stats', label: 'Statistics', icon: 'stats' },
     { href: '/duplicates', label: 'Duplicates', icon: 'duplicates' },
@@ -66,6 +67,7 @@
     if (href === '/') return page.url.pathname === '/' || page.url.pathname.startsWith('/books');
     if (href === '/authors') return page.url.pathname.startsWith('/authors');
     if (href === '/series') return page.url.pathname.startsWith('/series');
+    if (href === '/tags') return page.url.pathname.startsWith('/tags');
     if (href === '/stats') return page.url.pathname.startsWith('/stats');
     if (href === '/duplicates') return page.url.pathname.startsWith('/duplicates');
     return page.url.pathname.startsWith(href);
@@ -269,6 +271,23 @@
                 />
                 <path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65" />
                 <path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65" />
+              </svg>
+            {:else if item.icon === 'tags'}
+              <svg
+                class="size-4"
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path d="m15 5 6.3 6.3a2.4 2.4 0 0 1 0 3.4L17 19" />
+                <path
+                  d="M9.586 5.586A2 2 0 0 0 8.172 5H3a1 1 0 0 0-1 1v5.172a2 2 0 0 0 .586 1.414L8.29 18.29a2.426 2.426 0 0 0 3.42 0l3.58-3.58a2.426 2.426 0 0 0 0-3.42z"
+                />
+                <circle cx="6.5" cy="9.5" r=".5" fill="currentColor" />
               </svg>
             {:else if item.icon === 'import'}
               <svg

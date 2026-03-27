@@ -539,4 +539,39 @@ describe('API client', () => {
       expect((init?.headers as Record<string, string>)['Authorization']).toBe('Bearer my-token');
     });
   });
+
+  describe('tags', () => {
+    it('list() sends GET /api/tags with no params', async () => {
+      const body = { items: [], total: 0, page: 1, per_page: 30, total_pages: 0 };
+      fetchSpy.mockResolvedValueOnce(mockResponse(body));
+
+      await api.tags.list();
+
+      const [url] = fetchSpy.mock.calls[0];
+      expect(url).toBe('/api/tags');
+    });
+
+    it('list() encodes query params', async () => {
+      const body = { items: [], total: 0, page: 1, per_page: 30, total_pages: 0 };
+      fetchSpy.mockResolvedValueOnce(mockResponse(body));
+
+      await api.tags.list({ sort_by: 'book_count', sort_order: 'desc', page: 2 });
+
+      const [url] = fetchSpy.mock.calls[0];
+      expect(url).toContain('/api/tags?');
+      expect(url).toContain('sort_by=book_count');
+      expect(url).toContain('sort_order=desc');
+      expect(url).toContain('page=2');
+    });
+
+    it('categories() sends GET /api/tags/categories', async () => {
+      fetchSpy.mockResolvedValueOnce(mockResponse(['genre', 'format']));
+
+      const result = await api.tags.categories();
+
+      const [url] = fetchSpy.mock.calls[0];
+      expect(url).toBe('/api/tags/categories');
+      expect(result).toEqual(['genre', 'format']);
+    });
+  });
 });

@@ -80,6 +80,7 @@ export type {
   SortOrder,
   StatsResponse,
   TagEntry,
+  TagListParams,
   TagResponse,
   TaskCreatedResponse,
   TaskProgressEvent,

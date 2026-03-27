@@ -44,7 +44,7 @@ pub use stats::{
     BucketCount, DbObjectStat, DbObjectStats, DbPragmaStats, FormatFileStat, LibraryOverview,
     SidebarCounts, StatsRepository, TaskOverview,
 };
-pub use tag::TagRepository;
+pub use tag::{TagRepository, TagWithBookCount};
 pub use task::{ChildTaskSummary, TaskRepository};
 pub use types::{BookFilter, PaginatedResult, PaginationParams, SortOrder};
 pub use user::UserRepository;

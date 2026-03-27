@@ -4,7 +4,7 @@ use uuid::Uuid;
 use validator::Validate;
 
 use archivis_core::models::Tag;
-use archivis_db::PaginatedResult;
+use archivis_db::{PaginatedResult, TagWithBookCount};
 
 // ── Query Parameters ────────────────────────────────────────────
 
@@ -15,7 +15,7 @@ pub struct TagListParams {
     pub page: Option<u32>,
     /// Results per page (max 100).
     pub per_page: Option<u32>,
-    /// Sort field: `name` (default), `category`.
+    /// Sort field: `name` (default), `category`, `book_count`.
     pub sort_by: Option<String>,
     /// Sort direction: asc (default) or desc.
     pub sort_order: Option<String>,
@@ -70,6 +70,7 @@ pub struct TagResponse {
     pub id: Uuid,
     pub name: String,
     pub category: Option<String>,
+    pub book_count: u32,
 }
 
 /// Paginated list of tags.
@@ -90,12 +91,24 @@ impl From<Tag> for TagResponse {
             id: tag.id,
             name: tag.name,
             category: tag.category,
+            book_count: 0,
         }
     }
 }
 
-impl From<PaginatedResult<Tag>> for PaginatedTags {
-    fn from(result: PaginatedResult<Tag>) -> Self {
+impl From<TagWithBookCount> for TagResponse {
+    fn from(twc: TagWithBookCount) -> Self {
+        Self {
+            id: twc.tag.id,
+            name: twc.tag.name,
+            category: twc.tag.category,
+            book_count: twc.book_count,
+        }
+    }
+}
+
+impl From<PaginatedResult<TagWithBookCount>> for PaginatedTags {
+    fn from(result: PaginatedResult<TagWithBookCount>) -> Self {
         Self {
             items: result.items.into_iter().map(Into::into).collect(),
             total: result.total,

@@ -704,9 +704,176 @@ async fn tag_list() {
     let result = TagRepository::list(&pool, &params).await.unwrap();
 
     assert_eq!(result.total, 3);
-    assert_eq!(result.items[0].name, "fantasy");
-    assert_eq!(result.items[1].name, "horror");
-    assert_eq!(result.items[2].name, "science fiction");
+    assert_eq!(result.items[0].tag.name, "fantasy");
+    assert_eq!(result.items[0].book_count, 0);
+    assert_eq!(result.items[1].tag.name, "horror");
+    assert_eq!(result.items[2].tag.name, "science fiction");
+}
+
+#[tokio::test]
+async fn tag_list_with_book_counts() {
+    let (pool, _dir) = test_pool().await;
+
+    let tag_a = Tag::new("fantasy");
+    let tag_b = Tag::new("scifi");
+    let tag_c = Tag::new("romance");
+    TagRepository::create(&pool, &tag_a).await.unwrap();
+    TagRepository::create(&pool, &tag_b).await.unwrap();
+    TagRepository::create(&pool, &tag_c).await.unwrap();
+
+    let book1 = test_book("Book One");
+    let book2 = test_book("Book Two");
+    BookRepository::create(&pool, &book1).await.unwrap();
+    BookRepository::create(&pool, &book2).await.unwrap();
+
+    // `fantasy` gets 2 books, `scifi` gets 1, `romance` gets 0
+    BookRepository::add_tag(&pool, book1.id, tag_a.id)
+        .await
+        .unwrap();
+    BookRepository::add_tag(&pool, book2.id, tag_a.id)
+        .await
+        .unwrap();
+    BookRepository::add_tag(&pool, book1.id, tag_b.id)
+        .await
+        .unwrap();
+
+    let params = PaginationParams {
+        sort_by: "name".into(),
+        sort_order: SortOrder::Asc,
+        ..PaginationParams::default()
+    };
+    let result = TagRepository::list(&pool, &params).await.unwrap();
+
+    assert_eq!(result.total, 3);
+    assert_eq!(result.items[0].tag.name, "fantasy");
+    assert_eq!(result.items[0].book_count, 2);
+    assert_eq!(result.items[1].tag.name, "romance");
+    assert_eq!(result.items[1].book_count, 0);
+    assert_eq!(result.items[2].tag.name, "scifi");
+    assert_eq!(result.items[2].book_count, 1);
+}
+
+#[tokio::test]
+async fn tag_list_sort_by_book_count() {
+    let (pool, _dir) = test_pool().await;
+
+    let tag_a = Tag::new("alpha");
+    let tag_b = Tag::new("beta");
+    let tag_c = Tag::new("gamma");
+    TagRepository::create(&pool, &tag_a).await.unwrap();
+    TagRepository::create(&pool, &tag_b).await.unwrap();
+    TagRepository::create(&pool, &tag_c).await.unwrap();
+
+    let book1 = test_book("B1");
+    let book2 = test_book("B2");
+    let book3 = test_book("B3");
+    BookRepository::create(&pool, &book1).await.unwrap();
+    BookRepository::create(&pool, &book2).await.unwrap();
+    BookRepository::create(&pool, &book3).await.unwrap();
+
+    // gamma=3, alpha=1, beta=0
+    BookRepository::add_tag(&pool, book1.id, tag_c.id)
+        .await
+        .unwrap();
+    BookRepository::add_tag(&pool, book2.id, tag_c.id)
+        .await
+        .unwrap();
+    BookRepository::add_tag(&pool, book3.id, tag_c.id)
+        .await
+        .unwrap();
+    BookRepository::add_tag(&pool, book1.id, tag_a.id)
+        .await
+        .unwrap();
+
+    // DESC: gamma(3), alpha(1), beta(0)
+    let params = PaginationParams {
+        sort_by: "book_count".into(),
+        sort_order: SortOrder::Desc,
+        ..PaginationParams::default()
+    };
+    let result = TagRepository::list(&pool, &params).await.unwrap();
+    assert_eq!(result.items[0].tag.name, "gamma");
+    assert_eq!(result.items[0].book_count, 3);
+    assert_eq!(result.items[1].tag.name, "alpha");
+    assert_eq!(result.items[1].book_count, 1);
+    assert_eq!(result.items[2].tag.name, "beta");
+    assert_eq!(result.items[2].book_count, 0);
+
+    // ASC: beta(0), alpha(1), gamma(3)
+    let params_asc = PaginationParams {
+        sort_by: "book_count".into(),
+        sort_order: SortOrder::Asc,
+        ..PaginationParams::default()
+    };
+    let result_asc = TagRepository::list(&pool, &params_asc).await.unwrap();
+    assert_eq!(result_asc.items[0].tag.name, "beta");
+    assert_eq!(result_asc.items[1].tag.name, "alpha");
+    assert_eq!(result_asc.items[2].tag.name, "gamma");
+}
+
+#[tokio::test]
+async fn tag_search_with_book_counts() {
+    let (pool, _dir) = test_pool().await;
+
+    let tag_a = Tag::with_category("dark fantasy", "genre");
+    let tag_b = Tag::with_category("urban fantasy", "genre");
+    let tag_c = Tag::new("romance");
+    TagRepository::create(&pool, &tag_a).await.unwrap();
+    TagRepository::create(&pool, &tag_b).await.unwrap();
+    TagRepository::create(&pool, &tag_c).await.unwrap();
+
+    let book1 = test_book("B1");
+    BookRepository::create(&pool, &book1).await.unwrap();
+    BookRepository::add_tag(&pool, book1.id, tag_a.id)
+        .await
+        .unwrap();
+
+    let params = PaginationParams {
+        sort_by: "name".into(),
+        sort_order: SortOrder::Asc,
+        ..PaginationParams::default()
+    };
+
+    // Search by name
+    let result = TagRepository::search(&pool, Some("fantasy"), None, &params)
+        .await
+        .unwrap();
+    assert_eq!(result.total, 2);
+    assert_eq!(result.items[0].tag.name, "dark fantasy");
+    assert_eq!(result.items[0].book_count, 1);
+    assert_eq!(result.items[1].tag.name, "urban fantasy");
+    assert_eq!(result.items[1].book_count, 0);
+
+    // Filter by category
+    let result2 = TagRepository::search(&pool, None, Some("genre"), &params)
+        .await
+        .unwrap();
+    assert_eq!(result2.total, 2);
+
+    // Search + category
+    let result3 = TagRepository::search(&pool, Some("dark"), Some("genre"), &params)
+        .await
+        .unwrap();
+    assert_eq!(result3.total, 1);
+    assert_eq!(result3.items[0].tag.name, "dark fantasy");
+}
+
+#[tokio::test]
+async fn tag_list_categories() {
+    let (pool, _dir) = test_pool().await;
+
+    TagRepository::create(&pool, &Tag::with_category("fantasy", "genre"))
+        .await
+        .unwrap();
+    TagRepository::create(&pool, &Tag::with_category("hardcover", "format"))
+        .await
+        .unwrap();
+    TagRepository::create(&pool, &Tag::new("uncategorized"))
+        .await
+        .unwrap();
+
+    let cats = TagRepository::list_categories(&pool).await.unwrap();
+    assert_eq!(cats, vec!["format", "genre"]);
 }
 
 // ── Filter by author and series ─────────────────────────────────

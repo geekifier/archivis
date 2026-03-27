@@ -56,6 +56,7 @@ import type {
   SettingsResponse,
   SetupRequest,
   StatsResponse,
+  TagListParams,
   TaskCreatedResponse,
   TaskResponse,
   UpdateBookRequest,
@@ -590,10 +591,29 @@ export const api = {
   },
 
   tags: {
+    /** List tags with pagination, sorting, search, and category filter. */
+    list(params?: TagListParams): Promise<PaginatedTags> {
+      const searchParams = new URLSearchParams();
+      if (params) {
+        for (const [key, value] of Object.entries(params)) {
+          if (value !== undefined && value !== null && value !== '') {
+            searchParams.set(key, String(value));
+          }
+        }
+      }
+      const qs = searchParams.toString();
+      return request<PaginatedTags>('GET', `/tags${qs ? `?${qs}` : ''}`);
+    },
+
     /** Search tags by query string. */
     search(q: string): Promise<PaginatedTags> {
       const params = new URLSearchParams({ q, per_page: '10' });
       return request<PaginatedTags>('GET', `/tags?${params.toString()}`);
+    },
+
+    /** List distinct tag categories. */
+    categories(): Promise<string[]> {
+      return request<string[]>('GET', '/tags/categories');
     }
   },
 
@@ -1113,6 +1133,7 @@ export type {
   SortField,
   SortOrder,
   TagEntry,
+  TagListParams,
   TagMatchMode,
   TagResponse,
   TaskCreatedResponse,

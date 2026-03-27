@@ -100,6 +100,7 @@ mod openapi {
             super::tags::handlers::update_tag,
             super::tags::handlers::delete_tag,
             super::tags::handlers::list_tag_books,
+            super::tags::handlers::list_categories,
             // Import
             super::import::handlers::upload_files,
             super::import::handlers::scan_directory,

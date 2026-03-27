@@ -102,6 +102,25 @@ pub async fn create_tag(
     Ok((StatusCode::CREATED, Json(tag.into())))
 }
 
+/// GET /api/tags/categories — list distinct tag categories.
+#[utoipa::path(
+    get,
+    path = "/api/tags/categories",
+    tag = "tags",
+    responses(
+        (status = 200, description = "List of distinct category strings", body = Vec<String>),
+        (status = 401, description = "Not authenticated"),
+    ),
+    security(("bearer" = []))
+)]
+pub async fn list_categories(
+    State(state): State<AppState>,
+    AuthUser(_user): AuthUser,
+) -> Result<Json<Vec<String>>, ApiError> {
+    let categories = TagRepository::list_categories(state.db_pool()).await?;
+    Ok(Json(categories))
+}
+
 /// GET /api/tags/{id} — get tag by ID.
 #[utoipa::path(
     get,
@@ -120,7 +139,7 @@ pub async fn get_tag(
     AuthUser(_user): AuthUser,
     Path(id): Path<Uuid>,
 ) -> Result<Json<TagResponse>, ApiError> {
-    let tag = TagRepository::get_by_id(state.db_pool(), id).await?;
+    let tag = TagRepository::get_by_id_with_count(state.db_pool(), id).await?;
     Ok(Json(tag.into()))
 }
 
@@ -162,6 +181,7 @@ pub async fn update_tag(
     }
 
     TagRepository::update(pool, &tag).await?;
+    let tag = TagRepository::get_by_id_with_count(pool, id).await?;
     Ok(Json(tag.into()))
 }
 

@@ -10,6 +10,7 @@ use crate::state::AppState;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(handlers::list_tags).post(handlers::create_tag))
+        .route("/categories", get(handlers::list_categories))
         .route(
             "/{id}",
             get(handlers::get_tag)
