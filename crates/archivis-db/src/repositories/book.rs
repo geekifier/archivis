@@ -504,24 +504,34 @@ fn append_order_by(
 // ── LibraryFilterState → BookFilter ────────────────────────────
 
 /// Resolve the active identifier filter from `LibraryFilterState` into
-/// the DB-level type(s) and value. ISBN is special: the DB stores
-/// `isbn10` and `isbn13` separately, so we expand to both.
+/// the DB-level type(s) and value.
 fn resolve_identifier_filter(lfs: &LibraryFilterState) -> (Option<Vec<String>>, Option<String>) {
-    let candidates: &[(&[&str], &Option<String>)] = &[
-        (&["isbn10", "isbn13"], &lfs.isbn),
-        (&["asin"], &lfs.asin),
-        (&["open_library"], &lfs.open_library_id),
-        (&["hardcover"], &lfs.hardcover_id),
-    ];
-    for &(types, val) in candidates {
-        if let Some(v) = val {
-            return (
-                Some(types.iter().map(|s| (*s).to_string()).collect()),
-                Some(v.clone()),
-            );
-        }
-    }
-    (None, None)
+    let Some(value) = lfs.identifier_value.clone() else {
+        return (None, None);
+    };
+
+    let identifier_types = match lfs.identifier_type.as_deref() {
+        None => vec![
+            "isbn10".into(),
+            "isbn13".into(),
+            "asin".into(),
+            "google_books".into(),
+            "open_library".into(),
+            "hardcover".into(),
+            "lccn".into(),
+        ],
+        Some("isbn") => vec!["isbn10".into(), "isbn13".into()],
+        Some("isbn10") => vec!["isbn10".into()],
+        Some("isbn13") => vec!["isbn13".into()],
+        Some("asin") => vec!["asin".into()],
+        Some("google_books") => vec!["google_books".into()],
+        Some("open_library") => vec!["open_library".into()],
+        Some("hardcover") => vec!["hardcover".into()],
+        Some("lccn") => vec!["lccn".into()],
+        Some(other) => vec![format!("__invalid_identifier_type__:{other}")],
+    };
+
+    (Some(identifier_types), Some(value))
 }
 
 impl From<&LibraryFilterState> for BookFilter {

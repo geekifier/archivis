@@ -7,6 +7,7 @@ use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 use validator::Validate;
 
+use archivis_core::models::filter::is_supported_identifier_type;
 use archivis_core::models::{
     Book, BookFile, BookFormat, FieldProvenance, Identifier, IdentifierType, LibraryFilterState,
     MetadataProvenance, MetadataSource, MetadataStatus, ResolutionOutcome, ResolutionState, Tag,
@@ -85,20 +86,16 @@ pub struct BookListParams {
     pub has_description: Option<bool>,
     /// Filter by having at least one identifier.
     pub has_identifiers: Option<bool>,
-    /// Filter by ISBN (strips hyphens/spaces).
-    pub isbn: Option<String>,
-    /// Filter by ASIN.
-    pub asin: Option<String>,
-    /// Filter by Open Library ID.
-    pub open_library_id: Option<String>,
-    /// Filter by Hardcover ID.
-    pub hardcover_id: Option<String>,
+    /// Optional identifier type restriction (e.g. `isbn`, `asin`, `open_library`).
+    pub identifier_type: Option<String>,
+    /// Identifier value to search for.
+    pub identifier_value: Option<String>,
 }
 
 impl BookListParams {
     /// Convert query parameters into a canonical `LibraryFilterState`.
     ///
-    /// Returns `Err` if more than one identifier filter is set or enum parsing fails.
+    /// Returns `Err` if enum parsing fails or the identifier type is invalid.
     pub fn into_filter_state(self) -> Result<(LibraryFilterState, BookListViewParams), String> {
         let format = self
             .format
@@ -165,16 +162,16 @@ impl BookListParams {
             has_cover: self.has_cover,
             has_description: self.has_description,
             has_identifiers: self.has_identifiers,
-            isbn: self.isbn,
-            asin: self.asin,
-            open_library_id: self.open_library_id,
-            hardcover_id: self.hardcover_id,
+            identifier_type: self.identifier_type,
+            identifier_value: self.identifier_value,
         };
 
         filter.canonicalize();
 
-        if filter.active_identifier_count() > 1 {
-            return Err("at most one identifier filter may be active at a time".into());
+        if let Some(ref identifier_type) = filter.identifier_type {
+            if !is_supported_identifier_type(identifier_type) {
+                return Err(format!("unknown identifier type: {identifier_type}"));
+            }
         }
 
         let view = BookListViewParams {

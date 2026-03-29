@@ -15,7 +15,7 @@
   let { open = false } = $props();
 
   // --- Identifier state (derived from store, with local editing overrides) ---
-  const idTypeDerived = $derived<IdentifierType>(filters.activeIdentifierType ?? 'isbn');
+  const idTypeDerived = $derived<IdentifierType>(filters.activeIdentifierType ?? '');
   const idValueDerived = $derived(filters.activeIdentifierValue);
   let idTypeEditing = $state<IdentifierType | null>(null);
   let idValueEditing = $state<string | null>(null);
@@ -31,10 +31,15 @@
   const yearMaxInput = $derived(yearMaxEditing ?? yearMaxDerived);
 
   const identifierTypes: { value: IdentifierType; label: string }[] = [
+    { value: '', label: 'Any Type' },
     { value: 'isbn', label: 'ISBN' },
+    { value: 'isbn10', label: 'ISBN-10' },
+    { value: 'isbn13', label: 'ISBN-13' },
     { value: 'asin', label: 'ASIN' },
-    { value: 'open_library_id', label: 'Open Library' },
-    { value: 'hardcover_id', label: 'Hardcover' }
+    { value: 'google_books', label: 'Google Books' },
+    { value: 'open_library', label: 'Open Library' },
+    { value: 'hardcover', label: 'Hardcover' },
+    { value: 'lccn', label: 'LCCN' }
   ];
 
   const formatOptions: { value: BookFormat; label: string }[] = [
@@ -137,7 +142,7 @@
   function commitIdentifier() {
     const val = idValue.trim();
     if (val) {
-      filters.setIdentifier(idType, val);
+      filters.setIdentifier(idType || null, val);
     } else {
       filters.clearIdentifier();
     }
@@ -435,7 +440,7 @@
               }}
               class="h-8 flex-1 text-sm"
             />
-            {#if filters.activeIdentifierType}
+            {#if filters.activeIdentifierValue}
               <button
                 onclick={() => {
                   idValueEditing = null;

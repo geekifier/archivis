@@ -74,7 +74,8 @@ describe('filters store', () => {
       expect(state.author_id).toBeNull();
       expect(state.tag_ids).toEqual([]);
       expect(state.tag_match).toBe('any');
-      expect(state.isbn).toBeNull();
+      expect(state.identifier_type).toBeNull();
+      expect(state.identifier_value).toBeNull();
     });
 
     it('includes text query when provided', () => {
@@ -129,16 +130,23 @@ describe('filters store', () => {
       expect(state.tag_match).toBe('all');
     });
 
-    it('maps identifier type/value to the correct field', () => {
+    it('maps identifier type/value to the generic identifier filter', () => {
       filters.setIdentifier('isbn', '978-0-13-468599-1');
       const isbn = filters.toFilterState();
-      expect(isbn.isbn).toBe('978-0-13-468599-1');
-      expect(isbn.asin).toBeNull();
+      expect(isbn.identifier_type).toBe('isbn');
+      expect(isbn.identifier_value).toBe('978-0-13-468599-1');
 
       filters.setIdentifier('asin', 'B08N5WRWNW');
       const asin = filters.toFilterState();
-      expect(asin.asin).toBe('B08N5WRWNW');
-      expect(asin.isbn).toBeNull();
+      expect(asin.identifier_type).toBe('asin');
+      expect(asin.identifier_value).toBe('B08N5WRWNW');
+    });
+
+    it('supports untyped identifier lookup', () => {
+      filters.setIdentifier(null, 'OL123W');
+      const state = filters.toFilterState();
+      expect(state.identifier_type).toBeNull();
+      expect(state.identifier_value).toBe('OL123W');
     });
 
     it('snapshotKey changes when filters change', () => {

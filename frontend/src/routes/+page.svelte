@@ -538,9 +538,13 @@
 
   const identifierTypeLabels: Record<string, string> = {
     isbn: 'ISBN',
+    isbn10: 'ISBN-10',
+    isbn13: 'ISBN-13',
     asin: 'ASIN',
-    open_library_id: 'Open Library',
-    hardcover_id: 'Hardcover'
+    google_books: 'Google Books',
+    open_library: 'Open Library',
+    hardcover: 'Hardcover',
+    lccn: 'LCCN'
   };
 
   const skeletonIds = Array.from({ length: 12 }, (_, i) => i);
@@ -1172,7 +1176,23 @@
         <span
           class="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2.5 py-1 text-xs font-medium text-primary"
         >
-          {identifierTypeLabels[filters.activeIdentifierType]}: {filters.activeIdentifierValue}
+          {identifierTypeLabels[filters.activeIdentifierType] ?? filters.activeIdentifierType}: {filters.activeIdentifierValue}
+          <button
+            onclick={() => filters.clearIdentifier()}
+            class="ml-0.5 rounded-full p-0.5 transition-colors hover:bg-primary/20"
+            aria-label="Remove identifier filter"
+          >
+            <svg class="size-3" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M18 6 6 18" /><path d="m6 6 12 12" />
+            </svg>
+          </button>
+        </span>
+      {/if}
+      {#if !filters.activeIdentifierType && filters.activeIdentifierValue}
+        <span
+          class="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2.5 py-1 text-xs font-medium text-primary"
+        >
+          Identifier: {filters.activeIdentifierValue}
           <button
             onclick={() => filters.clearIdentifier()}
             class="ml-0.5 rounded-full p-0.5 transition-colors hover:bg-primary/20"

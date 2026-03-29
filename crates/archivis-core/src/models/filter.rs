@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::isbn::{normalize_asin, normalize_isbn};
+
 use super::enums::{BookFormat, MetadataStatus, ResolutionOutcome, ResolutionState};
 
 /// How multiple tags should be matched in a filter query.
@@ -42,12 +44,11 @@ pub struct LibraryFilterState {
     pub has_description: Option<bool>,
     pub has_identifiers: Option<bool>,
 
-    /// At most one identifier filter active at a time.
-    /// Enforced by API validation — if more than one is set, return 400.
-    pub isbn: Option<String>,
-    pub asin: Option<String>,
-    pub open_library_id: Option<String>,
-    pub hardcover_id: Option<String>,
+    /// Generic identifier lookup.
+    ///
+    /// `identifier_type = None` means "search all supported identifier types".
+    pub identifier_type: Option<String>,
+    pub identifier_value: Option<String>,
 }
 
 impl LibraryFilterState {
@@ -68,29 +69,15 @@ impl LibraryFilterState {
         // Trim string fields; set to `None` if empty
         trim_or_clear(&mut self.language);
 
-        // Normalize identifiers
-        if let Some(ref mut isbn) = self.isbn {
-            // Strip hyphens and spaces from ISBN
-            let clean: String = isbn
-                .chars()
-                .filter(|c| !c.is_whitespace() && *c != '-')
-                .collect();
-            if clean.is_empty() {
-                self.isbn = None;
-            } else {
-                *isbn = clean;
-            }
+        // Normalize generic identifier filter
+        self.identifier_type = self.identifier_type.take().and_then(|raw| canonicalize_identifier_type(&raw));
+        self.identifier_value = self
+            .identifier_value
+            .take()
+            .and_then(|raw| canonicalize_identifier_value(self.identifier_type.as_deref(), &raw));
+        if self.identifier_value.is_none() {
+            self.identifier_type = None;
         }
-        if let Some(ref mut asin) = self.asin {
-            let trimmed = asin.trim().to_uppercase();
-            if trimmed.is_empty() {
-                self.asin = None;
-            } else {
-                *asin = trimmed;
-            }
-        }
-        trim_or_clear(&mut self.open_library_id);
-        trim_or_clear(&mut self.hardcover_id);
 
         // Sort and dedup `tag_ids`
         self.tag_ids.sort();
@@ -113,13 +100,49 @@ impl LibraryFilterState {
         }
     }
 
-    /// Count how many identifier filters are active (at most 1 allowed).
-    pub fn active_identifier_count(&self) -> usize {
-        usize::from(self.isbn.is_some())
-            + usize::from(self.asin.is_some())
-            + usize::from(self.open_library_id.is_some())
-            + usize::from(self.hardcover_id.is_some())
+    pub fn has_identifier_filter(&self) -> bool {
+        self.identifier_value.is_some()
     }
+}
+
+pub fn canonicalize_identifier_type(raw: &str) -> Option<String> {
+    let normalized = raw
+        .trim()
+        .to_ascii_lowercase()
+        .replace('-', "_");
+
+    if normalized.is_empty() {
+        return None;
+    }
+
+    Some(match normalized.as_str() {
+        "olid" | "open_library_id" | "openlibrary" => "open_library".into(),
+        "hardcover_id" => "hardcover".into(),
+        "googlebooks" => "google_books".into(),
+        other => other.to_string(),
+    })
+}
+
+pub fn canonicalize_identifier_value(identifier_type: Option<&str>, raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    match identifier_type.and_then(canonicalize_identifier_type) {
+        Some(kind) if matches!(kind.as_str(), "isbn" | "isbn10" | "isbn13") => {
+            Some(normalize_isbn(trimmed))
+        }
+        Some(kind) if kind == "asin" => Some(normalize_asin(trimmed)),
+        _ => Some(trimmed.to_string()),
+    }
+}
+
+pub fn is_supported_identifier_type(raw: &str) -> bool {
+    matches!(
+        canonicalize_identifier_type(raw).as_deref(),
+        Some("isbn" | "isbn10" | "isbn13" | "asin" | "google_books" | "open_library" | "hardcover" | "lccn")
+    )
 }
 
 fn trim_or_clear(field: &mut Option<String>) {
@@ -158,23 +181,50 @@ mod tests {
     }
 
     #[test]
-    fn canonicalize_strips_isbn_hyphens() {
+    fn canonicalize_normalizes_isbn_identifier_value() {
         let mut f = LibraryFilterState {
-            isbn: Some("978-3-16-148410-0".into()),
+            identifier_type: Some("isbn".into()),
+            identifier_value: Some("978-3-16-148410-0".into()),
             ..Default::default()
         };
         f.canonicalize();
-        assert_eq!(f.isbn.as_deref(), Some("9783161484100"));
+        assert_eq!(f.identifier_type.as_deref(), Some("isbn"));
+        assert_eq!(f.identifier_value.as_deref(), Some("9783161484100"));
     }
 
     #[test]
-    fn canonicalize_uppercases_asin() {
+    fn canonicalize_uppercases_asin_identifier_value() {
         let mut f = LibraryFilterState {
-            asin: Some("  b08n5wrwnw  ".into()),
+            identifier_type: Some("asin".into()),
+            identifier_value: Some("  b08n5wrwnw  ".into()),
             ..Default::default()
         };
         f.canonicalize();
-        assert_eq!(f.asin.as_deref(), Some("B08N5WRWNW"));
+        assert_eq!(f.identifier_type.as_deref(), Some("asin"));
+        assert_eq!(f.identifier_value.as_deref(), Some("B08N5WRWNW"));
+    }
+
+    #[test]
+    fn canonicalize_normalizes_identifier_type_aliases() {
+        let mut f = LibraryFilterState {
+            identifier_type: Some("open_library_id".into()),
+            identifier_value: Some("OL123W".into()),
+            ..Default::default()
+        };
+        f.canonicalize();
+        assert_eq!(f.identifier_type.as_deref(), Some("open_library"));
+    }
+
+    #[test]
+    fn canonicalize_clears_identifier_type_when_value_missing() {
+        let mut f = LibraryFilterState {
+            identifier_type: Some("isbn".into()),
+            identifier_value: Some("   ".into()),
+            ..Default::default()
+        };
+        f.canonicalize();
+        assert_eq!(f.identifier_type, None);
+        assert_eq!(f.identifier_value, None);
     }
 
     #[test]
@@ -213,27 +263,17 @@ mod tests {
     }
 
     #[test]
-    fn active_identifier_count_none() {
+    fn has_identifier_filter_none() {
         let f = LibraryFilterState::default();
-        assert_eq!(f.active_identifier_count(), 0);
+        assert!(!f.has_identifier_filter());
     }
 
     #[test]
-    fn active_identifier_count_one() {
+    fn has_identifier_filter_when_value_set() {
         let f = LibraryFilterState {
-            isbn: Some("123".into()),
+            identifier_value: Some("123".into()),
             ..Default::default()
         };
-        assert_eq!(f.active_identifier_count(), 1);
-    }
-
-    #[test]
-    fn active_identifier_count_multiple() {
-        let f = LibraryFilterState {
-            isbn: Some("123".into()),
-            asin: Some("B00".into()),
-            ..Default::default()
-        };
-        assert_eq!(f.active_identifier_count(), 2);
+        assert!(f.has_identifier_filter());
     }
 }

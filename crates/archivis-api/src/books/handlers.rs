@@ -14,6 +14,7 @@ use archivis_formats::sanitize::{sanitize_text, SanitizeOptions};
 use archivis_formats::CoverData;
 
 use archivis_core::isbn::validate_isbn;
+use archivis_core::models::filter::is_supported_identifier_type;
 use archivis_core::models::{
     Book, BulkOperation, BulkTagEntry, BulkTagMode, BulkTaskPayload, BulkUpdateFields,
     FieldProvenance, Identifier, IdentifierType, LibraryFilterState, MetadataSource, TaskType,
@@ -323,7 +324,7 @@ fn maybe_promote_lone_isbn_query(
     filter_state: &mut LibraryFilterState,
     parsed: &archivis_core::search_query::SearchQuery,
 ) -> bool {
-    if filter_state.active_identifier_count() > 0 || !parsed.dropped_empty_fields.is_empty() {
+    if filter_state.has_identifier_filter() || !parsed.dropped_empty_fields.is_empty() {
         return false;
     }
 
@@ -340,7 +341,8 @@ fn maybe_promote_lone_isbn_query(
         return false;
     }
 
-    filter_state.isbn = Some(validation.normalized);
+    filter_state.identifier_type = Some("isbn".into());
+    filter_state.identifier_value = Some(validation.normalized);
     filter_state.text_query = None;
     true
 }
@@ -453,17 +455,9 @@ fn merge_resolved_into_filter(lfs: &mut LibraryFilterState, resolved: &archivis_
     }
 
     // Identifiers: only fill if not already set.
-    if lfs.isbn.is_none() {
-        lfs.isbn.clone_from(&resolved.isbn);
-    }
-    if lfs.asin.is_none() {
-        lfs.asin.clone_from(&resolved.asin);
-    }
-    if lfs.open_library_id.is_none() {
-        lfs.open_library_id.clone_from(&resolved.open_library_id);
-    }
-    if lfs.hardcover_id.is_none() {
-        lfs.hardcover_id.clone_from(&resolved.hardcover_id);
+    if lfs.identifier_value.is_none() {
+        lfs.identifier_type.clone_from(&resolved.identifier_type);
+        lfs.identifier_value.clone_from(&resolved.identifier_value);
     }
 }
 
@@ -487,11 +481,12 @@ pub async fn issue_selection_scope(
 ) -> Result<Json<IssueSelectionScopeResponse>, ApiError> {
     let mut filter = body.filters;
     filter.canonicalize();
-
-    if filter.active_identifier_count() > 1 {
-        return Err(ApiError::Validation(
-            "at most one identifier filter may be active at a time".into(),
-        ));
+    if let Some(ref identifier_type) = filter.identifier_type {
+        if !is_supported_identifier_type(identifier_type) {
+            return Err(ApiError::Validation(format!(
+                "unknown identifier type: {identifier_type}"
+            )));
+        }
     }
 
     // Resolve DSL operators so the scope token embeds concrete IDs.
@@ -2813,7 +2808,8 @@ mod tests {
             .unwrap();
 
         let params = BookListParams {
-            isbn: Some("9780451524935".into()),
+            identifier_type: Some("isbn".into()),
+            identifier_value: Some("9780451524935".into()),
             ..BookListParams::default()
         };
 
@@ -2846,7 +2842,8 @@ mod tests {
             .unwrap();
 
         let params = BookListParams {
-            isbn: Some("0451524934".into()),
+            identifier_type: Some("isbn".into()),
+            identifier_value: Some("0451524934".into()),
             ..BookListParams::default()
         };
 
@@ -2880,7 +2877,8 @@ mod tests {
 
         // Pass ISBN with hyphens — the handler normalizes via `canonicalize()`
         let params = BookListParams {
-            isbn: Some("978-3-16-148410-0".into()),
+            identifier_type: Some("isbn".into()),
+            identifier_value: Some("978-3-16-148410-0".into()),
             ..BookListParams::default()
         };
 

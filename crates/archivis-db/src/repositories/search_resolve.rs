@@ -10,6 +10,9 @@
 use std::str::FromStr;
 
 use archivis_core::errors::DbError;
+use archivis_core::models::filter::{
+    canonicalize_identifier_type, canonicalize_identifier_value, is_supported_identifier_type,
+};
 use archivis_core::models::{BookFormat, MetadataStatus, ResolutionOutcome, ResolutionState};
 use archivis_core::search_query::{QueryClause, QueryField, SearchQuery};
 use serde::Serialize;
@@ -94,10 +97,8 @@ pub struct ResolvedQuery {
     pub has_cover: Option<bool>,
     pub has_description: Option<bool>,
     pub has_identifiers: Option<bool>,
-    pub isbn: Option<String>,
-    pub asin: Option<String>,
-    pub open_library_id: Option<String>,
-    pub hardcover_id: Option<String>,
+    pub identifier_type: Option<String>,
+    pub identifier_value: Option<String>,
 
     pub warnings: Vec<QueryWarning>,
 }
@@ -289,10 +290,7 @@ impl SearchResolver {
             QueryField::Missing => Self::resolve_presence(value, negated, true, result),
 
             // Identifier fields.
-            QueryField::Isbn
-            | QueryField::Asin
-            | QueryField::OpenLibraryId
-            | QueryField::HardcoverId => {
+            QueryField::Identifier => {
                 Self::resolve_identifier(field, value, negated, result);
             }
         }
@@ -326,13 +324,11 @@ impl SearchResolver {
         negated: bool,
         result: &mut ResolvedQuery,
     ) {
-        let field_name = match field {
-            QueryField::Isbn => "isbn",
-            QueryField::Asin => "asin",
-            QueryField::OpenLibraryId => "open_library_id",
-            QueryField::HardcoverId => "hardcover_id",
-            _ => return,
-        };
+        if field != QueryField::Identifier {
+            return;
+        }
+
+        let field_name = field.as_str();
 
         if negated {
             result.warnings.push(QueryWarning::InvalidValue {
@@ -343,16 +339,47 @@ impl SearchResolver {
             return;
         }
 
-        let slot = match field {
-            QueryField::Isbn => &mut result.isbn,
-            QueryField::Asin => &mut result.asin,
-            QueryField::OpenLibraryId => &mut result.open_library_id,
-            QueryField::HardcoverId => &mut result.hardcover_id,
-            _ => return,
+        let (identifier_type, raw_value) = match value.split_once(':') {
+            Some((raw_type, raw_value)) if raw_type.trim().is_empty() => {
+                result.warnings.push(QueryWarning::InvalidValue {
+                    field: field_name.to_owned(),
+                    value: value.to_owned(),
+                    reason: "identifier type must not be empty".to_owned(),
+                });
+                return;
+            }
+            Some((raw_type, raw_value)) => (
+                canonicalize_identifier_type(raw_type),
+                raw_value,
+            ),
+            None => (None, value),
         };
 
-        if slot.is_none() {
-            *slot = Some(value.to_owned());
+        if let Some(ref ty) = identifier_type {
+            if !is_supported_identifier_type(ty) {
+                result.warnings.push(QueryWarning::InvalidValue {
+                    field: field_name.to_owned(),
+                    value: value.to_owned(),
+                    reason: format!("unknown identifier type: {ty}"),
+                });
+                return;
+            }
+        }
+
+        let Some(identifier_value) =
+            canonicalize_identifier_value(identifier_type.as_deref(), raw_value)
+        else {
+            result.warnings.push(QueryWarning::InvalidValue {
+                field: field_name.to_owned(),
+                value: value.to_owned(),
+                reason: "identifier value must not be empty".to_owned(),
+            });
+            return;
+        };
+
+        if result.identifier_value.is_none() {
+            result.identifier_type = identifier_type;
+            result.identifier_value = Some(identifier_value);
         }
     }
 
@@ -1231,6 +1258,50 @@ mod tests {
         SearchResolver::resolve_bool_field("trusted", "true", true, &mut r);
         assert!(r.trusted.is_none());
         assert_eq!(r.warnings.len(), 1);
+    }
+
+    #[test]
+    fn identifier_untyped() {
+        let mut r = ResolvedQuery::default();
+        SearchResolver::resolve_identifier(
+            QueryField::Identifier,
+            "9780451524935",
+            false,
+            &mut r,
+        );
+        assert_eq!(r.identifier_type, None);
+        assert_eq!(r.identifier_value.as_deref(), Some("9780451524935"));
+        assert!(r.warnings.is_empty());
+    }
+
+    #[test]
+    fn identifier_typed_and_normalized() {
+        let mut r = ResolvedQuery::default();
+        SearchResolver::resolve_identifier(
+            QueryField::Identifier,
+            "isbn:978-0-451-52493-5",
+            false,
+            &mut r,
+        );
+        assert_eq!(r.identifier_type.as_deref(), Some("isbn"));
+        assert_eq!(r.identifier_value.as_deref(), Some("9780451524935"));
+        assert!(r.warnings.is_empty());
+    }
+
+    #[test]
+    fn identifier_unknown_type_warns() {
+        let mut r = ResolvedQuery::default();
+        SearchResolver::resolve_identifier(
+            QueryField::Identifier,
+            "mystery:123",
+            false,
+            &mut r,
+        );
+        assert_eq!(r.identifier_value, None);
+        assert!(matches!(
+            &r.warnings[0],
+            QueryWarning::InvalidValue { field, .. } if field == "identifier"
+        ));
     }
 
     // ── OR group resolution ──────────────────────────────────────

@@ -45,10 +45,7 @@ pub enum QueryField {
     /// `missing:cover` (sugar for `has:X = false`)
     Missing,
     // Identifiers
-    Isbn,
-    Asin,
-    OpenLibraryId,
-    HardcoverId,
+    Identifier,
 }
 
 impl QueryField {
@@ -71,10 +68,7 @@ impl QueryField {
             Self::Year => "year",
             Self::Has => "has",
             Self::Missing => "missing",
-            Self::Isbn => "isbn",
-            Self::Asin => "asin",
-            Self::OpenLibraryId => "open_library_id",
-            Self::HardcoverId => "hardcover_id",
+            Self::Identifier => "identifier",
         }
     }
 }
@@ -135,10 +129,7 @@ fn recognize_field(prefix: &str) -> Option<QueryField> {
         "year" => Some(QueryField::Year),
         "has" => Some(QueryField::Has),
         "missing" => Some(QueryField::Missing),
-        "isbn" => Some(QueryField::Isbn),
-        "asin" => Some(QueryField::Asin),
-        "open_library_id" | "olid" => Some(QueryField::OpenLibraryId),
-        "hardcover_id" => Some(QueryField::HardcoverId),
+        "identifier" | "id" => Some(QueryField::Identifier),
         _ => None,
     }
 }
@@ -935,19 +926,19 @@ mod tests {
     }
 
     #[test]
-    fn olid_and_hardcover_id() {
-        let clauses = parse("olid:OL123 hardcover_id:abc");
+    fn identifier_and_id_alias() {
+        let clauses = parse("identifier:isbn:9780451524935 id:asin:B08N5WRWNW");
         assert_eq!(
             clauses,
             vec![
                 QueryClause::Field {
-                    field: QueryField::OpenLibraryId,
-                    value: "OL123".into(),
+                    field: QueryField::Identifier,
+                    value: "isbn:9780451524935".into(),
                     negated: false,
                 },
                 QueryClause::Field {
-                    field: QueryField::HardcoverId,
-                    value: "abc".into(),
+                    field: QueryField::Identifier,
+                    value: "asin:B08N5WRWNW".into(),
                     negated: false,
                 },
             ]

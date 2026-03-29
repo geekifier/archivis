@@ -19,7 +19,7 @@ export interface TagFilter {
   category: string | null;
 }
 
-export type IdentifierType = 'isbn' | 'asin' | 'open_library_id' | 'hardcover_id';
+export type IdentifierType = string;
 
 function createFilterStore() {
   // --- Basic filters ---
@@ -72,7 +72,7 @@ function createFilterStore() {
       activeHasCover !== null ||
       activeHasDescription !== null ||
       activeHasIdentifiers !== null ||
-      (activeIdentifierType !== null && activeIdentifierValue.trim() !== '')
+      activeIdentifierValue.trim() !== ''
   );
 
   const activeFilterCount = $derived(
@@ -91,7 +91,7 @@ function createFilterStore() {
       (activeHasCover !== null ? 1 : 0) +
       (activeHasDescription !== null ? 1 : 0) +
       (activeHasIdentifiers !== null ? 1 : 0) +
-      (activeIdentifierType !== null && activeIdentifierValue.trim() !== '' ? 1 : 0)
+      (activeIdentifierValue.trim() !== '' ? 1 : 0)
   );
 
   // --- Setters ---
@@ -225,7 +225,10 @@ function createFilterStore() {
     if (activeHasDescription !== null) params.has_description = activeHasDescription;
     if (activeHasIdentifiers !== null) params.has_identifiers = activeHasIdentifiers;
     if (activeIdentifierType && activeIdentifierValue.trim()) {
-      params[activeIdentifierType] = activeIdentifierValue.trim();
+      params.identifier_type = activeIdentifierType;
+      params.identifier_value = activeIdentifierValue.trim();
+    } else if (activeIdentifierValue.trim()) {
+      params.identifier_value = activeIdentifierValue.trim();
     }
     return params;
   }
@@ -233,18 +236,6 @@ function createFilterStore() {
   /** Build a canonical `LibraryFilterState` for scope issuance.
    *  `textQuery` is provided by the caller (the search bar is outside the filter store). */
   function toFilterState(textQuery?: string): LibraryFilterState {
-    let isbn: string | null = null;
-    let asin: string | null = null;
-    let openLibraryId: string | null = null;
-    let hardcoverId: string | null = null;
-    if (activeIdentifierType && activeIdentifierValue.trim()) {
-      const val = activeIdentifierValue.trim();
-      if (activeIdentifierType === 'isbn') isbn = val;
-      else if (activeIdentifierType === 'asin') asin = val;
-      else if (activeIdentifierType === 'open_library_id') openLibraryId = val;
-      else if (activeIdentifierType === 'hardcover_id') hardcoverId = val;
-    }
-
     return {
       text_query: textQuery?.trim() || null,
       author_id: activeAuthor?.id ?? null,
@@ -264,10 +255,8 @@ function createFilterStore() {
       has_cover: activeHasCover,
       has_description: activeHasDescription,
       has_identifiers: activeHasIdentifiers,
-      isbn,
-      asin,
-      open_library_id: openLibraryId,
-      hardcover_id: hardcoverId
+      identifier_type: activeIdentifierType,
+      identifier_value: activeIdentifierValue.trim() || null
     };
   }
 
@@ -303,8 +292,10 @@ function createFilterStore() {
     if (activeHasDescription !== null) params.set('has_description', String(activeHasDescription));
     if (activeHasIdentifiers !== null) params.set('has_identifiers', String(activeHasIdentifiers));
     if (activeIdentifierType && activeIdentifierValue.trim()) {
-      params.set('id_type', activeIdentifierType);
-      params.set('id_value', activeIdentifierValue.trim());
+      params.set('identifier_type', activeIdentifierType);
+      params.set('identifier_value', activeIdentifierValue.trim());
+    } else if (activeIdentifierValue.trim()) {
+      params.set('identifier_value', activeIdentifierValue.trim());
     }
   }
 
@@ -370,10 +361,13 @@ function createFilterStore() {
     const hi = params.get('has_identifiers');
     if (hi !== null) activeHasIdentifiers = hi === 'true';
 
-    const idType = params.get('id_type') as IdentifierType | null;
-    const idValue = params.get('id_value');
+    const idType = params.get('identifier_type') as IdentifierType | null;
+    const idValue = params.get('identifier_value');
     if (idType && idValue) {
       activeIdentifierType = idType;
+      activeIdentifierValue = idValue;
+    } else if (idValue) {
+      activeIdentifierType = null;
       activeIdentifierValue = idValue;
     }
   }

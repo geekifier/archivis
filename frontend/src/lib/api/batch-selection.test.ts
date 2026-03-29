@@ -207,10 +207,8 @@ describe('batch selection API', () => {
           has_cover: null,
           has_description: null,
           has_identifiers: null,
-          isbn: null,
-          asin: null,
-          open_library_id: null,
-          hardcover_id: null
+          identifier_type: null,
+          identifier_value: null
         }
       });
 

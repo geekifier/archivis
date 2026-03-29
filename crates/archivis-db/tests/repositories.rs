@@ -1938,7 +1938,7 @@ async fn filter_identifier_lookup() {
     assert_eq!(result.items[0].title, "ISBN Book");
 }
 
-/// Regression: `LibraryFilterState.isbn` must match books stored as `isbn13`.
+/// Regression: `LibraryFilterState.identifier_*` with `isbn` must match books stored as `isbn13`.
 #[tokio::test]
 async fn filter_isbn_via_library_filter_state_isbn13() {
     let (pool, _dir) = test_pool().await;
@@ -1955,7 +1955,8 @@ async fn filter_isbn_via_library_filter_state_isbn13() {
     IdentifierRepository::create(&pool, &ident).await.unwrap();
 
     let lfs = LibraryFilterState {
-        isbn: Some("9780451524935".into()),
+        identifier_type: Some("isbn".into()),
+        identifier_value: Some("9780451524935".into()),
         ..LibraryFilterState::default()
     };
     let filter = BookFilter::from(&lfs);
@@ -1967,7 +1968,7 @@ async fn filter_isbn_via_library_filter_state_isbn13() {
     assert_eq!(result.items[0].title, "ISBN13 Book");
 }
 
-/// Regression: `LibraryFilterState.isbn` must also match books stored as `isbn10`.
+/// Regression: `LibraryFilterState.identifier_*` with `isbn` must also match books stored as `isbn10`.
 #[tokio::test]
 async fn filter_isbn_via_library_filter_state_isbn10() {
     let (pool, _dir) = test_pool().await;
@@ -1984,7 +1985,8 @@ async fn filter_isbn_via_library_filter_state_isbn10() {
     IdentifierRepository::create(&pool, &ident).await.unwrap();
 
     let lfs = LibraryFilterState {
-        isbn: Some("0451524934".into()),
+        identifier_type: Some("isbn".into()),
+        identifier_value: Some("0451524934".into()),
         ..LibraryFilterState::default()
     };
     let filter = BookFilter::from(&lfs);
@@ -1996,7 +1998,7 @@ async fn filter_isbn_via_library_filter_state_isbn10() {
     assert_eq!(result.items[0].title, "ISBN10 Book");
 }
 
-/// Regression: `LibraryFilterState.isbn` with hyphenated input is canonicalized
+/// Regression: `LibraryFilterState.identifier_*` with hyphenated ISBN input is canonicalized
 /// and matches the stored value.
 #[tokio::test]
 async fn filter_isbn_via_library_filter_state_canonicalized() {
@@ -2014,11 +2016,13 @@ async fn filter_isbn_via_library_filter_state_canonicalized() {
 
     // Input with hyphens — canonicalize strips them
     let mut lfs = LibraryFilterState {
-        isbn: Some("978-3-16-148410-0".into()),
+        identifier_type: Some("isbn".into()),
+        identifier_value: Some("978-3-16-148410-0".into()),
         ..LibraryFilterState::default()
     };
     lfs.canonicalize();
-    assert_eq!(lfs.isbn.as_deref(), Some("9783161484100"));
+    assert_eq!(lfs.identifier_type.as_deref(), Some("isbn"));
+    assert_eq!(lfs.identifier_value.as_deref(), Some("9783161484100"));
 
     let filter = BookFilter::from(&lfs);
     let result = BookRepository::list(&pool, &PaginationParams::default(), &filter)
@@ -2045,7 +2049,8 @@ async fn filter_asin_via_library_filter_state() {
     IdentifierRepository::create(&pool, &ident).await.unwrap();
 
     let lfs = LibraryFilterState {
-        asin: Some("B08N5WRWNW".into()),
+        identifier_type: Some("asin".into()),
+        identifier_value: Some("B08N5WRWNW".into()),
         ..LibraryFilterState::default()
     };
     let filter = BookFilter::from(&lfs);

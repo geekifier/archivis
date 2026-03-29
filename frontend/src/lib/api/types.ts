@@ -273,11 +273,9 @@ export interface BookListParams {
   has_cover?: boolean;
   has_description?: boolean;
   has_identifiers?: boolean;
-  // Identifier lookup (at most one)
-  isbn?: string;
-  asin?: string;
-  open_library_id?: string;
-  hardcover_id?: string;
+  // Identifier lookup
+  identifier_type?: string;
+  identifier_value?: string;
 }
 
 export interface AuthorListParams {
@@ -576,10 +574,8 @@ export interface LibraryFilterState {
   has_cover: boolean | null;
   has_description: boolean | null;
   has_identifiers: boolean | null;
-  isbn: string | null;
-  asin: string | null;
-  open_library_id: string | null;
-  hardcover_id: string | null;
+  identifier_type: string | null;
+  identifier_value: string | null;
 }
 
 // --- Selection / Scope types ---
