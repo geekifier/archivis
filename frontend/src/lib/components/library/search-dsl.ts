@@ -150,7 +150,7 @@ export const OPERATORS: OperatorDef[] = [
 ];
 
 /** Map from any recognized name/alias to its canonical `OperatorDef`. */
-const OPERATOR_LOOKUP: Map<string, OperatorDef> = new Map();
+export const OPERATOR_LOOKUP: Map<string, OperatorDef> = new Map();
 for (const op of OPERATORS) {
   OPERATOR_LOOKUP.set(op.name, op);
   for (const alias of op.aliases) {
@@ -217,7 +217,7 @@ export function tokenize(query: string): TokenSpan[] {
 // Token analysis helpers
 // ---------------------------------------------------------------------------
 
-interface ParsedToken {
+export interface ParsedToken {
   negated: boolean;
   field: string | null;
   /** The raw field text as written (before canonical lookup). */
@@ -227,7 +227,7 @@ interface ParsedToken {
   valueUnquoted: string;
 }
 
-function parseToken(text: string): ParsedToken {
+export function parseToken(text: string): ParsedToken {
   let rest = text;
   let negated = false;
 
@@ -262,7 +262,7 @@ function findFieldColon(text: string): number {
   return -1;
 }
 
-function stripQuotes(s: string): string {
+export function stripQuotes(s: string): string {
   if (s.length >= 2 && s[0] === '"' && s[s.length - 1] === '"') {
     return s.slice(1, -1);
   }
@@ -492,4 +492,245 @@ export function getLanguageSuggestions(value: string): SuggestionItem[] {
   }
 
   return results;
+}
+
+// ---------------------------------------------------------------------------
+// Chip / Draft types and helpers
+// ---------------------------------------------------------------------------
+
+export interface SearchChip {
+  /** Unique ID for keyed rendering. */
+  id: string;
+  kind: 'field' | 'text';
+  /** Original raw token text — used for serialization roundtrip. */
+  raw: string;
+  negated: boolean;
+  /** Canonical field name (via `OPERATOR_LOOKUP`), null for text chips. */
+  field: string | null;
+  /** Field text as written (preserves aliases like `pub`, `fmt`). */
+  fieldRaw: string | null;
+  /** Unquoted display value. */
+  displayValue: string;
+}
+
+export interface DraftState {
+  negated: boolean;
+  /** Canonical field name when in field mode, null for bare mode. */
+  field: string | null;
+  /** Field text as written (e.g., `pub` for publisher alias). */
+  fieldRaw: string | null;
+  /** Text being typed — entire input in bare mode, just the value in field mode. */
+  valueText: string;
+}
+
+export const EMPTY_DRAFT: DraftState = {
+  negated: false,
+  field: null,
+  fieldRaw: null,
+  valueText: ''
+};
+
+let chipId = 0;
+
+/** Reset the chip ID counter (for tests). */
+export function resetChipIds(): void {
+  chipId = 0;
+}
+
+// ---------------------------------------------------------------------------
+// Token completeness check
+// ---------------------------------------------------------------------------
+
+/**
+ * Determine whether a token is "complete" (should become a chip) or still
+ * being edited (should remain as draft).
+ *
+ * Complete:
+ *  - `field:value` with recognized field, non-empty value, and closed quotes
+ *  - bare word that does NOT match any operator prefix (e.g., `dune`)
+ *  - bare quoted phrase with closed quotes
+ *  - negated variants of any of the above
+ *
+ * Incomplete:
+ *  - `field:` with empty value
+ *  - `field:"unclosed`
+ *  - bare word matching an operator prefix (e.g., `au` → `author`)
+ *  - bare quoted phrase with unclosed quote
+ */
+export function isTokenComplete(token: TokenSpan): boolean {
+  const parsed = parseToken(token.text);
+
+  if (parsed.field !== null) {
+    // Has a colon — check if the field is recognized and value is non-empty
+    const op = OPERATOR_LOOKUP.get(parsed.field);
+    if (!op) {
+      // Unrecognized field — treat as complete text (e.g., `http://...`)
+      return true;
+    }
+    if (parsed.value === '') return false; // `field:` with no value
+    // Check for unclosed quote
+    if (parsed.value.startsWith('"') && !parsed.value.endsWith('"')) return false;
+    return true;
+  }
+
+  // No field separator
+  const text = parsed.negated ? token.text.slice(1) : token.text;
+
+  // Bare quoted phrase
+  if (text.startsWith('"')) {
+    // Complete if closes with `"`
+    return text.length >= 2 && text.endsWith('"');
+  }
+
+  // Bare word — complete only if it does NOT match any operator prefix
+  return getOperatorSuggestions(text).length === 0;
+}
+
+// ---------------------------------------------------------------------------
+// Token ↔ Chip / Draft conversions
+// ---------------------------------------------------------------------------
+
+/** Convert a complete token into a `SearchChip`. */
+export function tokenToChip(token: TokenSpan): SearchChip {
+  const parsed = parseToken(token.text);
+  const op = parsed.field ? OPERATOR_LOOKUP.get(parsed.field) : null;
+  return {
+    id: `chip-${chipId++}`,
+    kind: parsed.field && op ? 'field' : 'text',
+    raw: token.text,
+    negated: parsed.negated,
+    field: op ? op.name : null,
+    fieldRaw: parsed.fieldRaw,
+    displayValue: parsed.field ? parsed.valueUnquoted : parsed.value
+  };
+}
+
+/** Convert an incomplete token into a structured `DraftState`. */
+export function tokenToDraft(token: TokenSpan): DraftState {
+  const parsed = parseToken(token.text);
+  const op = parsed.field ? OPERATOR_LOOKUP.get(parsed.field) : null;
+  if (op) {
+    return {
+      negated: parsed.negated,
+      field: op.name,
+      fieldRaw: parsed.fieldRaw,
+      valueText: parsed.valueUnquoted
+    };
+  }
+  // Bare mode
+  return {
+    negated: parsed.negated,
+    field: null,
+    fieldRaw: null,
+    valueText: parsed.value
+  };
+}
+
+/**
+ * Commit a draft into a finalized `SearchChip`.
+ * Uses `buildFieldValue()` so multi-word values get properly quoted.
+ */
+export function commitDraft(draft: DraftState): SearchChip {
+  const neg = draft.negated ? '-' : '';
+  let raw: string;
+  let displayValue: string;
+  let kind: 'field' | 'text';
+
+  if (draft.field) {
+    raw = neg + buildFieldValue(draft.fieldRaw ?? draft.field, draft.valueText);
+    displayValue = draft.valueText;
+    kind = 'field';
+  } else {
+    raw = neg + draft.valueText;
+    displayValue = draft.valueText;
+    kind = 'text';
+  }
+
+  return {
+    id: `chip-${chipId++}`,
+    kind,
+    raw,
+    negated: draft.negated,
+    field: draft.field,
+    fieldRaw: draft.fieldRaw,
+    displayValue
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Query ↔ Chips+Draft serialization
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse a query string into committed chips plus an optional trailing draft.
+ *
+ * The last token becomes a draft if `isTokenComplete()` returns false.
+ * All preceding tokens always become chips.
+ */
+export function splitQueryIntoChipsAndDraft(
+  query: string
+): { chips: SearchChip[]; draft: DraftState } {
+  const tokens = tokenize(query);
+  if (tokens.length === 0) {
+    return { chips: [], draft: { ...EMPTY_DRAFT } };
+  }
+
+  const last = tokens[tokens.length - 1];
+  if (!isTokenComplete(last)) {
+    return {
+      chips: tokens.slice(0, -1).map(tokenToChip),
+      draft: tokenToDraft(last)
+    };
+  }
+
+  return {
+    chips: tokens.map(tokenToChip),
+    draft: { ...EMPTY_DRAFT }
+  };
+}
+
+/**
+ * Serialize a draft to its in-progress text form.
+ * Does NOT quote multi-word values — quoting only happens at commit time.
+ */
+export function serializeDraft(draft: DraftState): string {
+  const neg = draft.negated ? '-' : '';
+  if (draft.field) {
+    const fieldText = draft.fieldRaw ?? draft.field;
+    return draft.valueText
+      ? `${neg}${fieldText}:${draft.valueText}`
+      : `${neg}${fieldText}:`;
+  }
+  return draft.valueText ? neg + draft.valueText : '';
+}
+
+/** Join chip raw texts + serialized draft into a full query string. */
+export function chipsToQuery(chips: SearchChip[], draft: DraftState): string {
+  const parts = chips.map((c) => c.raw);
+  const draftText = serializeDraft(draft);
+  if (draftText) parts.push(draftText);
+  return parts.join(' ');
+}
+
+/**
+ * Build a `SuggestionMode` from a known field and current value text.
+ * Used in field-mode draft where the field is already determined.
+ */
+export function fieldToSuggestionMode(op: OperatorDef, value: string): SuggestionMode {
+  switch (op.category) {
+    case 'relation':
+      return { kind: 'relation', field: op.name, value };
+    case 'enum':
+      return { kind: 'enum', field: op.name, value, options: op.values! };
+    case 'boolean':
+      return { kind: 'boolean', field: op.name, value };
+    case 'presence':
+      return { kind: 'presence', field: op.name, value, options: op.values! };
+    case 'language':
+      return { kind: 'language', value };
+    case 'text':
+    case 'range':
+    case 'identifier':
+      return { kind: 'freetext' };
+  }
 }

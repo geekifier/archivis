@@ -11,7 +11,15 @@ import {
   getValueSuggestions,
   getBooleanSuggestions,
   getLanguageSuggestions,
-  tokenize
+  tokenize,
+  isTokenComplete,
+  splitQueryIntoChipsAndDraft,
+  tokenToDraft,
+  commitDraft,
+  chipsToQuery,
+  resetChipIds,
+  EMPTY_DRAFT,
+  type TokenSpan
 } from './search-dsl.js';
 
 // ---------------------------------------------------------------------------
@@ -78,8 +86,6 @@ describe('parseTokenAtCursor', () => {
   });
 
   it('identifies correct token when cursor is in middle of query', () => {
-    // "author:asimov title:dune format:epub"
-    // cursor at position 21 → inside "title:dune"
     const query = 'author:asimov title:dune format:epub';
     const result = parseTokenAtCursor(query, 21);
     expect(result.token?.text).toBe('title:dune');
@@ -383,6 +389,255 @@ describe('findTokenByFieldAndQuery', () => {
 });
 
 // ---------------------------------------------------------------------------
+// A2. Unit tests for chip/draft helpers
+// ---------------------------------------------------------------------------
+
+describe('isTokenComplete', () => {
+  function mkToken(text: string): TokenSpan {
+    return { start: 0, end: text.length, text };
+  }
+
+  it('complete: field:value with recognized field', () => {
+    expect(isTokenComplete(mkToken('format:epub'))).toBe(true);
+    expect(isTokenComplete(mkToken('author:asimov'))).toBe(true);
+    expect(isTokenComplete(mkToken('year:1965..1970'))).toBe(true);
+  });
+
+  it('complete: quoted field value', () => {
+    expect(isTokenComplete(mkToken('author:"Isaac Asimov"'))).toBe(true);
+  });
+
+  it('complete: negated field:value', () => {
+    expect(isTokenComplete(mkToken('-tag:scifi'))).toBe(true);
+  });
+
+  it('complete: bare text not matching operator prefix', () => {
+    expect(isTokenComplete(mkToken('dune'))).toBe(true);
+    expect(isTokenComplete(mkToken('hello'))).toBe(true);
+  });
+
+  it('complete: unrecognized field treated as text', () => {
+    expect(isTokenComplete(mkToken('http://example.com'))).toBe(true);
+  });
+
+  it('incomplete: field with empty value', () => {
+    expect(isTokenComplete(mkToken('author:'))).toBe(false);
+    expect(isTokenComplete(mkToken('format:'))).toBe(false);
+  });
+
+  it('incomplete: unclosed quote in field value', () => {
+    expect(isTokenComplete(mkToken('author:"Isaac'))).toBe(false);
+  });
+
+  it('incomplete: bare word matching operator prefix', () => {
+    expect(isTokenComplete(mkToken('au'))).toBe(false);
+    expect(isTokenComplete(mkToken('for'))).toBe(false);
+    expect(isTokenComplete(mkToken('tag'))).toBe(false);
+  });
+
+  it('incomplete: bare unclosed quote', () => {
+    expect(isTokenComplete(mkToken('"hello'))).toBe(false);
+  });
+
+  it('complete: bare closed quote', () => {
+    expect(isTokenComplete(mkToken('"hello world"'))).toBe(true);
+  });
+});
+
+describe('splitQueryIntoChipsAndDraft', () => {
+  beforeEach(() => resetChipIds());
+
+  it('all complete tokens → all chips, empty draft', () => {
+    const result = splitQueryIntoChipsAndDraft('author:asimov format:epub');
+    expect(result.chips).toHaveLength(2);
+    expect(result.chips[0].field).toBe('author');
+    expect(result.chips[0].displayValue).toBe('asimov');
+    expect(result.chips[1].field).toBe('format');
+    expect(result.chips[1].displayValue).toBe('epub');
+    expect(result.draft).toEqual({ ...EMPTY_DRAFT });
+  });
+
+  it('last token incomplete → becomes draft', () => {
+    const result = splitQueryIntoChipsAndDraft('author:asimov au');
+    expect(result.chips).toHaveLength(1);
+    expect(result.chips[0].field).toBe('author');
+    expect(result.draft.field).toBeNull();
+    expect(result.draft.valueText).toBe('au');
+  });
+
+  it('single incomplete token → no chips, draft', () => {
+    const result = splitQueryIntoChipsAndDraft('author:');
+    expect(result.chips).toHaveLength(0);
+    expect(result.draft.field).toBe('author');
+    expect(result.draft.valueText).toBe('');
+  });
+
+  it('unclosed quote → draft with value', () => {
+    const result = splitQueryIntoChipsAndDraft('author:"Isaac');
+    expect(result.chips).toHaveLength(0);
+    expect(result.draft.field).toBe('author');
+    expect(result.draft.valueText).toBe('Isaac');
+  });
+
+  it('empty query → empty result', () => {
+    const result = splitQueryIntoChipsAndDraft('');
+    expect(result.chips).toHaveLength(0);
+    expect(result.draft).toEqual({ ...EMPTY_DRAFT });
+  });
+
+  it('single complete text → one chip, empty draft', () => {
+    const result = splitQueryIntoChipsAndDraft('dune');
+    expect(result.chips).toHaveLength(1);
+    expect(result.chips[0].kind).toBe('text');
+    expect(result.chips[0].displayValue).toBe('dune');
+    expect(result.draft).toEqual({ ...EMPTY_DRAFT });
+  });
+
+  it('complete tokens + incomplete trailing → chips + draft', () => {
+    const result = splitQueryIntoChipsAndDraft('author:asimov author:');
+    expect(result.chips).toHaveLength(1);
+    expect(result.chips[0].field).toBe('author');
+    expect(result.draft.field).toBe('author');
+    expect(result.draft.valueText).toBe('');
+  });
+
+  it('negated token preserved in chip', () => {
+    const result = splitQueryIntoChipsAndDraft('-tag:scifi');
+    expect(result.chips).toHaveLength(1);
+    expect(result.chips[0].negated).toBe(true);
+    expect(result.chips[0].field).toBe('tag');
+    expect(result.chips[0].displayValue).toBe('scifi');
+  });
+});
+
+describe('commitDraft', () => {
+  beforeEach(() => resetChipIds());
+
+  it('field with multi-word value → quoted raw', () => {
+    const chip = commitDraft({
+      negated: false,
+      field: 'author',
+      fieldRaw: 'author',
+      valueText: 'Isaac Asimov'
+    });
+    expect(chip.raw).toBe('author:"Isaac Asimov"');
+    expect(chip.displayValue).toBe('Isaac Asimov');
+    expect(chip.kind).toBe('field');
+  });
+
+  it('field with single-word value → unquoted raw', () => {
+    const chip = commitDraft({
+      negated: false,
+      field: 'author',
+      fieldRaw: 'author',
+      valueText: 'asimov'
+    });
+    expect(chip.raw).toBe('author:asimov');
+  });
+
+  it('negated field → prefixed raw', () => {
+    const chip = commitDraft({
+      negated: true,
+      field: 'tag',
+      fieldRaw: 'tag',
+      valueText: 'scifi'
+    });
+    expect(chip.raw).toBe('-tag:scifi');
+    expect(chip.negated).toBe(true);
+  });
+
+  it('bare text draft → text chip', () => {
+    const chip = commitDraft({
+      negated: false,
+      field: null,
+      fieldRaw: null,
+      valueText: 'dune'
+    });
+    expect(chip.raw).toBe('dune');
+    expect(chip.kind).toBe('text');
+  });
+
+  it('preserves field alias in raw', () => {
+    const chip = commitDraft({
+      negated: false,
+      field: 'publisher',
+      fieldRaw: 'pub',
+      valueText: 'ace'
+    });
+    expect(chip.raw).toBe('pub:ace');
+  });
+});
+
+describe('chipsToQuery', () => {
+  it('joins chips and empty draft', () => {
+    const chips = [
+      { id: '1', kind: 'field' as const, raw: 'author:asimov', negated: false, field: 'author', fieldRaw: 'author', displayValue: 'asimov' },
+      { id: '2', kind: 'field' as const, raw: 'format:epub', negated: false, field: 'format', fieldRaw: 'format', displayValue: 'epub' }
+    ];
+    expect(chipsToQuery(chips, { ...EMPTY_DRAFT })).toBe('author:asimov format:epub');
+  });
+
+  it('appends draft in field mode', () => {
+    const chips = [
+      { id: '1', kind: 'field' as const, raw: 'format:epub', negated: false, field: 'format', fieldRaw: 'format', displayValue: 'epub' }
+    ];
+    const draft = { negated: false, field: 'author', fieldRaw: 'author', valueText: 'asi' };
+    expect(chipsToQuery(chips, draft)).toBe('format:epub author:asi');
+  });
+
+  it('appends draft in bare mode', () => {
+    const chips = [
+      { id: '1', kind: 'field' as const, raw: 'format:epub', negated: false, field: 'format', fieldRaw: 'format', displayValue: 'epub' }
+    ];
+    const draft = { negated: false, field: null, fieldRaw: null, valueText: 'dune' };
+    expect(chipsToQuery(chips, draft)).toBe('format:epub dune');
+  });
+
+  it('empty chips and empty draft → empty string', () => {
+    expect(chipsToQuery([], { ...EMPTY_DRAFT })).toBe('');
+  });
+});
+
+describe('tokenToDraft', () => {
+  it('converts field token with value', () => {
+    const token: TokenSpan = { start: 0, end: 10, text: 'author:asi' };
+    const d = tokenToDraft(token);
+    expect(d.field).toBe('author');
+    expect(d.valueText).toBe('asi');
+    expect(d.negated).toBe(false);
+  });
+
+  it('converts field token with empty value', () => {
+    const token: TokenSpan = { start: 0, end: 7, text: 'author:' };
+    const d = tokenToDraft(token);
+    expect(d.field).toBe('author');
+    expect(d.valueText).toBe('');
+  });
+
+  it('converts bare word to bare draft', () => {
+    const token: TokenSpan = { start: 0, end: 2, text: 'au' };
+    const d = tokenToDraft(token);
+    expect(d.field).toBeNull();
+    expect(d.valueText).toBe('au');
+  });
+
+  it('handles negated field token', () => {
+    const token: TokenSpan = { start: 0, end: 12, text: '-author:test' };
+    const d = tokenToDraft(token);
+    expect(d.negated).toBe(true);
+    expect(d.field).toBe('author');
+    expect(d.valueText).toBe('test');
+  });
+
+  it('handles unclosed quote', () => {
+    const token: TokenSpan = { start: 0, end: 13, text: 'author:"Isaac' };
+    const d = tokenToDraft(token);
+    expect(d.field).toBe('author');
+    expect(d.valueText).toBe('Isaac');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // B. Component tests for DslSearchBox.svelte
 // ---------------------------------------------------------------------------
 
@@ -427,6 +682,8 @@ describe('DslSearchBox', () => {
     onchangeFn = vi.fn<OnChangeFn>();
     onsubmitFn = vi.fn<OnSubmitFn>();
     onWarningPickFn = vi.fn<OnWarningPickFn>();
+    // Ensure real timers are active (guards against leaking from a previous test)
+    vi.useRealTimers();
   });
 
   function renderBox(props: Record<string, unknown> = {}) {
@@ -444,7 +701,6 @@ describe('DslSearchBox', () => {
   it('renders input with placeholder and search icon', () => {
     renderBox({ placeholder: 'Search books...' });
     expect(screen.getByPlaceholderText('Search books...')).toBeInTheDocument();
-    // Search icon is an SVG with a circle element
     expect(document.querySelector('svg circle')).toBeInTheDocument();
   });
 
@@ -455,7 +711,6 @@ describe('DslSearchBox', () => {
     const input = screen.getByPlaceholderText('Search books...');
     await user.type(input, 'au');
 
-    // Should show `author:` in the dropdown
     expect(screen.getByText('author:')).toBeInTheDocument();
   });
 
@@ -503,19 +758,17 @@ describe('DslSearchBox', () => {
     await user.click(suggestion);
 
     expect(onchangeFn).toHaveBeenCalled();
-    // The input value should end with `author:`
     const lastCallValue = onchangeFn.mock.calls[onchangeFn.mock.calls.length - 1][0];
     expect(lastCallValue).toContain('author:');
   });
 
-  it('selects a suggestion via ArrowDown+Enter', async () => {
+  it('selects a value suggestion via ArrowDown+Enter', async () => {
     const user = userEvent.setup();
     renderBox();
 
     const input = screen.getByPlaceholderText('Search books...');
     await user.type(input, 'format:ep');
 
-    // ArrowDown to highlight first item, Enter to select
     await user.keyboard('{ArrowDown}');
     await user.keyboard('{Enter}');
 
@@ -528,7 +781,6 @@ describe('DslSearchBox', () => {
     renderBox();
 
     const input = screen.getByPlaceholderText('Search books...');
-    // Type something that won't match any operator (so dropdown is closed or no highlight)
     await user.type(input, 'hello world');
     await user.keyboard('{Enter}');
 
@@ -629,23 +881,22 @@ describe('DslSearchBox', () => {
       showWarnings: true
     });
 
-    // Pick from the first warning
     const scienceBtn = screen.getByText('Science');
     await user.click(scienceBtn);
     expect(onWarningPickFn).toHaveBeenCalledWith('tag', 'sci', 't1', 'Science');
 
-    // Pick from the second warning
     const fantasyBtn = screen.getByText('Fantasy');
     await user.click(fantasyBtn);
     expect(onWarningPickFn).toHaveBeenCalledWith('tag', 'fan', 't3', 'Fantasy');
   });
+
+  // --- Stale-request protection ---
 
   it('fetches relation suggestions with stale-request protection (relation→relation)', async () => {
     vi.useFakeTimers();
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     const { api } = await import('$lib/api/index.js');
 
-    // First call resolves slowly, second resolves quickly
     let resolveFirst: (v: unknown) => void;
     const firstPromise = new Promise((r) => {
       resolveFirst = r;
@@ -665,18 +916,17 @@ describe('DslSearchBox', () => {
     renderBox();
     const input = screen.getByPlaceholderText('Search books...');
 
-    // Type `author:a` (triggers relation mode)
+    // Type `author:a` → triggers field mode with relation suggestions
     await user.type(input, 'author:a');
-    await vi.advanceTimersByTimeAsync(200); // relation debounce
+    await vi.advanceTimersByTimeAsync(200);
 
-    // Now type more: `author:asi`
+    // Type more → value becomes `asi`
     await user.type(input, 'si');
-    await vi.advanceTimersByTimeAsync(200); // second debounce fires
+    await vi.advanceTimersByTimeAsync(200);
 
-    // Let the second resolve first
-    await vi.advanceTimersByTimeAsync(0); // microtask
+    await vi.advanceTimersByTimeAsync(0);
 
-    // Now resolve the first (stale) response
+    // Resolve the first (stale) response
     resolveFirst!({
       items: [{ id: 'stale', name: 'Stale Result', sort_name: 'Stale', book_count: 0 }],
       total: 1,
@@ -686,7 +936,6 @@ describe('DslSearchBox', () => {
     });
     await vi.advanceTimersByTimeAsync(0);
 
-    // The stale result should NOT appear
     expect(screen.queryByText('Stale Result')).not.toBeInTheDocument();
 
     vi.useRealTimers();
@@ -709,64 +958,18 @@ describe('DslSearchBox', () => {
     renderBox();
     const input = screen.getByPlaceholderText('Search books...');
 
-    // Type `author:a` → relation mode, starts debounced API call
+    // Type `author:a` → auto-detects field mode (author), valueText = 'a'
     await user.type(input, 'author:a');
     await vi.advanceTimersByTimeAsync(200); // debounce fires, API call in flight
 
-    // User clears and switches to `format:` → enum mode
-    await user.clear(input);
+    // Exit field mode via Backspace (clear `a`, then dissolve field), then type `format:`
+    await user.keyboard('{Backspace}'); // clears valueText → ''
+    await user.keyboard('{Backspace}'); // dissolves field → bare mode with 'author'
+    await user.clear(input); // clear the bare-mode text
     await user.type(input, 'format:');
 
     // Enum suggestions should be showing
     expect(screen.getByText('epub')).toBeInTheDocument();
-
-    // Now the stale author response arrives
-    resolveAuthor!({
-      items: [{ id: 'a1', name: 'Isaac Asimov', sort_name: 'Asimov', book_count: 5 }],
-      total: 1,
-      page: 1,
-      per_page: 10,
-      total_pages: 1
-    });
-    await vi.advanceTimersByTimeAsync(0);
-
-    // Stale author result must NOT appear; enum suggestions should still be showing
-    expect(screen.queryByText('Isaac Asimov')).not.toBeInTheDocument();
-    expect(screen.getByText('epub')).toBeInTheDocument();
-
-    vi.useRealTimers();
-  });
-
-  it('discards stale relation response when cursor moves to a different token', async () => {
-    vi.useFakeTimers();
-    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
-    const { api } = await import('$lib/api/index.js');
-
-    let resolveAuthor: (v: unknown) => void;
-    const authorPromise = new Promise((r) => {
-      resolveAuthor = r;
-    });
-
-    vi.mocked(api.authors.search).mockImplementationOnce(
-      () => authorPromise as ReturnType<typeof api.authors.search>
-    );
-
-    renderBox({ value: 'author:a hello' });
-    const input = screen.getByPlaceholderText('Search books...');
-
-    // Focus and place cursor at end of `author:a` (position 8)
-    await user.click(input);
-    // The input starts with `author:a hello`, cursor at end by default.
-    // Move cursor to position 8 (end of `author:a`) to trigger relation mode.
-    (input as HTMLInputElement).setSelectionRange(8, 8);
-    input.dispatchEvent(new Event('select'));
-    await vi.advanceTimersByTimeAsync(200); // debounce fires
-
-    // Now move cursor to the `hello` token (position 14)
-    (input as HTMLInputElement).setSelectionRange(14, 14);
-    input.dispatchEvent(new Event('select'));
-
-    // `hello` is a bare word → operators mode now; relation is invalidated
 
     // Stale author response arrives
     resolveAuthor!({
@@ -778,10 +981,140 @@ describe('DslSearchBox', () => {
     });
     await vi.advanceTimersByTimeAsync(0);
 
-    // Stale author result must not appear
     expect(screen.queryByText('Isaac Asimov')).not.toBeInTheDocument();
+    expect(screen.getByText('epub')).toBeInTheDocument();
 
     vi.useRealTimers();
+  });
+
+  // --- Chip behavior tests ---
+
+  it('creates a chip when typing a complete token followed by space and more text', async () => {
+    const user = userEvent.setup();
+    renderBox();
+
+    const input = screen.getByPlaceholderText('Search books...');
+    // Type `dune f` — `dune` is complete, `f` starts the next
+    await user.type(input, 'dune f');
+
+    expect(screen.getByText('dune')).toBeInTheDocument();
+    expect(screen.getByLabelText('Remove dune')).toBeInTheDocument();
+  });
+
+  it('auto-detects field mode when typing field:', async () => {
+    const user = userEvent.setup();
+    renderBox();
+
+    const input = screen.getByPlaceholderText('Search books...');
+    await user.type(input, 'format:');
+
+    // Should show format enum suggestions (field mode detected)
+    expect(screen.getByText('epub')).toBeInTheDocument();
+  });
+
+  it('creates chip from value suggestion selection', async () => {
+    const user = userEvent.setup();
+    renderBox();
+
+    const input = screen.getByPlaceholderText('Search books...');
+    await user.type(input, 'format:ep');
+
+    await user.keyboard('{ArrowDown}');
+    await user.keyboard('{Enter}');
+
+    // Should have a chip for format:epub
+    expect(screen.getByText('format:')).toBeInTheDocument();
+    expect(screen.getByText('epub')).toBeInTheDocument();
+  });
+
+  it('backspace on empty input dissolves last chip into draft', async () => {
+    const user = userEvent.setup();
+    renderBox({ value: 'format:epub' });
+
+    // The value is parsed into a chip
+    expect(screen.getByText('format:')).toBeInTheDocument();
+    expect(screen.getByText('epub')).toBeInTheDocument();
+
+    const input = document.querySelector('input[role="combobox"]') as HTMLInputElement;
+    await user.click(input);
+    await user.keyboard('{Backspace}');
+
+    // Chip should be dissolved — the remove button should be gone
+    expect(screen.queryByLabelText('Remove format:epub')).not.toBeInTheDocument();
+  });
+
+  it('removes chip via X button click', async () => {
+    const user = userEvent.setup();
+    renderBox({ value: 'author:asimov format:epub' });
+
+    expect(screen.getByLabelText('Remove author:asimov')).toBeInTheDocument();
+    expect(screen.getByLabelText('Remove format:epub')).toBeInTheDocument();
+
+    await user.click(screen.getByLabelText('Remove author:asimov'));
+
+    expect(screen.queryByLabelText('Remove author:asimov')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Remove format:epub')).toBeInTheDocument();
+  });
+
+  it('external value change re-parses into chips', async () => {
+    const { rerender } = render(DslSearchBox, {
+      props: {
+        value: 'author:asimov',
+        onchange: onchangeFn,
+        onsubmit: onsubmitFn
+      }
+    });
+
+    expect(screen.getByText('asimov')).toBeInTheDocument();
+
+    await rerender({
+      value: 'format:epub dune',
+      onchange: onchangeFn,
+      onsubmit: onsubmitFn
+    });
+
+    expect(screen.getByText('epub')).toBeInTheDocument();
+    expect(screen.getByText('dune')).toBeInTheDocument();
+    expect(screen.queryByText('asimov')).not.toBeInTheDocument();
+  });
+
+  it('external value cleared removes all chips', async () => {
+    const { rerender } = render(DslSearchBox, {
+      props: {
+        value: 'author:asimov format:epub',
+        onchange: onchangeFn,
+        onsubmit: onsubmitFn
+      }
+    });
+
+    expect(screen.getByText('asimov')).toBeInTheDocument();
+
+    await rerender({
+      value: '',
+      onchange: onchangeFn,
+      onsubmit: onsubmitFn
+    });
+
+    expect(screen.queryByText('asimov')).not.toBeInTheDocument();
+    expect(screen.queryByText('epub')).not.toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Search books...')).toBeInTheDocument();
+  });
+
+  it('incomplete external value restores as draft', async () => {
+    renderBox({ value: 'author:' });
+
+    const fieldLabel = screen.getByText('author:');
+    expect(fieldLabel).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('type value...')).toBeInTheDocument();
+    expect(screen.queryByLabelText(/Remove/)).not.toBeInTheDocument();
+  });
+
+  it('negated chip displays negation prefix', () => {
+    renderBox({ value: '-tag:scifi' });
+
+    expect(screen.getByText('-')).toBeInTheDocument();
+    expect(screen.getByText('tag:')).toBeInTheDocument();
+    expect(screen.getByText('scifi')).toBeInTheDocument();
   });
 
   it('hides warnings when showWarnings changes from true to false', async () => {
