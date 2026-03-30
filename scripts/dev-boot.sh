@@ -13,7 +13,7 @@ DATA_DIR="${ARCHIVIS_DATA_DIR:-.local/clean}"
 PORT="${ARCHIVIS_PORT:-9514}"
 DEV_USERNAME="dev"
 DEV_PASSWORD="${ARCHIVIS_DEV_PASSWORD:-}"
-MAX_WAIT="${ARCHIVIS_MAX_WAIT:-60}"
+MAX_WAIT="${ARCHIVIS_MAX_WAIT:-300}"
 BASE_URL="http://127.0.0.1:${PORT}"
 
 # ── Path Safety ─────────────────────────────────────────────────────────────
@@ -98,12 +98,17 @@ cmd_wipe_db() {
 }
 
 cmd_wait() {
+  local watch_pid="${1:-}"
   echo "Waiting for server at ${BASE_URL} (max ${MAX_WAIT}s)..."
   local elapsed=0
   while ((elapsed < MAX_WAIT)); do
     if curl -sf "${BASE_URL}/api/auth/status" >/dev/null 2>&1; then
       echo "Server is ready."
       return 0
+    fi
+    if [[ -n "$watch_pid" ]] && ! kill -0 "$watch_pid" 2>/dev/null; then
+      echo "ERROR: Backend process (PID ${watch_pid}) exited before server became ready" >&2
+      exit 1
     fi
     sleep 1
     elapsed=$((elapsed + 1))
@@ -225,7 +230,7 @@ case "${1:-help}" in
 kill) cmd_kill ;;
 wipe) cmd_wipe ;;
 wipe-db) cmd_wipe_db ;;
-wait) cmd_wait ;;
+wait) cmd_wait "${2:-}" ;;
 setup) cmd_setup ;;
 seed) cmd_seed "${2:-}" ;;
 help | *)
@@ -235,7 +240,7 @@ help | *)
   echo "  kill       Kill any existing process on the server port"
   echo "  wipe       Remove and recreate data directory"
   echo "  wipe-db    Remove only database files from data directory"
-  echo "  wait       Wait for server readiness"
+  echo "  wait [pid] Wait for server readiness (optionally watch pid)"
   echo "  setup      Wait for server + create dev admin account"
   echo "  seed [dir] Import ebooks from dir (default: .local/test-existing)"
   echo ""
@@ -243,6 +248,6 @@ help | *)
   echo "  ARCHIVIS_DATA_DIR       Data directory (default: .local/clean)"
   echo "  ARCHIVIS_PORT           Server port (default: 9514)"
   echo "  ARCHIVIS_DEV_PASSWORD   Admin password (default: random)"
-  echo "  ARCHIVIS_MAX_WAIT       Readiness timeout in seconds (default: 60)"
+  echo "  ARCHIVIS_MAX_WAIT       Readiness timeout in seconds (default: 300)"
   ;;
 esac

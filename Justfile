@@ -72,6 +72,7 @@ sqlx-prepare:
 # Run backend + frontend dev servers
 dev:
     #!/usr/bin/env bash
+    set -euo pipefail
     trap 'kill 0' EXIT
     export ARCHIVIS_ADMIN_USERNAME="${ARCHIVIS_ADMIN_USERNAME:-dev}"
     creds_file=".local/data/.dev-creds"
@@ -86,8 +87,12 @@ dev:
     DEV_PASSWORD=${ARCHIVIS_ADMIN_PASSWORD}
     CREDS
     fi
-    printf 'Dev admin: %s / %s\n' "$ARCHIVIS_ADMIN_USERNAME" "$ARCHIVIS_ADMIN_PASSWORD"
     cargo run --package archivis-server -- --data-dir .local/data --listen-address {{host}} &
+    BACKEND_PID=$!
+    export ARCHIVIS_DATA_DIR=".local/data"
+    ./scripts/dev-boot.sh wait "$BACKEND_PID"
+    printf '\nDev admin: %s / %s\n' "$ARCHIVIS_ADMIN_USERNAME" "$ARCHIVIS_ADMIN_PASSWORD"
+    printf 'Frontend: http://localhost:5173\n\n'
     cd frontend && npm run dev -- --host {{host}} &
     wait
 
@@ -125,18 +130,26 @@ dev-clean:
     ./scripts/dev-boot.sh kill
     ./scripts/dev-boot.sh wipe
     cargo run --package archivis-server -- --data-dir .local/clean --listen-address {{host}} &
-    cd frontend && npm run dev -- --host {{host}} &
-    sleep 1
+    BACKEND_PID=$!
+    ./scripts/dev-boot.sh wait "$BACKEND_PID"
     ./scripts/dev-boot.sh setup
+    cd frontend && npm run dev -- --host {{host}} &
     wait
 
 # Resume existing clean instance data: backend + frontend (no wipe/setup)
 dev-clean-resume:
     #!/usr/bin/env bash
+    set -euo pipefail
     trap 'kill 0' EXIT
-    echo "===== Local Dev Credentials ====="
+    export ARCHIVIS_DATA_DIR=".local/clean"
     cargo run --package archivis-server -- --data-dir .local/clean --listen-address {{host}} &
+    BACKEND_PID=$!
+    ./scripts/dev-boot.sh wait "$BACKEND_PID"
+    echo ""
+    echo "===== Local Dev Credentials ====="
     cat .local/clean/.dev-creds 2>/dev/null || echo "No existing clean creds found"
+    echo "Frontend: http://localhost:5173"
+    echo ""
     cd frontend && npm run dev -- --host {{host}} --clearScreen false &
     wait
 
@@ -156,6 +169,8 @@ dev-clean-backend:
     ./scripts/dev-boot.sh kill
     ./scripts/dev-boot.sh wipe
     cargo run --package archivis-server -- --data-dir .local/clean --listen-address {{host}} &
+    BACKEND_PID=$!
+    ./scripts/dev-boot.sh wait "$BACKEND_PID"
     ./scripts/dev-boot.sh setup
     wait
 
@@ -168,10 +183,11 @@ dev-clean-seed:
     ./scripts/dev-boot.sh kill
     ./scripts/dev-boot.sh wipe
     cargo run --package archivis-server -- --data-dir .local/clean --listen-address {{host}} &
-    cd frontend && npm run dev -- --host {{host}} &
-    sleep 1
+    BACKEND_PID=$!
+    ./scripts/dev-boot.sh wait "$BACKEND_PID"
     ./scripts/dev-boot.sh setup
     ./scripts/dev-boot.sh seed
+    cd frontend && npm run dev -- --host {{host}} &
     wait
 
 # ── Dev API ───────────────────────────────────────────────────────────────────
