@@ -97,7 +97,102 @@ const BOOK_COLUMNS: &str = "\
     b.last_resolution_run_id, b.metadata_locked, b.metadata_user_trusted, \
     b.metadata_provenance, b.cover_path";
 
+/// Returns `true` if the text contains at least one alphanumeric character
+/// that FTS5's tokenizer would index.
+fn has_searchable_chars(text: &str) -> bool {
+    text.chars().any(char::is_alphanumeric)
+}
+
+/// Extra characters treated as part of a token by our FTS index tokenizer.
+const FTS_TOKENCHARS: &[char] = &['+', '#'];
+
+fn escape_fts_phrase(text: &str) -> String {
+    format!("\"{}\"", text.replace('"', "\"\""))
+}
+
+fn is_supported_punctuated_term(term: &str) -> bool {
+    let mut chars = term.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    let Some(last) = term.chars().last() else {
+        return false;
+    };
+
+    if !first.is_alphanumeric() || matches!(last, '-' | '\'') {
+        return false;
+    }
+
+    term.chars()
+        .all(|ch| ch.is_alphanumeric() || FTS_TOKENCHARS.contains(&ch) || matches!(ch, '-' | '\''))
+}
+
+/// Render a single unquoted search token into valid FTS5 syntax.
+///
+/// Bare alphanumeric terms can be emitted directly. Punctuation-bearing terms
+/// that we intentionally support are emitted as quoted phrases so the FTS5
+/// query parser does not interpret punctuation as syntax.
+fn render_regular_fts_term(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let (core, has_explicit_prefix) = trimmed
+        .strip_suffix('*')
+        .filter(|core| !core.is_empty())
+        .map_or((trimmed, false), |core| (core, true));
+
+    if core.is_empty() || core.contains('*') || !has_searchable_chars(core) {
+        return None;
+    }
+
+    let mut rendered = if core.chars().all(char::is_alphanumeric) {
+        core.to_owned()
+    } else if is_supported_punctuated_term(core) {
+        escape_fts_phrase(core)
+    } else {
+        return None;
+    };
+
+    if has_explicit_prefix {
+        rendered.push('*');
+    }
+
+    Some(rendered)
+}
+
+/// Strip leading and trailing `Operator` tokens from a token list.
+fn strip_edge_operators(tokens: &mut Vec<FtsTok>) {
+    while tokens
+        .first()
+        .is_some_and(|t| matches!(t, FtsTok::Operator(_)))
+    {
+        tokens.remove(0);
+    }
+    while tokens
+        .last()
+        .is_some_and(|t| matches!(t, FtsTok::Operator(_)))
+    {
+        tokens.pop();
+    }
+}
+
+/// Returns `true` if the given text would produce at least one searchable FTS
+/// term (positive or negative) after escaping and normalization.
+pub fn text_has_searchable_fts_terms(text: &str) -> bool {
+    let parts = escape_fts_text(text);
+    !parts.positive.is_empty() || !parts.negative.is_empty()
+}
+
+/// Returns `true` if a column-filter term can be rendered into valid FTS5
+/// syntax without degrading into a parser error.
+pub fn column_filter_has_searchable_chars(text: &str) -> bool {
+    !escape_fts_term(text).is_empty()
+}
+
 /// Token types for [`escape_fts_text`].
+#[derive(Clone)]
 enum FtsTok {
     Quoted(String),    // "phrase" — passed through verbatim
     Operator(String),  // OR, NOT — intentional FTS5 operators
@@ -105,23 +200,37 @@ enum FtsTok {
     Regular(String),   // plain search term — candidate for prefix `*`
 }
 
-/// Escape remaining plain-text query for FTS5 and append a prefix `*` to the
-/// last eligible token so partial input matches indexed terms.
+/// Result of escaping FTS5 text, with positive and negative parts separated.
 ///
-/// The input comes from the DSL resolver's `text_query` — it already contains
-/// valid FTS5 syntax such as `NOT term` and `a OR b`.  We escape terms that
-/// *accidentally* look like FTS5 operators (`AND`, `NEAR`) and append a
-/// trailing `*` to the last unquoted, non-operator, non-negated token to
-/// enable prefix matching via the FTS5 prefix indexes.
-fn escape_fts_text(raw: &str) -> String {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return String::new();
-    }
+/// FTS5's `NOT` is a binary infix operator (`a NOT b`), so an expression
+/// starting with `NOT` is a syntax error.  This struct lets callers place
+/// positive terms first and handle negation-only queries gracefully.
+struct FtsTextParts {
+    /// Positive FTS expression (non-NOT terms, trailing `*` on last eligible).
+    positive: String,
+    /// Individual negated terms (without the `NOT` prefix), each suitable for
+    /// a standalone FTS5 MATCH in an exclusion subquery.
+    negative: Vec<String>,
+}
 
-    // ── Pass 1: tokenize ────────────────────────────────────────
+/// Compiled FTS5 expressions for query execution.
+///
+/// `match_expr` is safe to use in `books_fts MATCH ?`.
+/// `exclude_expr` should be used in a `NOT IN (SELECT … MATCH ?)` subquery
+/// when the query consists entirely of negated terms.
+struct FtsCompiled {
+    /// Valid FTS5 MATCH expression (has at least one positive term).
+    match_expr: Option<String>,
+    /// FTS5 MATCH expression for a NOT-IN exclusion subquery (positive form
+    /// of negated terms, OR-joined).  Populated only when there are negated
+    /// terms but no positive terms.
+    exclude_expr: Option<String>,
+}
+
+/// Tokenize raw FTS input into structured tokens.
+fn tokenize_fts_input(input: &str) -> Vec<FtsTok> {
     let mut tokens: Vec<FtsTok> = Vec::new();
-    let mut chars = trimmed.chars().peekable();
+    let mut chars = input.chars().peekable();
 
     while let Some(&c) = chars.peek() {
         if c == '"' {
@@ -158,64 +267,146 @@ fn escape_fts_text(raw: &str) -> String {
             }
         }
     }
+    tokens
+}
 
-    // ── Pass 2: append `*` to the last eligible regular token ───
-    let mut last_prefix_idx: Option<usize> = None;
-    for (i, tok) in tokens.iter().enumerate() {
-        if matches!(tok, FtsTok::Regular(_)) {
-            let preceded_by_not =
-                i > 0 && matches!(&tokens[i - 1], FtsTok::Operator(op) if op == "NOT");
-            if !preceded_by_not {
-                last_prefix_idx = Some(i);
+/// Escape remaining plain-text query for FTS5 and append a prefix `*` to the
+/// last eligible token so partial input matches indexed terms.
+///
+/// The input comes from the DSL resolver's `text_query` — it already contains
+/// valid FTS5 syntax such as `NOT term` and `a OR b`.  We escape terms that
+/// *accidentally* look like FTS5 operators (`AND`, `NEAR`) and append a
+/// trailing `*` to the last unquoted, non-operator, non-negated token to
+/// enable prefix matching via the FTS5 prefix indexes.
+///
+/// Returns [`FtsTextParts`] with positive and negative terms separated so that
+/// callers can ensure positive terms always precede `NOT` groups (FTS5's `NOT`
+/// is a binary infix operator and cannot appear at the start of an expression).
+fn escape_fts_text(raw: &str) -> FtsTextParts {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return FtsTextParts {
+            positive: String::new(),
+            negative: Vec::new(),
+        };
+    }
+
+    // ── Pass 1: tokenize ────────────────────────────────────────
+    let tokens = tokenize_fts_input(trimmed);
+
+    // ── Pass 2: separate positive tokens from NOT-groups ────────
+    let mut positive_tokens: Vec<FtsTok> = Vec::new();
+    let mut negative_tokens: Vec<FtsTok> = Vec::new();
+
+    let mut i = 0;
+    while i < tokens.len() {
+        if matches!(&tokens[i], FtsTok::Operator(op) if op == "NOT") {
+            if i + 1 < tokens.len() {
+                // Render the negated term in FTS5 syntax (for use in exclusion
+                // subqueries where it becomes the positive match target).
+                negative_tokens.push(tokens[i + 1].clone());
+                i += 2;
+            } else {
+                // Bare NOT at end — drop.
+                i += 1;
             }
+        } else {
+            positive_tokens.push(tokens[i].clone());
+            i += 1;
+        }
+    }
+
+    // ── Pass 2.5a: normalize/filter non-searchable tokens ───────
+    // Bare tokens with punctuation must be rewritten into valid FTS5 syntax
+    // (e.g. `c++` -> `"c++"`). Unsupported or punctuation-only terms are
+    // filtered out so they cannot produce invalid MATCH expressions.
+    positive_tokens = positive_tokens
+        .into_iter()
+        .filter_map(|tok| match tok {
+            FtsTok::Regular(s) => render_regular_fts_term(&s).map(FtsTok::Regular),
+            FtsTok::Quoted(s) => has_searchable_chars(&s).then_some(FtsTok::Quoted(s)),
+            other => Some(other),
+        })
+        .collect();
+
+    let negative_terms: Vec<String> = negative_tokens
+        .into_iter()
+        .filter_map(|tok| match tok {
+            FtsTok::Regular(s) => render_regular_fts_term(&s),
+            FtsTok::Quoted(s) => has_searchable_chars(&s).then_some(s),
+            FtsTok::Operator(s) => Some(s),
+            FtsTok::EscapedOp(s) => Some(escape_fts_phrase(&s)),
+        })
+        .collect();
+
+    // ── Pass 2.5b: normalize orphaned operators ────────────────
+    // After filtering, boolean operators (`OR`) may lack operands on
+    // one or both sides. Strip leading/trailing operators and collapse
+    // consecutive operators.
+    strip_edge_operators(&mut positive_tokens);
+    // Collapse consecutive operators (e.g. `a OR OR b` → `a OR b`).
+    positive_tokens
+        .dedup_by(|a, b| matches!(a, FtsTok::Operator(_)) && matches!(b, FtsTok::Operator(_)));
+    // Re-strip in case collapsing exposed new edge operators.
+    strip_edge_operators(&mut positive_tokens);
+
+    // ── Pass 3: append `*` to last eligible positive token ──────
+    let mut last_prefix_idx: Option<usize> = None;
+    for (j, tok) in positive_tokens.iter().enumerate() {
+        if matches!(tok, FtsTok::Regular(_)) {
+            last_prefix_idx = Some(j);
         }
     }
     if let Some(idx) = last_prefix_idx {
-        if let FtsTok::Regular(ref mut term) = tokens[idx] {
+        if let FtsTok::Regular(ref mut term) = positive_tokens[idx] {
             if !term.ends_with('*') {
                 term.push('*');
             }
         }
     }
 
-    // ── Pass 3: build output ────────────────────────────────────
-    let mut result = String::with_capacity(trimmed.len() + 8);
-    for (i, tok) in tokens.iter().enumerate() {
-        if i > 0 {
-            result.push(' ');
+    // ── Pass 4: build positive output ───────────────────────────
+    let mut positive = String::with_capacity(trimmed.len() + 8);
+    for (j, tok) in positive_tokens.iter().enumerate() {
+        if j > 0 {
+            positive.push(' ');
         }
         match tok {
             FtsTok::Quoted(s) | FtsTok::Operator(s) | FtsTok::Regular(s) => {
-                result.push_str(s);
+                positive.push_str(s);
             }
             FtsTok::EscapedOp(s) => {
-                result.push('"');
-                result.push_str(s);
-                result.push('"');
+                positive.push('"');
+                positive.push_str(s);
+                positive.push('"');
             }
         }
     }
 
-    result
+    FtsTextParts {
+        positive,
+        negative: negative_terms,
+    }
 }
 
 /// Escape a single term for FTS5 column-filter use, appending a prefix `*`
 /// to single-word terms so partial input matches indexed tokens.
 fn escape_fts_term(term: &str) -> String {
     let trimmed = term.trim();
-    if trimmed.is_empty() {
+    if trimmed.is_empty() || !has_searchable_chars(trimmed) {
         return String::new();
     }
     // Multi-word term: wrap in quotes (exact phrase match, no prefix).
     if trimmed.contains(' ') {
-        return format!("\"{trimmed}\"");
+        return escape_fts_phrase(trimmed);
     }
-    // Single-word term: ensure trailing `*` for prefix matching.
-    if trimmed.ends_with('*') {
-        trimmed.to_owned()
-    } else {
-        format!("{trimmed}*")
+    let Some(mut rendered) = render_regular_fts_term(trimmed) else {
+        return String::new();
+    };
+    if !rendered.ends_with('*') {
+        rendered.push('*');
     }
+    rendered
 }
 
 /// Compile the FTS5 MATCH expression from the resolved query components.
@@ -224,35 +415,75 @@ fn escape_fts_term(term: &str) -> String {
 /// 1. `filter.query` — remaining plain text/phrases (post-DSL extraction)
 /// 2. `filter.fts_column_filters` — column-qualified terms from DSL
 ///
-/// Returns `None` if there is nothing to match against.
-fn compile_fts_match(filter: &BookFilter) -> Option<String> {
-    let mut parts: Vec<String> = Vec::new();
+/// FTS5's `NOT` is a **binary infix** operator (`a NOT b`), so an expression
+/// that starts with `NOT` is a syntax error.  This function ensures positive
+/// terms always precede `NOT` groups, and falls back to an exclusion subquery
+/// when the query is negation-only.
+fn compile_fts_match(filter: &BookFilter) -> FtsCompiled {
+    let mut positive_parts: Vec<String> = Vec::new();
+    let mut negative_parts: Vec<String> = Vec::new();
 
-    // Add plain text query with FTS5 operator escaping
+    // Separate plain text into positive and negative.
     if let Some(ref q) = filter.query {
-        let escaped = escape_fts_text(q);
-        if !escaped.is_empty() {
-            parts.push(escaped);
+        let parts = escape_fts_text(q);
+        if !parts.positive.is_empty() {
+            positive_parts.push(parts.positive);
+        }
+        for neg_term in parts.negative {
+            negative_parts.push(format!("NOT {neg_term}"));
         }
     }
 
-    // Add column-qualified filters
+    // Separate column-qualified filters.
     for (column, term, negated) in &filter.fts_column_filters {
         let escaped_term = escape_fts_term(term);
         if escaped_term.is_empty() {
             continue;
         }
         if *negated {
-            parts.push(format!("NOT {column} : {escaped_term}"));
+            negative_parts.push(format!("NOT {column} : {escaped_term}"));
         } else {
-            parts.push(format!("{column} : {escaped_term}"));
+            positive_parts.push(format!("{column} : {escaped_term}"));
         }
     }
 
-    if parts.is_empty() {
-        None
+    if positive_parts.is_empty() && negative_parts.is_empty() {
+        return FtsCompiled {
+            match_expr: None,
+            exclude_expr: None,
+        };
+    }
+
+    if positive_parts.is_empty() {
+        // Only negative terms — can't use FTS5 MATCH directly.
+        // Strip `NOT ` prefix from each part and OR-join them for a
+        // positive-match exclusion subquery.
+        let exclusions: Vec<&str> = negative_parts
+            .iter()
+            .filter_map(|n| n.strip_prefix("NOT "))
+            .collect();
+        if exclusions.is_empty() {
+            FtsCompiled {
+                match_expr: None,
+                exclude_expr: None,
+            }
+        } else {
+            FtsCompiled {
+                match_expr: None,
+                exclude_expr: Some(exclusions.join(" OR ")),
+            }
+        }
     } else {
-        Some(parts.join(" "))
+        // Has positive terms — safe to combine (positive first, then NOT groups).
+        let mut expr = positive_parts.join(" ");
+        for neg in &negative_parts {
+            expr.push(' ');
+            expr.push_str(neg);
+        }
+        FtsCompiled {
+            match_expr: Some(expr),
+            exclude_expr: None,
+        }
     }
 }
 
@@ -274,12 +505,23 @@ fn serialize_enum_to_db<T: serde::Serialize>(value: &T) -> String {
 fn build_where_clause(
     qb: &mut sqlx::QueryBuilder<'_, sqlx::Sqlite>,
     filter: &BookFilter,
-    fts_query: Option<String>,
+    fts: &FtsCompiled,
 ) {
     qb.push(" WHERE 1=1");
 
-    if let Some(fts_q) = fts_query {
-        qb.push(" AND books_fts MATCH ").push_bind(fts_q);
+    if filter.matches_nothing {
+        qb.push(" AND 1=0");
+    }
+
+    if let Some(ref fts_q) = fts.match_expr {
+        qb.push(" AND books_fts MATCH ").push_bind(fts_q.clone());
+    }
+
+    // Negation-only FTS: exclude matching books via subquery.
+    if let Some(ref exclude_q) = fts.exclude_expr {
+        qb.push(" AND b.id NOT IN (SELECT book_id FROM books_fts WHERE books_fts MATCH ")
+            .push_bind(exclude_q.clone())
+            .push(")");
     }
 
     if let Some(ref format) = filter.format {
@@ -339,6 +581,24 @@ fn build_where_clause(
             }
             sep.push_unseparated("))");
         }
+    }
+
+    if let Some(ref neg_author_id) = filter.neg_author_id {
+        qb.push(" AND b.id NOT IN (SELECT book_id FROM book_authors WHERE author_id = ")
+            .push_bind(neg_author_id.clone())
+            .push(")");
+    }
+
+    if let Some(ref neg_series_id) = filter.neg_series_id {
+        qb.push(" AND b.id NOT IN (SELECT book_id FROM book_series WHERE series_id = ")
+            .push_bind(neg_series_id.clone())
+            .push(")");
+    }
+
+    if let Some(ref neg_publisher_id) = filter.neg_publisher_id {
+        qb.push(" AND (b.publisher_id IS NULL OR b.publisher_id != ")
+            .push_bind(neg_publisher_id.clone())
+            .push(")");
     }
 
     if let Some(ref publisher_id) = filter.publisher_id {
@@ -540,6 +800,7 @@ impl From<&LibraryFilterState> for BookFilter {
 
         Self {
             query: lfs.text_query.clone(),
+            matches_nothing: false,
             format: lfs.format,
             status: lfs.metadata_status,
             tags: if lfs.tag_ids.is_empty() {
@@ -564,6 +825,9 @@ impl From<&LibraryFilterState> for BookFilter {
             identifier_types,
             identifier_value,
             neg_tag_ids: None,
+            neg_author_id: None,
+            neg_series_id: None,
+            neg_publisher_id: None,
             fts_column_filters: Vec::new(),
         }
     }
@@ -591,6 +855,11 @@ impl BookFilter {
                     .collect(),
             );
         }
+
+        // Add negated relation IDs
+        filter.neg_author_id = resolved.neg_author_id.map(|id| id.to_string());
+        filter.neg_series_id = resolved.neg_series_id.map(|id| id.to_string());
+        filter.neg_publisher_id = resolved.neg_publisher_id.map(|id| id.to_string());
 
         // Add FTS column filters
         filter.fts_column_filters = resolved
@@ -719,15 +988,15 @@ impl BookRepository {
         params: &PaginationParams,
         filter: &BookFilter,
     ) -> Result<PaginatedResult<Book>, DbError> {
-        let fts_query = compile_fts_match(filter);
-        let has_fts = fts_query.is_some();
+        let fts = compile_fts_match(filter);
+        let has_fts = fts.match_expr.is_some();
 
         // ── COUNT ────────────────────────────────────────────
         let mut count_qb = sqlx::QueryBuilder::<sqlx::Sqlite>::new("SELECT COUNT(*) FROM books b");
         if has_fts {
             count_qb.push(" JOIN books_fts ON books_fts.book_id = b.id");
         }
-        build_where_clause(&mut count_qb, filter, fts_query.clone());
+        build_where_clause(&mut count_qb, filter, &fts);
 
         let count_row = count_qb
             .build()
@@ -742,7 +1011,7 @@ impl BookRepository {
         if has_fts {
             qb.push(" JOIN books_fts ON books_fts.book_id = b.id");
         }
-        build_where_clause(&mut qb, filter, fts_query);
+        build_where_clause(&mut qb, filter, &fts);
         append_order_by(&mut qb, params, has_fts, filter.query.as_deref());
         #[allow(clippy::cast_possible_wrap)]
         {
@@ -769,13 +1038,13 @@ impl BookRepository {
 
     /// Return the number of books matching `filter` (no pagination).
     pub async fn count(pool: &SqlitePool, filter: &BookFilter) -> Result<u64, DbError> {
-        let fts_query = compile_fts_match(filter);
+        let fts = compile_fts_match(filter);
 
         let mut qb = sqlx::QueryBuilder::<sqlx::Sqlite>::new("SELECT COUNT(*) FROM books b");
-        if fts_query.is_some() {
+        if fts.match_expr.is_some() {
             qb.push(" JOIN books_fts ON books_fts.book_id = b.id");
         }
-        build_where_clause(&mut qb, filter, fts_query);
+        build_where_clause(&mut qb, filter, &fts);
 
         let row = qb
             .build()
@@ -790,13 +1059,13 @@ impl BookRepository {
 
     /// Return IDs of all books matching `filter` (no pagination).
     pub async fn list_ids(pool: &SqlitePool, filter: &BookFilter) -> Result<Vec<Uuid>, DbError> {
-        let fts_query = compile_fts_match(filter);
+        let fts = compile_fts_match(filter);
 
         let mut qb = sqlx::QueryBuilder::<sqlx::Sqlite>::new("SELECT b.id FROM books b");
-        if fts_query.is_some() {
+        if fts.match_expr.is_some() {
             qb.push(" JOIN books_fts ON books_fts.book_id = b.id");
         }
-        build_where_clause(&mut qb, filter, fts_query);
+        build_where_clause(&mut qb, filter, &fts);
 
         let rows: Vec<(String,)> = qb
             .build_query_as()
@@ -847,13 +1116,13 @@ impl BookRepository {
             return Self::count(pool, filter).await;
         }
 
-        let fts_query = compile_fts_match(filter);
+        let fts = compile_fts_match(filter);
 
         let mut qb = sqlx::QueryBuilder::<sqlx::Sqlite>::new("SELECT COUNT(*) FROM books b");
-        if fts_query.is_some() {
+        if fts.match_expr.is_some() {
             qb.push(" JOIN books_fts ON books_fts.book_id = b.id");
         }
-        build_where_clause(&mut qb, filter, fts_query);
+        build_where_clause(&mut qb, filter, &fts);
 
         // Dedup exclusions before binding to keep the query compact.
         let unique_excluded: HashSet<String> =
@@ -2609,86 +2878,135 @@ impl BookRepository {
 
 #[cfg(test)]
 mod tests {
-    use super::{compile_fts_match, escape_fts_term, escape_fts_text, BookFilter};
+    use super::{
+        compile_fts_match, escape_fts_term, escape_fts_text, text_has_searchable_fts_terms,
+        BookFilter,
+    };
 
     // ── escape_fts_text ──────────────────────────────────────────
 
     #[test]
     fn escape_text_plain_terms() {
-        assert_eq!(escape_fts_text("hello world"), "hello world*");
+        let p = escape_fts_text("hello world");
+        assert_eq!(p.positive, "hello world*");
+        assert!(p.negative.is_empty());
+    }
+
+    #[test]
+    fn escape_text_quotes_cplusplus_term() {
+        let p = escape_fts_text("c++");
+        assert_eq!(p.positive, r#""c++"*"#);
+        assert!(p.negative.is_empty());
+    }
+
+    #[test]
+    fn escape_text_quotes_hyphenated_term() {
+        let p = escape_fts_text("hello-world");
+        assert_eq!(p.positive, r#""hello-world"*"#);
+        assert!(p.negative.is_empty());
     }
 
     #[test]
     fn escape_text_preserves_quoted_phrase() {
-        assert_eq!(escape_fts_text(r#""hello world""#), r#""hello world""#);
+        let p = escape_fts_text(r#""hello world""#);
+        assert_eq!(p.positive, r#""hello world""#);
+        assert!(p.negative.is_empty());
     }
 
     #[test]
     fn escape_text_passes_or_through() {
-        assert_eq!(escape_fts_text("hello OR world"), "hello OR world*");
+        let p = escape_fts_text("hello OR world");
+        assert_eq!(p.positive, "hello OR world*");
+        assert!(p.negative.is_empty());
     }
 
     #[test]
-    fn escape_text_passes_not_through() {
-        assert_eq!(escape_fts_text("NOT dune"), "NOT dune");
+    fn escape_text_separates_not() {
+        let p = escape_fts_text("NOT dune");
+        assert_eq!(p.positive, "");
+        assert_eq!(p.negative, vec!["dune"]);
     }
 
     #[test]
     fn escape_text_escapes_and() {
-        assert_eq!(escape_fts_text("hello AND world"), r#"hello "AND" world*"#);
+        let p = escape_fts_text("hello AND world");
+        assert_eq!(p.positive, r#"hello "AND" world*"#);
+        assert!(p.negative.is_empty());
     }
 
     #[test]
     fn escape_text_escapes_near() {
-        assert_eq!(
-            escape_fts_text("hello NEAR world"),
-            r#"hello "NEAR" world*"#
-        );
+        let p = escape_fts_text("hello NEAR world");
+        assert_eq!(p.positive, r#"hello "NEAR" world*"#);
+        assert!(p.negative.is_empty());
     }
 
     #[test]
     fn escape_text_preserves_prefix_wildcard() {
-        assert_eq!(escape_fts_text("hel*"), "hel*");
+        let p = escape_fts_text("hel*");
+        assert_eq!(p.positive, "hel*");
+        assert!(p.negative.is_empty());
     }
 
     #[test]
     fn escape_text_empty_input() {
-        assert_eq!(escape_fts_text(""), "");
-        assert_eq!(escape_fts_text("   "), "");
+        let p = escape_fts_text("");
+        assert_eq!(p.positive, "");
+        assert!(p.negative.is_empty());
+        let p = escape_fts_text("   ");
+        assert_eq!(p.positive, "");
+        assert!(p.negative.is_empty());
     }
 
     #[test]
     fn escape_text_unclosed_quote() {
-        assert_eq!(escape_fts_text(r#""unclosed"#), r#""unclosed""#);
+        let p = escape_fts_text(r#""unclosed"#);
+        assert_eq!(p.positive, r#""unclosed""#);
     }
 
     #[test]
     fn escape_text_case_insensitive_and() {
-        // `and` / `And` are still the AND operator in FTS5
-        assert_eq!(escape_fts_text("and"), r#""and""#);
-        assert_eq!(escape_fts_text("And"), r#""And""#);
+        assert_eq!(escape_fts_text("and").positive, r#""and""#);
+        assert_eq!(escape_fts_text("And").positive, r#""And""#);
     }
 
     #[test]
     fn escape_text_or_case_insensitive_passthrough() {
-        assert_eq!(escape_fts_text("or"), "or*");
-        assert_eq!(escape_fts_text("Or"), "Or*");
+        assert_eq!(escape_fts_text("or").positive, "or*");
+        assert_eq!(escape_fts_text("Or").positive, "Or*");
     }
 
     #[test]
     fn escape_text_mixed_input() {
-        assert_eq!(
-            escape_fts_text(r#"brandon "the final empire" OR sanderson"#),
-            r#"brandon "the final empire" OR sanderson*"#,
-        );
+        let p = escape_fts_text(r#"brandon "the final empire" OR sanderson"#);
+        assert_eq!(p.positive, r#"brandon "the final empire" OR sanderson*"#);
+        assert!(p.negative.is_empty());
     }
 
     #[test]
     fn escape_text_not_with_or() {
-        assert_eq!(
-            escape_fts_text("dune OR NOT foundation"),
-            "dune* OR NOT foundation"
-        );
+        // `dune OR NOT foundation` — `foundation` is extracted as a negative term,
+        // the trailing orphaned `OR` is stripped by Pass 2.5b.
+        let p = escape_fts_text("dune OR NOT foundation");
+        assert_eq!(p.positive, "dune*");
+        assert_eq!(p.negative, vec!["foundation"]);
+    }
+
+    #[test]
+    fn escape_text_mixed_positive_and_negative() {
+        // `sanderson NOT dune` — positive first, negative separated.
+        let p = escape_fts_text("sanderson NOT dune");
+        assert_eq!(p.positive, "sanderson*");
+        assert_eq!(p.negative, vec!["dune"]);
+    }
+
+    #[test]
+    fn escape_text_negative_before_positive() {
+        // `NOT dune sanderson` — after separation, positive has `sanderson`,
+        // negative has `dune`.
+        let p = escape_fts_text("NOT dune sanderson");
+        assert_eq!(p.positive, "sanderson*");
+        assert_eq!(p.negative, vec!["dune"]);
     }
 
     // ── escape_fts_term ──────────────────────────────────────────
@@ -2696,6 +3014,16 @@ mod tests {
     #[test]
     fn escape_term_simple() {
         assert_eq!(escape_fts_term("dune"), "dune*");
+    }
+
+    #[test]
+    fn escape_term_cplusplus() {
+        assert_eq!(escape_fts_term("c++"), r#""c++"*"#);
+    }
+
+    #[test]
+    fn escape_term_hyphenated() {
+        assert_eq!(escape_fts_term("hello-world"), r#""hello-world"*"#);
     }
 
     #[test]
@@ -2722,7 +3050,20 @@ mod tests {
             query: Some("dune".into()),
             ..Default::default()
         };
-        assert_eq!(compile_fts_match(&filter), Some("dune*".into()));
+        let fts = compile_fts_match(&filter);
+        assert_eq!(fts.match_expr.as_deref(), Some("dune*"));
+        assert!(fts.exclude_expr.is_none());
+    }
+
+    #[test]
+    fn match_text_cplusplus() {
+        let filter = BookFilter {
+            query: Some("c++".into()),
+            ..Default::default()
+        };
+        let fts = compile_fts_match(&filter);
+        assert_eq!(fts.match_expr.as_deref(), Some(r#""c++"*"#));
+        assert!(fts.exclude_expr.is_none());
     }
 
     #[test]
@@ -2731,7 +3072,20 @@ mod tests {
             fts_column_filters: vec![("title".into(), "dune".into(), false)],
             ..Default::default()
         };
-        assert_eq!(compile_fts_match(&filter), Some("title : dune*".into()));
+        let fts = compile_fts_match(&filter);
+        assert_eq!(fts.match_expr.as_deref(), Some("title : dune*"));
+        assert!(fts.exclude_expr.is_none());
+    }
+
+    #[test]
+    fn match_column_filter_cplusplus() {
+        let filter = BookFilter {
+            fts_column_filters: vec![("title".into(), "c++".into(), false)],
+            ..Default::default()
+        };
+        let fts = compile_fts_match(&filter);
+        assert_eq!(fts.match_expr.as_deref(), Some(r#"title : "c++"*"#));
+        assert!(fts.exclude_expr.is_none());
     }
 
     #[test]
@@ -2741,25 +3095,28 @@ mod tests {
             fts_column_filters: vec![("title".into(), "dune".into(), false)],
             ..Default::default()
         };
-        assert_eq!(
-            compile_fts_match(&filter),
-            Some("herbert* title : dune*".into())
-        );
+        let fts = compile_fts_match(&filter);
+        assert_eq!(fts.match_expr.as_deref(), Some("herbert* title : dune*"));
+        assert!(fts.exclude_expr.is_none());
     }
 
     #[test]
-    fn match_negated_column_filter() {
+    fn match_negated_column_filter_only_uses_exclude() {
+        // Negation-only column filter → exclude_expr, no match_expr.
         let filter = BookFilter {
             fts_column_filters: vec![("title".into(), "dune".into(), true)],
             ..Default::default()
         };
-        assert_eq!(compile_fts_match(&filter), Some("NOT title : dune*".into()));
+        let fts = compile_fts_match(&filter);
+        assert!(fts.match_expr.is_none());
+        assert_eq!(fts.exclude_expr.as_deref(), Some("title : dune*"));
     }
 
     #[test]
     fn match_empty_filter() {
-        let filter = BookFilter::default();
-        assert_eq!(compile_fts_match(&filter), None);
+        let fts = compile_fts_match(&BookFilter::default());
+        assert!(fts.match_expr.is_none());
+        assert!(fts.exclude_expr.is_none());
     }
 
     #[test]
@@ -2768,11 +3125,14 @@ mod tests {
             query: Some("   ".into()),
             ..Default::default()
         };
-        assert_eq!(compile_fts_match(&filter), None);
+        let fts = compile_fts_match(&filter);
+        assert!(fts.match_expr.is_none());
+        assert!(fts.exclude_expr.is_none());
     }
 
     #[test]
-    fn match_multiple_column_filters() {
+    fn match_positive_column_and_negated_column() {
+        // Mixed positive + negated column filters → positive first in match_expr.
         let filter = BookFilter {
             fts_column_filters: vec![
                 ("title".into(), "dune".into(), false),
@@ -2780,10 +3140,12 @@ mod tests {
             ],
             ..Default::default()
         };
+        let fts = compile_fts_match(&filter);
         assert_eq!(
-            compile_fts_match(&filter),
-            Some("title : dune* NOT description : spice*".into())
+            fts.match_expr.as_deref(),
+            Some("title : dune* NOT description : spice*")
         );
+        assert!(fts.exclude_expr.is_none());
     }
 
     #[test]
@@ -2792,10 +3154,8 @@ mod tests {
             fts_column_filters: vec![("title".into(), "dune messiah".into(), false)],
             ..Default::default()
         };
-        assert_eq!(
-            compile_fts_match(&filter),
-            Some(r#"title : "dune messiah""#.into())
-        );
+        let fts = compile_fts_match(&filter);
+        assert_eq!(fts.match_expr.as_deref(), Some(r#"title : "dune messiah""#));
     }
 
     #[test]
@@ -2805,29 +3165,243 @@ mod tests {
             fts_column_filters: vec![("title".into(), "   ".into(), false)],
             ..Default::default()
         };
-        assert_eq!(compile_fts_match(&filter), Some("dune*".into()));
+        let fts = compile_fts_match(&filter);
+        assert_eq!(fts.match_expr.as_deref(), Some("dune*"));
+    }
+
+    // ── negation-only (the bug fix) ────────────────────────────────
+
+    #[test]
+    fn match_negated_text_only_uses_exclude() {
+        // `-dune` → text_query = "NOT dune" → must use exclude subquery.
+        let filter = BookFilter {
+            query: Some("NOT dune".into()),
+            ..Default::default()
+        };
+        let fts = compile_fts_match(&filter);
+        assert!(fts.match_expr.is_none());
+        assert_eq!(fts.exclude_expr.as_deref(), Some("dune"));
+    }
+
+    #[test]
+    fn match_multiple_negated_text_uses_exclude() {
+        // `-dune -messiah` → text_query = "NOT dune NOT messiah"
+        let filter = BookFilter {
+            query: Some("NOT dune NOT messiah".into()),
+            ..Default::default()
+        };
+        let fts = compile_fts_match(&filter);
+        assert!(fts.match_expr.is_none());
+        assert_eq!(fts.exclude_expr.as_deref(), Some("dune OR messiah"));
+    }
+
+    #[test]
+    fn match_positive_text_with_negation_reorders() {
+        // `NOT dune sanderson` → positive "sanderson" comes before NOT.
+        let filter = BookFilter {
+            query: Some("NOT dune sanderson".into()),
+            ..Default::default()
+        };
+        let fts = compile_fts_match(&filter);
+        assert_eq!(fts.match_expr.as_deref(), Some("sanderson* NOT dune"));
+        assert!(fts.exclude_expr.is_none());
+    }
+
+    #[test]
+    fn match_positive_text_with_negated_column() {
+        // Positive text + negated column → combined in match_expr.
+        let filter = BookFilter {
+            query: Some("herbert".into()),
+            fts_column_filters: vec![("title".into(), "dune".into(), true)],
+            ..Default::default()
+        };
+        let fts = compile_fts_match(&filter);
+        assert_eq!(
+            fts.match_expr.as_deref(),
+            Some("herbert* NOT title : dune*")
+        );
+        assert!(fts.exclude_expr.is_none());
     }
 
     // ── prefix-specific ────────────────────────────────────────────
 
     #[test]
     fn escape_text_single_term_gets_prefix() {
-        assert_eq!(escape_fts_text("sapkow"), "sapkow*");
+        assert_eq!(escape_fts_text("sapkow").positive, "sapkow*");
     }
 
     #[test]
     fn escape_text_quoted_then_regular() {
-        assert_eq!(
-            escape_fts_text(r#""exact phrase" sapkow"#),
-            r#""exact phrase" sapkow*"#,
-        );
+        let p = escape_fts_text(r#""exact phrase" sapkow"#);
+        assert_eq!(p.positive, r#""exact phrase" sapkow*"#);
     }
 
     #[test]
     fn escape_text_all_negated_no_prefix() {
-        assert_eq!(
-            escape_fts_text("NOT dune NOT foundation"),
-            "NOT dune NOT foundation",
-        );
+        let p = escape_fts_text("NOT dune NOT foundation");
+        assert_eq!(p.positive, "");
+        assert_eq!(p.negative, vec!["dune", "foundation"]);
+    }
+
+    // ── non-searchable token filtering (Pass 2.5) ──────────────────
+
+    #[test]
+    fn escape_text_double_dash() {
+        let p = escape_fts_text("--");
+        assert_eq!(p.positive, "");
+        assert!(p.negative.is_empty());
+    }
+
+    #[test]
+    fn escape_text_triple_dash() {
+        let p = escape_fts_text("---");
+        assert_eq!(p.positive, "");
+        assert!(p.negative.is_empty());
+    }
+
+    #[test]
+    fn escape_text_ellipsis() {
+        let p = escape_fts_text("...");
+        assert_eq!(p.positive, "");
+        assert!(p.negative.is_empty());
+    }
+
+    #[test]
+    fn escape_text_quoted_ellipsis() {
+        let p = escape_fts_text(r#""...""#);
+        assert_eq!(p.positive, "");
+        assert!(p.negative.is_empty());
+    }
+
+    #[test]
+    fn escape_text_not_double_dash() {
+        let p = escape_fts_text("NOT --");
+        assert_eq!(p.positive, "");
+        assert!(p.negative.is_empty());
+    }
+
+    #[test]
+    fn escape_text_not_quoted_ellipsis() {
+        let p = escape_fts_text(r#"NOT "...""#);
+        assert_eq!(p.positive, "");
+        assert!(p.negative.is_empty());
+    }
+
+    #[test]
+    fn escape_text_term_or_double_dash() {
+        let p = escape_fts_text("dune OR --");
+        assert_eq!(p.positive, "dune*");
+        assert!(p.negative.is_empty());
+    }
+
+    #[test]
+    fn escape_text_double_dash_or_term() {
+        let p = escape_fts_text("-- OR dune");
+        assert_eq!(p.positive, "dune*");
+        assert!(p.negative.is_empty());
+    }
+
+    #[test]
+    fn escape_text_double_dash_or_triple_dash() {
+        let p = escape_fts_text("-- OR ---");
+        assert_eq!(p.positive, "");
+        assert!(p.negative.is_empty());
+    }
+
+    #[test]
+    fn escape_text_double_dash_then_term() {
+        let p = escape_fts_text("-- term");
+        assert_eq!(p.positive, "term*");
+        assert!(p.negative.is_empty());
+    }
+
+    #[test]
+    fn escape_text_double_dash_word_is_filtered() {
+        let p = escape_fts_text("--x");
+        assert_eq!(p.positive, "");
+        assert!(p.negative.is_empty());
+    }
+
+    #[test]
+    fn escape_text_term_not_double_dash_term() {
+        // `dune NOT -- sapkowski` — `--` is the NOT operand, filtered out,
+        // leaving `dune sapkowski`.
+        let p = escape_fts_text("dune NOT -- sapkowski");
+        assert_eq!(p.positive, "dune sapkowski*");
+        assert!(p.negative.is_empty());
+    }
+
+    #[test]
+    fn escape_text_a_or_dash_or_b() {
+        // `a OR -- OR b` → filter `--` → collapse consecutive ORs → `a OR b`
+        let p = escape_fts_text("a OR -- OR b");
+        assert_eq!(p.positive, "a OR b*");
+        assert!(p.negative.is_empty());
+    }
+
+    // ── escape_fts_term non-searchable ──────────────────────────────
+
+    #[test]
+    fn escape_term_double_dash() {
+        assert_eq!(escape_fts_term("--"), "");
+    }
+
+    #[test]
+    fn escape_term_ellipsis() {
+        assert_eq!(escape_fts_term("..."), "");
+    }
+
+    #[test]
+    fn escape_term_multi_word_ellipsis() {
+        assert_eq!(escape_fts_term("... ..."), "");
+    }
+
+    // ── compile_fts_match non-searchable ────────────────────────────
+
+    #[test]
+    fn match_double_dash_query() {
+        let filter = BookFilter {
+            query: Some("--".into()),
+            ..Default::default()
+        };
+        let fts = compile_fts_match(&filter);
+        assert!(fts.match_expr.is_none());
+        assert!(fts.exclude_expr.is_none());
+    }
+
+    #[test]
+    fn match_column_filter_double_dash() {
+        let filter = BookFilter {
+            fts_column_filters: vec![("title".into(), "--".into(), false)],
+            ..Default::default()
+        };
+        let fts = compile_fts_match(&filter);
+        assert!(fts.match_expr.is_none());
+        assert!(fts.exclude_expr.is_none());
+    }
+
+    #[test]
+    fn match_column_filter_ellipsis() {
+        let filter = BookFilter {
+            fts_column_filters: vec![("title".into(), "...".into(), false)],
+            ..Default::default()
+        };
+        let fts = compile_fts_match(&filter);
+        assert!(fts.match_expr.is_none());
+        assert!(fts.exclude_expr.is_none());
+    }
+
+    // ── text_has_searchable_fts_terms ───────────────────────────────
+
+    #[test]
+    fn searchable_terms_check() {
+        assert!(!text_has_searchable_fts_terms("--"));
+        assert!(!text_has_searchable_fts_terms("--x"));
+        assert!(!text_has_searchable_fts_terms("---"));
+        assert!(!text_has_searchable_fts_terms("..."));
+        assert!(text_has_searchable_fts_terms("dune"));
+        assert!(text_has_searchable_fts_terms("c++"));
+        assert!(text_has_searchable_fts_terms("hello-world"));
+        assert!(text_has_searchable_fts_terms("dune OR --"));
     }
 }

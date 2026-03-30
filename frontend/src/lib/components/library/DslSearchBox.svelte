@@ -32,7 +32,7 @@
 		placeholder?: string;
 		warnings?: QueryWarning[];
 		showWarnings?: boolean;
-		onWarningPick?: (field: string, query: string, id: string, name: string) => void;
+		onWarningPick?: (field: string, query: string, id: string, name: string, negated: boolean) => void;
 		onchange?: (value: string) => void;
 		onsubmit?: () => void;
 	}
@@ -164,10 +164,10 @@
 			};
 		} else {
 			draft = {
-				negated: lastParsed.negated,
+				negated: false,
 				field: null,
 				fieldRaw: null,
-				valueText: lastParsed.value
+				valueText: (lastParsed.negated ? '-' : '') + lastParsed.value
 			};
 		}
 	}
@@ -330,13 +330,16 @@
 
 	function selectSuggestion(item: SuggestionItem) {
 		const isOperator = item.insertText.endsWith(':');
+		// In bare mode, negation lives inside valueText rather than the flag
+		const negated =
+			draft.field === null ? draft.valueText.startsWith('-') : draft.negated;
 
 		if (isOperator) {
 			// Transition to field mode — no chip created yet
 			const fieldName = item.insertText.slice(0, -1);
 			const op = OPERATOR_LOOKUP.get(fieldName);
 			draft = {
-				negated: draft.negated,
+				negated,
 				field: op?.name ?? fieldName,
 				fieldRaw: fieldName,
 				valueText: ''
@@ -355,8 +358,8 @@
 			const chip: SearchChip = {
 				id: `chip-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
 				kind: op ? 'field' : 'text',
-				raw: (draft.negated ? '-' : '') + item.insertText,
-				negated: draft.negated,
+				raw: (negated ? '-' : '') + item.insertText,
+				negated,
 				field: op?.name ?? null,
 				fieldRaw: parsed.fieldRaw,
 				displayValue: parsed.field ? parsed.valueUnquoted : parsed.value
@@ -418,7 +421,7 @@
 				// Field mode with empty value → dissolve to bare mode
 				e.preventDefault();
 				draft = {
-					negated: draft.negated,
+					negated: false,
 					field: null,
 					fieldRaw: null,
 					valueText: (draft.negated ? '-' : '') + (draft.fieldRaw ?? draft.field)
@@ -496,8 +499,8 @@
 		}, 150);
 	}
 
-	function handleWarningPickInternal(field: string, query: string, id: string, name: string) {
-		onWarningPick?.(field, query, id, name);
+	function handleWarningPickInternal(field: string, query: string, id: string, name: string, negated: boolean) {
+		onWarningPick?.(field, query, id, name, negated);
 	}
 
 	function handleContainerClick(e: MouseEvent) {

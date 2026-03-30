@@ -13,8 +13,12 @@
   import FilterPanel from '$lib/components/library/FilterPanel.svelte';
   import DslSearchBox from '$lib/components/library/DslSearchBox.svelte';
   import {
+    buildFieldValue,
     findTokenByFieldAndQuery,
-    replaceTokenInQuery
+    replaceTokenInQuery,
+    splitQueryIntoChipsAndDraft,
+    chipsToQuery,
+    EMPTY_DRAFT
   } from '$lib/components/library/search-dsl.js';
   import ActiveTaskPanel from '$lib/components/tasks/ActiveTaskPanel.svelte';
   import { page } from '$app/state';
@@ -55,9 +59,17 @@
   // Restore filters from URL
   filters.fromURLParams(_params);
 
+  /** Build the API query from only the complete (committed) tokens, dropping
+   *  any trailing incomplete draft (bare `-`, `author:`, unclosed quote, etc.)
+   *  so that in-progress typing never triggers an invalid FTS5 request. */
+  function deriveExecutableQuery(raw: string): string {
+    const { chips } = splitQueryIntoChipsAndDraft(raw);
+    return chipsToQuery(chips, EMPTY_DRAFT).trim();
+  }
+
   let viewMode = $state<ViewMode>(loadViewPreference());
   let searchInput = $state(_initQuery);
-  let activeQuery = $state(_initQuery);
+  let activeQuery = $state(deriveExecutableQuery(_initQuery));
   let sortIndex = $state(_initSortIdx >= 0 ? _initSortIdx : 0);
   let currentPage = $state(_initPage);
   let loading = $state(true);
@@ -141,13 +153,13 @@
     searchInput = val;
     clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => {
-      activeQuery = val.trim();
+      activeQuery = deriveExecutableQuery(val);
     }, DEBOUNCE_MS);
   }
 
   function handleSearchSubmit() {
     clearTimeout(debounceTimer);
-    activeQuery = searchInput.trim();
+    activeQuery = deriveExecutableQuery(searchInput);
   }
 
   // Track whether the user has made an explicit sort choice during the current search.
@@ -559,33 +571,46 @@
     searchInput.trim() === activeQuery && !warningsSuppressed
   );
 
-  function handleWarningPick(field: string, query: string, id: string, name: string) {
-    // 1. ID-precise resolution via filter store (source of truth)
-    switch (field) {
-      case 'author':
-        filters.setAuthor({ id, name });
-        break;
-      case 'series':
-        filters.setSeries({ id, name });
-        break;
-      case 'publisher':
-        filters.setPublisher({ id, name });
-        break;
-      case 'tag':
-        filters.addTag({ id, name, category: null });
-        break;
+  function handleWarningPick(field: string, query: string, id: string, name: string, negated: boolean) {
+    const token = findTokenByFieldAndQuery(searchInput, field, query, negated);
+
+    if (negated) {
+      // Negated pick: rewrite the ambiguous token to an exact negated token.
+      // `replaceTokenInQuery` preserves the `-` prefix from the original token.
+      if (token) {
+        const replacement = buildFieldValue(field, name);
+        const { newQuery } = replaceTokenInQuery(searchInput, token, replacement);
+        searchInput = newQuery.trim();
+        clearTimeout(debounceTimer);
+        activeQuery = searchInput;
+      }
+    } else {
+      // Positive pick: resolve via filter store (source of truth)
+      switch (field) {
+        case 'author':
+          filters.setAuthor({ id, name });
+          break;
+        case 'series':
+          filters.setSeries({ id, name });
+          break;
+        case 'publisher':
+          filters.setPublisher({ id, name });
+          break;
+        case 'tag':
+          filters.addTag({ id, name, category: null });
+          break;
+      }
+
+      // Remove the ambiguous token so it doesn't re-trigger the warning
+      if (token) {
+        const { newQuery } = replaceTokenInQuery(searchInput, token, '');
+        searchInput = newQuery.trim();
+        clearTimeout(debounceTimer);
+        activeQuery = searchInput;
+      }
     }
 
-    // 2. Cosmetic: remove the ambiguous token so it doesn't re-trigger the warning
-    const token = findTokenByFieldAndQuery(searchInput, field, query);
-    if (token) {
-      const { newQuery } = replaceTokenInQuery(searchInput, token, '');
-      searchInput = newQuery.trim();
-      clearTimeout(debounceTimer);
-      activeQuery = searchInput;
-    }
-
-    // 3. Suppress old warnings until the next accepted fetch resolves.
+    // Suppress old warnings until the next accepted fetch resolves.
     warningsSuppressed = true;
   }
 </script>

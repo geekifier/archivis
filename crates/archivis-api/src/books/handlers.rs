@@ -351,8 +351,8 @@ async fn resolve_dsl(
     pool: &archivis_db::DbPool,
     mut filter_state: LibraryFilterState,
 ) -> Result<(LibraryFilterState, BookFilter, Vec<QueryWarningResponse>), ApiError> {
-    let raw_query = filter_state.text_query.as_deref().unwrap_or("");
-    let parsed = parse_search_query(raw_query);
+    let raw_query = filter_state.text_query.clone().unwrap_or_default();
+    let parsed = parse_search_query(&raw_query);
 
     // Collect warnings for any empty field operators (e.g. `author:` with no value).
     let dropped_warnings: Vec<QueryWarningResponse> = parsed
@@ -370,26 +370,52 @@ async fn resolve_dsl(
     }
 
     // If there are no executable DSL clauses, skip resolution.
+    // Always clear `text_query` — the raw input (e.g. "-", "OR", "author:")
+    // has no executable content and must not leak into the FTS5 MATCH.
     if parsed.clauses.is_empty() {
-        // Clear `text_query` when fields were dropped so the raw DSL string
-        // (e.g. "author:") does not leak into the FTS5 MATCH expression.
-        if !parsed.dropped_empty_fields.is_empty() {
-            filter_state.text_query = None;
-        }
-        let book_filter = BookFilter::from(&filter_state);
+        filter_state.text_query = None;
+        let mut book_filter = BookFilter::from(&filter_state);
+        book_filter.matches_nothing = !raw_query.trim().is_empty();
         return Ok((filter_state, book_filter, dropped_warnings));
     }
 
-    let resolved = SearchResolver::resolve(pool, &parsed).await?;
+    let mut resolved = SearchResolver::resolve(pool, &parsed).await?;
+
+    // ── Filter non-searchable text / column terms before they reach FTS5 ──
+    let mut no_search_warnings: Vec<QueryWarningResponse> = Vec::new();
+
+    if let Some(ref text) = resolved.text_query {
+        if !archivis_db::text_has_searchable_fts_terms(text) {
+            no_search_warnings.push(QueryWarningResponse::NoSearchableTerms {
+                text: text.clone(),
+                field: None,
+            });
+            resolved.text_query = None;
+        }
+    }
+
+    resolved.fts_column_filters.retain(|f| {
+        if archivis_db::column_filter_has_searchable_chars(&f.term) {
+            true
+        } else {
+            no_search_warnings.push(QueryWarningResponse::NoSearchableTerms {
+                text: f.term.clone(),
+                field: Some(f.column.clone()),
+            });
+            false
+        }
+    });
 
     // Merge resolved relation IDs into `filter_state` (explicit params win).
     merge_resolved_into_filter(&mut filter_state, &resolved);
 
     let mut warnings: Vec<QueryWarningResponse> =
         resolved.warnings.iter().cloned().map(Into::into).collect();
+    warnings.extend(no_search_warnings);
     warnings.extend(dropped_warnings);
 
-    let book_filter = BookFilter::from_resolved(&filter_state, &resolved);
+    let mut book_filter = BookFilter::from_resolved(&filter_state, &resolved);
+    book_filter.matches_nothing = !resolved.has_constraints();
     Ok((filter_state, book_filter, warnings))
 }
 
@@ -3522,6 +3548,268 @@ mod tests {
             )),
             "expected UnsupportedOrField with negated=true, got: {:?}",
             resp.search_warnings,
+        );
+    }
+
+    // ── Incomplete-token DSL regression tests ────────────────────
+
+    #[tokio::test]
+    async fn list_books_incomplete_tokens_return_200() {
+        let tmp = TempDir::new().unwrap();
+        let state = test_state(&tmp).await;
+
+        for q in ["-", "OR", "\"\"", "   ", "- "] {
+            let result = list_books(
+                State(state.clone()),
+                auth_user(),
+                Query(BookListParams {
+                    q: Some(q.into()),
+                    ..Default::default()
+                }),
+            )
+            .await;
+            assert!(result.is_ok(), "q={q:?} should return 200, not 500");
+        }
+    }
+
+    // ── Non-searchable text queries (punctuation-only) ──────────────
+
+    #[tokio::test]
+    async fn list_books_double_dash_returns_200_with_warning() {
+        let tmp = TempDir::new().unwrap();
+        let state = test_state(&tmp).await;
+        BookRepository::create(state.db_pool(), &Book::new("Existing Book"))
+            .await
+            .unwrap();
+
+        let result = list_books(
+            State(state.clone()),
+            auth_user(),
+            Query(BookListParams {
+                q: Some("--".into()),
+                ..Default::default()
+            }),
+        )
+        .await;
+
+        let resp = result.expect("q=-- should return 200, not 500");
+        assert_eq!(resp.total, 0);
+        assert!(resp.items.is_empty());
+        assert!(
+            resp.search_warnings.iter().any(|w| matches!(
+                w,
+                QueryWarningResponse::NoSearchableTerms { field, .. } if field.is_none()
+            )),
+            "expected NoSearchableTerms warning, got: {:?}",
+            resp.search_warnings,
+        );
+    }
+
+    #[tokio::test]
+    async fn list_books_punctuation_only_queries_return_200() {
+        let tmp = TempDir::new().unwrap();
+        let state = test_state(&tmp).await;
+
+        for q in ["--", "---", "\"...\"", "NOT --"] {
+            let result = list_books(
+                State(state.clone()),
+                auth_user(),
+                Query(BookListParams {
+                    q: Some(q.into()),
+                    ..Default::default()
+                }),
+            )
+            .await;
+            assert!(result.is_ok(), "q={q:?} should return 200, not 500");
+        }
+    }
+
+    #[tokio::test]
+    async fn list_books_partial_punctuation_still_searches() {
+        let tmp = TempDir::new().unwrap();
+        let state = test_state(&tmp).await;
+
+        for q in ["dune OR --", "-- OR dune"] {
+            let result = list_books(
+                State(state.clone()),
+                auth_user(),
+                Query(BookListParams {
+                    q: Some(q.into()),
+                    ..Default::default()
+                }),
+            )
+            .await;
+            assert!(result.is_ok(), "q={q:?} should return 200, not 500");
+            // No NoSearchableTerms warning — there are still searchable terms.
+            let resp = result.unwrap();
+            assert!(
+                !resp.search_warnings.iter().any(|w| matches!(
+                    w,
+                    QueryWarningResponse::NoSearchableTerms { field, .. } if field.is_none()
+                )),
+                "q={q:?} should not emit NoSearchableTerms for text when valid terms remain",
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn list_books_column_filter_punctuation_returns_200_with_warning() {
+        let tmp = TempDir::new().unwrap();
+        let state = test_state(&tmp).await;
+        BookRepository::create(state.db_pool(), &Book::new("Existing Book"))
+            .await
+            .unwrap();
+
+        for q in ["title:--", "title:\"...\""] {
+            let result = list_books(
+                State(state.clone()),
+                auth_user(),
+                Query(BookListParams {
+                    q: Some(q.into()),
+                    ..Default::default()
+                }),
+            )
+            .await;
+
+            let resp = result.unwrap_or_else(|_| panic!("q={q:?} should return 200, not 500"));
+            assert_eq!(resp.total, 0, "q={q:?} should fail closed");
+            assert!(
+                resp.items.is_empty(),
+                "q={q:?} should not fall back to the default library list",
+            );
+            assert!(
+                resp.search_warnings.iter().any(|w| matches!(
+                    w,
+                    QueryWarningResponse::NoSearchableTerms { field, .. } if field.as_deref() == Some("title")
+                )),
+                "q={q:?} expected NoSearchableTerms warning with field=title, got: {:?}",
+                resp.search_warnings,
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn list_books_double_dash_word_returns_200_with_warning_and_no_results() {
+        let tmp = TempDir::new().unwrap();
+        let state = test_state(&tmp).await;
+        BookRepository::create(state.db_pool(), &Book::new("Existing Book"))
+            .await
+            .unwrap();
+
+        let Json(resp) = list_books(
+            State(state.clone()),
+            auth_user(),
+            Query(BookListParams {
+                q: Some("--x".into()),
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("q=--x should return 200, not 500");
+
+        assert_eq!(resp.total, 0);
+        assert!(resp.items.is_empty());
+        assert!(
+            resp.search_warnings.iter().any(|w| matches!(
+                w,
+                QueryWarningResponse::NoSearchableTerms { field, text }
+                    if field.is_none() && text == "--x"
+            )),
+            "expected NoSearchableTerms warning for --x, got: {:?}",
+            resp.search_warnings,
+        );
+    }
+
+    #[tokio::test]
+    async fn list_books_cplusplus_search_is_targeted() {
+        let tmp = TempDir::new().unwrap();
+        let state = test_state(&tmp).await;
+        let pool = state.db_pool();
+
+        BookRepository::create(pool, &Book::new("C++ Programming"))
+            .await
+            .unwrap();
+        BookRepository::create(pool, &Book::new("C Primer"))
+            .await
+            .unwrap();
+        BookRepository::create(pool, &Book::new("Cat Tales"))
+            .await
+            .unwrap();
+
+        let Json(resp) = list_books(
+            State(state.clone()),
+            auth_user(),
+            Query(BookListParams {
+                q: Some("c++".into()),
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("q=c++ should return 200");
+
+        assert_eq!(resp.total, 1);
+        assert_eq!(resp.items.len(), 1);
+        assert_eq!(resp.items[0].title, "C++ Programming");
+    }
+
+    #[tokio::test]
+    async fn list_books_title_cplusplus_search_is_targeted() {
+        let tmp = TempDir::new().unwrap();
+        let state = test_state(&tmp).await;
+        let pool = state.db_pool();
+
+        let title_match = Book::new("C++ Cookbook");
+        BookRepository::create(pool, &title_match).await.unwrap();
+
+        let mut desc_only = Book::new("Reference Book");
+        desc_only.description = Some("C++ concepts".into());
+        BookRepository::create(pool, &desc_only).await.unwrap();
+
+        let Json(resp) = list_books(
+            State(state.clone()),
+            auth_user(),
+            Query(BookListParams {
+                q: Some("title:c++".into()),
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("q=title:c++ should return 200");
+
+        assert_eq!(resp.total, 1);
+        assert_eq!(resp.items.len(), 1);
+        assert_eq!(resp.items[0].title, "C++ Cookbook");
+    }
+
+    #[tokio::test]
+    async fn list_books_hyphenated_search_is_targeted() {
+        let tmp = TempDir::new().unwrap();
+        let state = test_state(&tmp).await;
+        let pool = state.db_pool();
+
+        BookRepository::create(pool, &Book::new("Some-Hyphenated-Phrase"))
+            .await
+            .unwrap();
+        BookRepository::create(pool, &Book::new("Some Hyphenated Phrase"))
+            .await
+            .unwrap();
+
+        let Json(resp) = list_books(
+            State(state.clone()),
+            auth_user(),
+            Query(BookListParams {
+                q: Some("some-hyphenated-phrase".into()),
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("hyphenated query should return 200");
+
+        assert!(
+            resp.items
+                .iter()
+                .any(|item| item.title == "Some-Hyphenated-Phrase"),
+            "hyphenated search should find the intended title"
         );
     }
 }

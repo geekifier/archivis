@@ -401,11 +401,16 @@ export function buildFieldValue(field: string, value: string): string {
 /**
  * Find the first token in the query whose field matches `field` (or alias)
  * AND whose unquoted value matches `queryText`.
+ *
+ * When `negated` is provided, only tokens whose negation state matches are
+ * considered.  This prevents `author:King` from being confused with
+ * `-author:King` during warning-pick resolution.
  */
 export function findTokenByFieldAndQuery(
   query: string,
   field: string,
-  queryText: string
+  queryText: string,
+  negated?: boolean
 ): TokenSpan | null {
   const tokens = tokenize(query);
   for (const t of tokens) {
@@ -413,9 +418,9 @@ export function findTokenByFieldAndQuery(
     if (parsed.field === null) continue;
     const op = OPERATOR_LOOKUP.get(parsed.field);
     if (!op) continue;
-    if (op.name === field && parsed.valueUnquoted === queryText) {
-      return t;
-    }
+    if (op.name !== field || parsed.valueUnquoted !== queryText) continue;
+    if (negated !== undefined && parsed.negated !== negated) continue;
+    return t;
   }
   return null;
 }
@@ -617,12 +622,12 @@ export function tokenToDraft(token: TokenSpan): DraftState {
       valueText: parsed.valueUnquoted
     };
   }
-  // Bare mode
+  // Bare mode: negation lives inside valueText, flag is always false
   return {
-    negated: parsed.negated,
+    negated: false,
     field: null,
     fieldRaw: null,
-    valueText: parsed.value
+    valueText: (parsed.negated ? '-' : '') + parsed.value
   };
 }
 
@@ -631,18 +636,28 @@ export function tokenToDraft(token: TokenSpan): DraftState {
  * Uses `buildFieldValue()` so multi-word values get properly quoted.
  */
 export function commitDraft(draft: DraftState): SearchChip {
-  const neg = draft.negated ? '-' : '';
+  let negated: boolean;
   let raw: string;
   let displayValue: string;
   let kind: 'field' | 'text';
 
   if (draft.field) {
+    negated = draft.negated;
+    const neg = negated ? '-' : '';
     raw = neg + buildFieldValue(draft.fieldRaw ?? draft.field, draft.valueText);
     displayValue = draft.valueText;
     kind = 'field';
   } else {
-    raw = neg + draft.valueText;
-    displayValue = draft.valueText;
+    // Bare mode: negation lives inside valueText
+    let bareValue = draft.valueText;
+    if (bareValue.startsWith('-')) {
+      negated = true;
+      bareValue = bareValue.slice(1);
+    } else {
+      negated = false;
+    }
+    raw = draft.valueText;
+    displayValue = bareValue;
     kind = 'text';
   }
 
@@ -650,7 +665,7 @@ export function commitDraft(draft: DraftState): SearchChip {
     id: `chip-${chipId++}`,
     kind,
     raw,
-    negated: draft.negated,
+    negated,
     field: draft.field,
     fieldRaw: draft.fieldRaw,
     displayValue
@@ -691,17 +706,23 @@ export function splitQueryIntoChipsAndDraft(
 
 /**
  * Serialize a draft to its in-progress text form.
- * Does NOT quote multi-word values — quoting only happens at commit time.
+ *
+ * Field mode: uses `buildFieldValue()` so multi-word values are quoted
+ * the same way as committed chips (the live query is debounced to the API).
+ *
+ * Bare mode: returns `valueText` as-is.  Negation (if any) lives inside
+ * `valueText` — the `negated` flag is always `false` in bare mode.
  */
 export function serializeDraft(draft: DraftState): string {
-  const neg = draft.negated ? '-' : '';
   if (draft.field) {
+    const neg = draft.negated ? '-' : '';
     const fieldText = draft.fieldRaw ?? draft.field;
     return draft.valueText
-      ? `${neg}${fieldText}:${draft.valueText}`
+      ? `${neg}${buildFieldValue(fieldText, draft.valueText)}`
       : `${neg}${fieldText}:`;
   }
-  return draft.valueText ? neg + draft.valueText : '';
+  // Bare mode: negation is already inside valueText
+  return draft.valueText;
 }
 
 /** Join chip raw texts + serialized draft into a full query string. */

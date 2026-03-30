@@ -22,8 +22,8 @@ mod watched_directory;
 
 pub use author::{AuthorRepository, AuthorWithBookCount};
 pub use book::{
-    BookAuthorEntry, BookRepository, BookSeriesEntry, BookWithAuthors, BookWithRelations,
-    RelationsBundle,
+    column_filter_has_searchable_chars, text_has_searchable_fts_terms, BookAuthorEntry,
+    BookRepository, BookSeriesEntry, BookWithAuthors, BookWithRelations, RelationsBundle,
 };
 pub use book_file::BookFileRepository;
 pub use bookmark::BookmarkRepository;

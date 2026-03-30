@@ -2968,7 +2968,7 @@ async fn search_resolve_author_unknown_no_fts_fallback() {
 }
 
 #[tokio::test]
-async fn search_resolve_author_negated_exact_preserves_fts() {
+async fn search_resolve_author_negated_exact_uses_neg_id() {
     let (pool, _dir) = test_pool().await;
     let author = test_author("Stephen King");
     AuthorRepository::create(&pool, &author).await.unwrap();
@@ -2977,8 +2977,8 @@ async fn search_resolve_author_negated_exact_preserves_fts() {
     let resolved = SearchResolver::resolve(&pool, &parsed).await.unwrap();
 
     assert!(resolved.author_id.is_none());
-    assert_eq!(resolved.fts_column_filters.len(), 1);
-    assert!(resolved.fts_column_filters[0].negated);
+    assert_eq!(resolved.neg_author_id, Some(author.id));
+    assert!(resolved.fts_column_filters.is_empty());
     assert!(resolved.warnings.is_empty());
 }
 

@@ -70,7 +70,10 @@ impl LibraryFilterState {
         trim_or_clear(&mut self.language);
 
         // Normalize generic identifier filter
-        self.identifier_type = self.identifier_type.take().and_then(|raw| canonicalize_identifier_type(&raw));
+        self.identifier_type = self
+            .identifier_type
+            .take()
+            .and_then(|raw| canonicalize_identifier_type(&raw));
         self.identifier_value = self
             .identifier_value
             .take()
@@ -106,10 +109,7 @@ impl LibraryFilterState {
 }
 
 pub fn canonicalize_identifier_type(raw: &str) -> Option<String> {
-    let normalized = raw
-        .trim()
-        .to_ascii_lowercase()
-        .replace('-', "_");
+    let normalized = raw.trim().to_ascii_lowercase().replace('-', "_");
 
     if normalized.is_empty() {
         return None;
@@ -141,7 +141,16 @@ pub fn canonicalize_identifier_value(identifier_type: Option<&str>, raw: &str) -
 pub fn is_supported_identifier_type(raw: &str) -> bool {
     matches!(
         canonicalize_identifier_type(raw).as_deref(),
-        Some("isbn" | "isbn10" | "isbn13" | "asin" | "google_books" | "open_library" | "hardcover" | "lccn")
+        Some(
+            "isbn"
+                | "isbn10"
+                | "isbn13"
+                | "asin"
+                | "google_books"
+                | "open_library"
+                | "hardcover"
+                | "lccn"
+        )
     )
 }
 

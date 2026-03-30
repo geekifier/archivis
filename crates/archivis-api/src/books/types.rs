@@ -608,12 +608,14 @@ pub enum QueryWarningResponse {
     AmbiguousRelation {
         field: String,
         query: String,
+        negated: bool,
         match_count: usize,
         matches: Vec<AmbiguousMatchResponse>,
     },
     UnknownRelation {
         field: String,
         query: String,
+        negated: bool,
     },
     InvalidValue {
         field: String,
@@ -621,14 +623,18 @@ pub enum QueryWarningResponse {
         reason: String,
     },
     /// A DSL field operator was used without a value (e.g. `author:`).
-    EmptyFieldValue {
-        field: String,
-    },
+    EmptyFieldValue { field: String },
     /// A structured field operator appeared inside an OR group, which is not supported.
     UnsupportedOrField {
         field: String,
         value: String,
         negated: bool,
+    },
+    /// Text or field value contains no searchable terms.
+    NoSearchableTerms {
+        text: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        field: Option<String>,
     },
 }
 
@@ -644,17 +650,25 @@ impl From<QueryWarning> for QueryWarningResponse {
             QueryWarning::AmbiguousRelation {
                 field,
                 query,
+                negated,
                 match_count,
                 matches,
             } => Self::AmbiguousRelation {
                 field,
                 query,
+                negated,
                 match_count,
                 matches: matches.into_iter().map(Into::into).collect(),
             },
-            QueryWarning::UnknownRelation { field, query } => {
-                Self::UnknownRelation { field, query }
-            }
+            QueryWarning::UnknownRelation {
+                field,
+                query,
+                negated,
+            } => Self::UnknownRelation {
+                field,
+                query,
+                negated,
+            },
             QueryWarning::InvalidValue {
                 field,
                 value,
@@ -674,6 +688,9 @@ impl From<QueryWarning> for QueryWarningResponse {
                 value,
                 negated,
             },
+            QueryWarning::NoSearchableTerms { text, field } => {
+                Self::NoSearchableTerms { text, field }
+            }
         }
     }
 }

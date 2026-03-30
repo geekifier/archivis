@@ -67,6 +67,8 @@ impl SortOrder {
 pub struct BookFilter {
     /// Full-text search query.
     pub query: Option<String>,
+    /// Fail closed when the parsed query had clauses but none remain executable.
+    pub matches_nothing: bool,
     /// Filter by book format.
     pub format: Option<BookFormat>,
     /// Filter by metadata status.
@@ -108,6 +110,12 @@ pub struct BookFilter {
     pub identifier_value: Option<String>,
     /// Tag IDs to exclude (negated tag filter from DSL).
     pub neg_tag_ids: Option<Vec<String>>,
+    /// Author ID to exclude (negated author filter from DSL).
+    pub neg_author_id: Option<String>,
+    /// Series ID to exclude (negated series filter from DSL).
+    pub neg_series_id: Option<String>,
+    /// Publisher ID to exclude (negated publisher filter from DSL).
+    pub neg_publisher_id: Option<String>,
     /// FTS5 column-qualified filters from DSL resolution.
     /// Each tuple: (`column_name`, `search_term`, `is_negated`).
     pub fts_column_filters: Vec<(String, String, bool)>,

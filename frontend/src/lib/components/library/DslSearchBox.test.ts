@@ -14,6 +14,7 @@ import {
   tokenize,
   isTokenComplete,
   splitQueryIntoChipsAndDraft,
+  serializeDraft,
   tokenToDraft,
   commitDraft,
   chipsToQuery,
@@ -347,6 +348,54 @@ describe('replaceTokenInQuery', () => {
     const { newQuery } = replaceTokenInQuery(query, token, '');
     expect(newQuery).toBe('format:epub tag:scifi');
   });
+
+  it('preserves negation prefix when replacing with quoted value', () => {
+    const query = '-author:smith';
+    const token = { start: 0, end: 13, text: '-author:smith' };
+    const replacement = buildFieldValue('author', 'John Smith');
+    const { newQuery } = replaceTokenInQuery(query, token, replacement);
+    expect(newQuery).toBe('-author:"John Smith"');
+  });
+
+  it('preserves negation prefix when replacing negated token in multi-token query', () => {
+    const query = 'format:epub -author:And tag:scifi';
+    const token = { start: 12, end: 23, text: '-author:And' };
+    const replacement = buildFieldValue('author', 'Andrzej Sapkowski');
+    const { newQuery } = replaceTokenInQuery(query, token, replacement);
+    expect(newQuery).toBe('format:epub -author:"Andrzej Sapkowski" tag:scifi');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Warning-pick token resolution (find + replace end-to-end)
+// ---------------------------------------------------------------------------
+
+describe('warning-pick: negation-aware find + replace', () => {
+  it('positive pick removes only author:King, leaving -author:King intact', () => {
+    const query = 'author:King -author:King';
+    const token = findTokenByFieldAndQuery(query, 'author', 'King', false);
+    expect(token).not.toBeNull();
+    const { newQuery } = replaceTokenInQuery(query, token!, '');
+    expect(newQuery.trim()).toBe('-author:King');
+  });
+
+  it('negated pick rewrites only -author:King, leaving author:King intact', () => {
+    const query = 'author:King -author:King';
+    const token = findTokenByFieldAndQuery(query, 'author', 'King', true);
+    expect(token).not.toBeNull();
+    const replacement = buildFieldValue('author', 'Stephen King');
+    const { newQuery } = replaceTokenInQuery(query, token!, replacement);
+    expect(newQuery).toBe('author:King -author:"Stephen King"');
+  });
+
+  it('negated pick with quoted multi-word value rewrites correctly', () => {
+    const query = '-author:And format:epub';
+    const token = findTokenByFieldAndQuery(query, 'author', 'And', true);
+    expect(token).not.toBeNull();
+    const replacement = buildFieldValue('author', 'Andrzej Sapkowski');
+    const { newQuery } = replaceTokenInQuery(query, token!, replacement);
+    expect(newQuery).toBe('-author:"Andrzej Sapkowski" format:epub');
+  });
 });
 
 describe('findTokenByFieldAndQuery', () => {
@@ -385,6 +434,42 @@ describe('findTokenByFieldAndQuery', () => {
     const token = findTokenByFieldAndQuery(query, 'publisher', 'ace');
     expect(token).not.toBeNull();
     expect(token!.text).toBe('pub:ace');
+  });
+
+  it('finds negated token -author:smith', () => {
+    const query = 'format:epub -author:smith';
+    const token = findTokenByFieldAndQuery(query, 'author', 'smith');
+    expect(token).not.toBeNull();
+    expect(token!.text).toBe('-author:smith');
+  });
+
+  it('finds negated token with quoted value', () => {
+    const query = '-author:"John Smith" tag:scifi';
+    const token = findTokenByFieldAndQuery(query, 'author', 'John Smith');
+    expect(token).not.toBeNull();
+    expect(token!.text).toBe('-author:"John Smith"');
+  });
+
+  it('distinguishes author:King from -author:King by negated flag', () => {
+    const query = 'author:King -author:King';
+    const pos = findTokenByFieldAndQuery(query, 'author', 'King', false);
+    const neg = findTokenByFieldAndQuery(query, 'author', 'King', true);
+    expect(pos).not.toBeNull();
+    expect(neg).not.toBeNull();
+    expect(pos!.text).toBe('author:King');
+    expect(pos!.start).toBe(0);
+    expect(neg!.text).toBe('-author:King');
+    expect(neg!.start).toBe(12);
+  });
+
+  it('returns null when negated flag does not match any token', () => {
+    const query = 'author:King';
+    expect(findTokenByFieldAndQuery(query, 'author', 'King', true)).toBeNull();
+  });
+
+  it('returns null when positive flag does not match negated token', () => {
+    const query = '-author:King';
+    expect(findTokenByFieldAndQuery(query, 'author', 'King', false)).toBeNull();
   });
 });
 
@@ -442,6 +527,18 @@ describe('isTokenComplete', () => {
   it('complete: bare closed quote', () => {
     expect(isTokenComplete(mkToken('"hello world"'))).toBe(true);
   });
+
+  it('incomplete: bare dash (negation prefix with no content)', () => {
+    expect(isTokenComplete(mkToken('-'))).toBe(false);
+  });
+
+  it('complete: negated text not matching operator prefix', () => {
+    expect(isTokenComplete(mkToken('-dune'))).toBe(true);
+  });
+
+  it('incomplete: negated operator prefix', () => {
+    expect(isTokenComplete(mkToken('-au'))).toBe(false);
+  });
 });
 
 describe('splitQueryIntoChipsAndDraft', () => {
@@ -491,6 +588,19 @@ describe('splitQueryIntoChipsAndDraft', () => {
     expect(result.chips[0].kind).toBe('text');
     expect(result.chips[0].displayValue).toBe('dune');
     expect(result.draft).toEqual({ ...EMPTY_DRAFT });
+  });
+
+  it('bare dash → no chips, dash as draft', () => {
+    const result = splitQueryIntoChipsAndDraft('-');
+    expect(result.chips).toHaveLength(0);
+    expect(result.draft.valueText).toBe('-');
+  });
+
+  it('text then bare dash → text chip, dash as draft', () => {
+    const result = splitQueryIntoChipsAndDraft('dune -');
+    expect(result.chips).toHaveLength(1);
+    expect(result.chips[0].displayValue).toBe('dune');
+    expect(result.draft.valueText).toBe('-');
   });
 
   it('complete tokens + incomplete trailing → chips + draft', () => {
@@ -566,6 +676,55 @@ describe('commitDraft', () => {
     });
     expect(chip.raw).toBe('pub:ace');
   });
+
+  it('bare negated draft → chip with negated=true and stripped displayValue', () => {
+    const chip = commitDraft({
+      negated: false,
+      field: null,
+      fieldRaw: null,
+      valueText: '-foo'
+    });
+    expect(chip.raw).toBe('-foo');
+    expect(chip.negated).toBe(true);
+    expect(chip.displayValue).toBe('foo');
+    expect(chip.kind).toBe('text');
+  });
+});
+
+describe('serializeDraft', () => {
+  it('field draft with multi-word value is quoted', () => {
+    expect(
+      serializeDraft({ negated: false, field: 'author', fieldRaw: 'author', valueText: 'Isaac Asimov' })
+    ).toBe('author:"Isaac Asimov"');
+  });
+
+  it('field draft with single-word value stays unquoted', () => {
+    expect(
+      serializeDraft({ negated: false, field: 'author', fieldRaw: 'author', valueText: 'asimov' })
+    ).toBe('author:asimov');
+  });
+
+  it('negated field draft with multi-word value', () => {
+    expect(
+      serializeDraft({ negated: true, field: 'author', fieldRaw: 'author', valueText: 'Isaac Asimov' })
+    ).toBe('-author:"Isaac Asimov"');
+  });
+
+  it('bare draft passes valueText through (including negation)', () => {
+    expect(
+      serializeDraft({ negated: false, field: null, fieldRaw: null, valueText: '-foo' })
+    ).toBe('-foo');
+  });
+
+  it('bare draft without negation', () => {
+    expect(
+      serializeDraft({ negated: false, field: null, fieldRaw: null, valueText: 'dune' })
+    ).toBe('dune');
+  });
+
+  it('empty bare draft returns empty string', () => {
+    expect(serializeDraft({ ...EMPTY_DRAFT })).toBe('');
+  });
 });
 
 describe('chipsToQuery', () => {
@@ -577,12 +736,12 @@ describe('chipsToQuery', () => {
     expect(chipsToQuery(chips, { ...EMPTY_DRAFT })).toBe('author:asimov format:epub');
   });
 
-  it('appends draft in field mode', () => {
+  it('appends draft in field mode with multi-word quoting', () => {
     const chips = [
       { id: '1', kind: 'field' as const, raw: 'format:epub', negated: false, field: 'format', fieldRaw: 'format', displayValue: 'epub' }
     ];
-    const draft = { negated: false, field: 'author', fieldRaw: 'author', valueText: 'asi' };
-    expect(chipsToQuery(chips, draft)).toBe('format:epub author:asi');
+    const draft = { negated: false, field: 'author', fieldRaw: 'author', valueText: 'Isaac Asimov' };
+    expect(chipsToQuery(chips, draft)).toBe('format:epub author:"Isaac Asimov"');
   });
 
   it('appends draft in bare mode', () => {
@@ -635,6 +794,14 @@ describe('tokenToDraft', () => {
     expect(d.field).toBe('author');
     expect(d.valueText).toBe('Isaac');
   });
+
+  it('bare negated token keeps - in valueText with negated=false', () => {
+    const token: TokenSpan = { start: 0, end: 4, text: '-foo' };
+    const d = tokenToDraft(token);
+    expect(d.negated).toBe(false);
+    expect(d.field).toBeNull();
+    expect(d.valueText).toBe('-foo');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -672,7 +839,7 @@ vi.mock('$lib/api/index.js', () => {
 describe('DslSearchBox', () => {
   type OnChangeFn = (value: string) => void;
   type OnSubmitFn = () => void;
-  type OnWarningPickFn = (field: string, query: string, id: string, name: string) => void;
+  type OnWarningPickFn = (field: string, query: string, id: string, name: string, negated: boolean) => void;
 
   let onchangeFn: ReturnType<typeof vi.fn<OnChangeFn>>;
   let onsubmitFn: ReturnType<typeof vi.fn<OnSubmitFn>>;
@@ -805,7 +972,8 @@ describe('DslSearchBox', () => {
         {
           type: 'unknown_relation' as const,
           field: 'author',
-          query: 'nonexistent'
+          query: 'nonexistent',
+          negated: false
         }
       ],
       showWarnings: true
@@ -820,7 +988,8 @@ describe('DslSearchBox', () => {
         {
           type: 'unknown_relation' as const,
           field: 'author',
-          query: 'nonexistent'
+          query: 'nonexistent',
+          negated: false
         }
       ],
       showWarnings: false
@@ -829,7 +998,7 @@ describe('DslSearchBox', () => {
     expect(screen.queryByText(/No author found matching/)).not.toBeInTheDocument();
   });
 
-  it('fires warning pick callback with field, query, id, and name', async () => {
+  it('fires warning pick callback with field, query, id, name, and negated=false', async () => {
     const user = userEvent.setup();
     renderBox({
       warnings: [
@@ -837,6 +1006,7 @@ describe('DslSearchBox', () => {
           type: 'ambiguous_relation' as const,
           field: 'author',
           query: 'smith',
+          negated: false,
           match_count: 2,
           matches: [
             { id: 'a1', name: 'John Smith' },
@@ -850,7 +1020,36 @@ describe('DslSearchBox', () => {
     const pickBtn = screen.getByText('John Smith');
     await user.click(pickBtn);
 
-    expect(onWarningPickFn).toHaveBeenCalledWith('author', 'smith', 'a1', 'John Smith');
+    expect(onWarningPickFn).toHaveBeenCalledWith('author', 'smith', 'a1', 'John Smith', false);
+  });
+
+  it('fires warning pick callback with negated=true for negated ambiguous warning', async () => {
+    const user = userEvent.setup();
+    renderBox({
+      warnings: [
+        {
+          type: 'ambiguous_relation' as const,
+          field: 'author',
+          query: 'smith',
+          negated: true,
+          match_count: 2,
+          matches: [
+            { id: 'a1', name: 'John Smith' },
+            { id: 'a2', name: 'Jane Smith' }
+          ]
+        }
+      ],
+      showWarnings: true
+    });
+
+    // Warning text should include the negation prefix
+    const label = screen.getByText('-author:smith');
+    expect(label).toBeInTheDocument();
+
+    const pickBtn = screen.getByText('John Smith');
+    await user.click(pickBtn);
+
+    expect(onWarningPickFn).toHaveBeenCalledWith('author', 'smith', 'a1', 'John Smith', true);
   });
 
   it('distinguishes repeated same-field warnings', async () => {
@@ -861,6 +1060,7 @@ describe('DslSearchBox', () => {
           type: 'ambiguous_relation' as const,
           field: 'tag',
           query: 'sci',
+          negated: false,
           match_count: 2,
           matches: [
             { id: 't1', name: 'Science' },
@@ -871,6 +1071,7 @@ describe('DslSearchBox', () => {
           type: 'ambiguous_relation' as const,
           field: 'tag',
           query: 'fan',
+          negated: false,
           match_count: 2,
           matches: [
             { id: 't3', name: 'Fantasy' },
@@ -883,11 +1084,11 @@ describe('DslSearchBox', () => {
 
     const scienceBtn = screen.getByText('Science');
     await user.click(scienceBtn);
-    expect(onWarningPickFn).toHaveBeenCalledWith('tag', 'sci', 't1', 'Science');
+    expect(onWarningPickFn).toHaveBeenCalledWith('tag', 'sci', 't1', 'Science', false);
 
     const fantasyBtn = screen.getByText('Fantasy');
     await user.click(fantasyBtn);
-    expect(onWarningPickFn).toHaveBeenCalledWith('tag', 'fan', 't3', 'Fantasy');
+    expect(onWarningPickFn).toHaveBeenCalledWith('tag', 'fan', 't3', 'Fantasy', false);
   });
 
   // --- Stale-request protection ---
@@ -1117,6 +1318,58 @@ describe('DslSearchBox', () => {
     expect(screen.getByText('scifi')).toBeInTheDocument();
   });
 
+  it('dissolving negated field chip to bare mode does not double-negate', async () => {
+    const user = userEvent.setup();
+    renderBox({ value: '-author:asimov' });
+
+    // Chip should be rendered
+    expect(screen.getByText('-')).toBeInTheDocument();
+    expect(screen.getByText('author:')).toBeInTheDocument();
+    expect(screen.getByText('asimov')).toBeInTheDocument();
+
+    const input = document.querySelector('input[role="combobox"]') as HTMLInputElement;
+    await user.click(input);
+
+    // Backspace 1: dissolve chip → field-mode draft {negated:true, field:'author', valueText:'asimov'}
+    await user.keyboard('{Backspace}');
+    // Clear the value text, then one more backspace to dissolve field → bare
+    await user.clear(input);
+    await user.keyboard('{Backspace}');
+
+    // Should NOT produce `--author` — the last onchange value must not start with `--`
+    const lastValue = onchangeFn.mock.calls[onchangeFn.mock.calls.length - 1][0] as string;
+    expect(lastValue).not.toMatch(/^--/);
+    expect(lastValue).toBe('-author');
+  });
+
+  it('negated operator selection preserves negation from bare draft', async () => {
+    const user = userEvent.setup();
+    renderBox();
+
+    const input = screen.getByPlaceholderText('Search books...');
+    await user.type(input, '-au');
+
+    const suggestion = screen.getByText('author:');
+    await user.click(suggestion);
+
+    const lastValue = onchangeFn.mock.calls[onchangeFn.mock.calls.length - 1][0] as string;
+    expect(lastValue).toBe('-author:');
+  });
+
+  it('external bare negated draft restores correctly', async () => {
+    // `-foo` is an operator prefix so it stays as draft
+    renderBox({ value: '-for' });
+
+    // Should be a draft, not a chip (no remove button)
+    expect(screen.queryByLabelText(/Remove/)).not.toBeInTheDocument();
+
+    // Serialized value should round-trip
+    const lastValue = onchangeFn.mock.calls.length > 0
+      ? onchangeFn.mock.calls[onchangeFn.mock.calls.length - 1][0] as string
+      : '-for';
+    expect(lastValue).toBe('-for');
+  });
+
   it('hides warnings when showWarnings changes from true to false', async () => {
     const { rerender } = render(DslSearchBox, {
       props: {
@@ -1125,7 +1378,8 @@ describe('DslSearchBox', () => {
           {
             type: 'unknown_relation' as const,
             field: 'author',
-            query: 'smith'
+            query: 'smith',
+            negated: false
           }
         ],
         showWarnings: true,
@@ -1142,7 +1396,8 @@ describe('DslSearchBox', () => {
         {
           type: 'unknown_relation' as const,
           field: 'author',
-          query: 'smith'
+          query: 'smith',
+          negated: false
         }
       ],
       showWarnings: false,

@@ -36,12 +36,14 @@ pub enum QueryWarning {
     AmbiguousRelation {
         field: String,
         query: String,
+        negated: bool,
         match_count: usize,
         matches: Vec<AmbiguousMatch>,
     },
     UnknownRelation {
         field: String,
         query: String,
+        negated: bool,
     },
     InvalidValue {
         field: String,
@@ -49,14 +51,19 @@ pub enum QueryWarning {
         reason: String,
     },
     /// A DSL field operator was used without a value (e.g. `author:`).
-    EmptyFieldValue {
-        field: String,
-    },
+    EmptyFieldValue { field: String },
     /// A structured field operator appeared inside an OR group, which is not supported.
     UnsupportedOrField {
         field: String,
         value: String,
         negated: bool,
+    },
+    /// Text query or field value contains no characters FTS5 can index.
+    NoSearchableTerms {
+        /// The non-searchable text (e.g. `"--"`, `"..."`).
+        text: String,
+        /// `None` for general text query; `Some("title")` etc. for field-qualified terms.
+        field: Option<String>,
     },
 }
 
@@ -83,6 +90,9 @@ pub struct ResolvedQuery {
 
     // Negated relation IDs
     pub neg_tag_ids: Vec<Uuid>,
+    pub neg_author_id: Option<Uuid>,
+    pub neg_series_id: Option<Uuid>,
+    pub neg_publisher_id: Option<Uuid>,
 
     // Scalar overrides from DSL
     pub format: Option<BookFormat>,
@@ -101,6 +111,37 @@ pub struct ResolvedQuery {
     pub identifier_value: Option<String>,
 
     pub warnings: Vec<QueryWarning>,
+}
+
+impl ResolvedQuery {
+    /// Returns `true` if DSL resolution produced at least one executable
+    /// query-derived constraint.
+    pub fn has_constraints(&self) -> bool {
+        self.text_query.is_some()
+            || !self.fts_column_filters.is_empty()
+            || self.author_id.is_some()
+            || self.series_id.is_some()
+            || self.publisher_id.is_some()
+            || !self.tag_ids.is_empty()
+            || !self.neg_tag_ids.is_empty()
+            || self.neg_author_id.is_some()
+            || self.neg_series_id.is_some()
+            || self.neg_publisher_id.is_some()
+            || self.format.is_some()
+            || self.metadata_status.is_some()
+            || self.resolution_state.is_some()
+            || self.resolution_outcome.is_some()
+            || self.trusted.is_some()
+            || self.locked.is_some()
+            || self.language.is_some()
+            || self.year_min.is_some()
+            || self.year_max.is_some()
+            || self.has_cover.is_some()
+            || self.has_description.is_some()
+            || self.has_identifiers.is_some()
+            || self.identifier_type.is_some()
+            || self.identifier_value.is_some()
+    }
 }
 
 // ── Resolver ────────────────────────────────────────────────────────
@@ -340,7 +381,7 @@ impl SearchResolver {
         }
 
         let (identifier_type, raw_value) = match value.split_once(':') {
-            Some((raw_type, raw_value)) if raw_type.trim().is_empty() => {
+            Some((raw_type, _raw_value)) if raw_type.trim().is_empty() => {
                 result.warnings.push(QueryWarning::InvalidValue {
                     field: field_name.to_owned(),
                     value: value.to_owned(),
@@ -348,10 +389,7 @@ impl SearchResolver {
                 });
                 return;
             }
-            Some((raw_type, raw_value)) => (
-                canonicalize_identifier_type(raw_type),
-                raw_value,
-            ),
+            Some((raw_type, raw_value)) => (canonicalize_identifier_type(raw_type), raw_value),
             None => (None, value),
         };
 
@@ -397,12 +435,7 @@ impl SearchResolver {
             let id = Uuid::parse_str(&row.id)
                 .map_err(|e| DbError::Query(format!("invalid author UUID: {e}")))?;
             if negated {
-                // Negated author — fall back to negated FTS column filter.
-                result.fts_column_filters.push(FtsColumnFilter {
-                    column: "author_names".to_owned(),
-                    term: value.to_owned(),
-                    negated: true,
-                });
+                result.neg_author_id = Some(id);
             } else {
                 result.author_id = Some(id);
             }
@@ -417,11 +450,7 @@ impl SearchResolver {
                 let id = Uuid::parse_str(&m.id)
                     .map_err(|e| DbError::Query(format!("invalid author UUID: {e}")))?;
                 if negated {
-                    result.fts_column_filters.push(FtsColumnFilter {
-                        column: "author_names".to_owned(),
-                        term: value.to_owned(),
-                        negated: true,
-                    });
+                    result.neg_author_id = Some(id);
                 } else {
                     result.author_id = Some(id);
                 }
@@ -430,12 +459,14 @@ impl SearchResolver {
                 result.warnings.push(QueryWarning::UnknownRelation {
                     field: "author".to_owned(),
                     query: value.to_owned(),
+                    negated,
                 });
             }
             n => {
                 result.warnings.push(QueryWarning::AmbiguousRelation {
                     field: "author".to_owned(),
                     query: value.to_owned(),
+                    negated,
                     match_count: n,
                     matches: matches
                         .into_iter()
@@ -463,11 +494,7 @@ impl SearchResolver {
             let id = Uuid::parse_str(&series.id)
                 .map_err(|e| DbError::Query(format!("invalid series UUID: {e}")))?;
             if negated {
-                result.fts_column_filters.push(FtsColumnFilter {
-                    column: "series_names".to_owned(),
-                    term: value.to_owned(),
-                    negated: true,
-                });
+                result.neg_series_id = Some(id);
             } else {
                 result.series_id = Some(id);
             }
@@ -482,11 +509,7 @@ impl SearchResolver {
                 let id = Uuid::parse_str(&m.id)
                     .map_err(|e| DbError::Query(format!("invalid series UUID: {e}")))?;
                 if negated {
-                    result.fts_column_filters.push(FtsColumnFilter {
-                        column: "series_names".to_owned(),
-                        term: value.to_owned(),
-                        negated: true,
-                    });
+                    result.neg_series_id = Some(id);
                 } else {
                     result.series_id = Some(id);
                 }
@@ -495,12 +518,14 @@ impl SearchResolver {
                 result.warnings.push(QueryWarning::UnknownRelation {
                     field: "series".to_owned(),
                     query: value.to_owned(),
+                    negated,
                 });
             }
             n => {
                 result.warnings.push(QueryWarning::AmbiguousRelation {
                     field: "series".to_owned(),
                     query: value.to_owned(),
+                    negated,
                     match_count: n,
                     matches: matches
                         .into_iter()
@@ -528,11 +553,7 @@ impl SearchResolver {
             let id = Uuid::parse_str(&row.id)
                 .map_err(|e| DbError::Query(format!("invalid publisher UUID: {e}")))?;
             if negated {
-                result.fts_column_filters.push(FtsColumnFilter {
-                    column: "publisher_name".to_owned(),
-                    term: value.to_owned(),
-                    negated: true,
-                });
+                result.neg_publisher_id = Some(id);
             } else {
                 result.publisher_id = Some(id);
             }
@@ -547,11 +568,7 @@ impl SearchResolver {
                 let id = Uuid::parse_str(&m.id)
                     .map_err(|e| DbError::Query(format!("invalid publisher UUID: {e}")))?;
                 if negated {
-                    result.fts_column_filters.push(FtsColumnFilter {
-                        column: "publisher_name".to_owned(),
-                        term: value.to_owned(),
-                        negated: true,
-                    });
+                    result.neg_publisher_id = Some(id);
                 } else {
                     result.publisher_id = Some(id);
                 }
@@ -560,12 +577,14 @@ impl SearchResolver {
                 result.warnings.push(QueryWarning::UnknownRelation {
                     field: "publisher".to_owned(),
                     query: value.to_owned(),
+                    negated,
                 });
             }
             n => {
                 result.warnings.push(QueryWarning::AmbiguousRelation {
                     field: "publisher".to_owned(),
                     query: value.to_owned(),
+                    negated,
                     match_count: n,
                     matches: matches
                         .into_iter()
@@ -606,6 +625,7 @@ impl SearchResolver {
             result.warnings.push(QueryWarning::AmbiguousRelation {
                 field: "tag".to_owned(),
                 query: value.to_owned(),
+                negated,
                 match_count: exact.len(),
                 matches: exact
                     .iter()
@@ -635,12 +655,14 @@ impl SearchResolver {
                 result.warnings.push(QueryWarning::UnknownRelation {
                     field: "tag".to_owned(),
                     query: value.to_owned(),
+                    negated,
                 });
             }
             n => {
                 result.warnings.push(QueryWarning::AmbiguousRelation {
                     field: "tag".to_owned(),
                     query: value.to_owned(),
+                    negated,
                     match_count: n,
                     matches: matches
                         .into_iter()
@@ -1263,12 +1285,7 @@ mod tests {
     #[test]
     fn identifier_untyped() {
         let mut r = ResolvedQuery::default();
-        SearchResolver::resolve_identifier(
-            QueryField::Identifier,
-            "9780451524935",
-            false,
-            &mut r,
-        );
+        SearchResolver::resolve_identifier(QueryField::Identifier, "9780451524935", false, &mut r);
         assert_eq!(r.identifier_type, None);
         assert_eq!(r.identifier_value.as_deref(), Some("9780451524935"));
         assert!(r.warnings.is_empty());
@@ -1291,12 +1308,7 @@ mod tests {
     #[test]
     fn identifier_unknown_type_warns() {
         let mut r = ResolvedQuery::default();
-        SearchResolver::resolve_identifier(
-            QueryField::Identifier,
-            "mystery:123",
-            false,
-            &mut r,
-        );
+        SearchResolver::resolve_identifier(QueryField::Identifier, "mystery:123", false, &mut r);
         assert_eq!(r.identifier_value, None);
         assert!(matches!(
             &r.warnings[0],

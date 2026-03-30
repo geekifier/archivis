@@ -211,6 +211,7 @@ export type QueryWarning =
       type: 'ambiguous_relation';
       field: string;
       query: string;
+      negated: boolean;
       match_count: number;
       matches: AmbiguousMatchEntry[];
     }
@@ -218,6 +219,7 @@ export type QueryWarning =
       type: 'unknown_relation';
       field: string;
       query: string;
+      negated: boolean;
     }
   | {
       type: 'invalid_value';
@@ -234,6 +236,11 @@ export type QueryWarning =
       field: string;
       value: string;
       negated: boolean;
+    }
+  | {
+      type: 'no_searchable_terms';
+      text: string;
+      field?: string;
     };
 
 export interface PaginatedBooks {
