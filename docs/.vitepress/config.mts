@@ -14,12 +14,18 @@ export default defineConfig({
 
     sidebar: [
       {
-        text: 'User Guide',
+        text: 'Getting Started',
         items: [
           { text: 'Introduction', link: '/guide/introduction' },
           { text: 'Quick Start', link: '/guide/quick-start' },
           { text: 'Authentication', link: '/guide/authentication' },
           { text: 'Deployment', link: '/guide/deployment' },
+        ],
+      },
+      {
+        text: 'Features',
+        items: [
+          { text: 'Search', link: '/features/search' },
         ],
       },
       {
