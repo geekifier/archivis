@@ -5,16 +5,27 @@ use std::sync::Arc;
 use archivis_core::models::{
     Identifier, IdentifierType, MetadataSource, ResolutionState, Task, TaskType,
 };
+use archivis_core::settings::{SettingStore, SettingsReader};
 use archivis_db::{
-    BookFileRepository, BookRepository, DuplicateRepository, IdentifierRepository,
-    SettingRepository, TaskRepository,
+    BookFileRepository, BookRepository, DuplicateRepository, IdentifierRepository, TaskRepository,
 };
 use archivis_storage::local::LocalStorage;
 use archivis_tasks::import::{ImportConfig, ImportError, ImportService, ThumbnailSizes};
-use archivis_tasks::isbn_scan::{IsbnScanConfig, IsbnScanService};
+use archivis_tasks::isbn_scan::IsbnScanService;
 use archivis_tasks::queue::{ProgressSender, TaskQueue, Worker};
 use archivis_tasks::workers::{ImportFileWorker, IsbnScanWorker};
 use tempfile::TempDir;
+
+fn test_settings_reader() -> Arc<dyn SettingsReader> {
+    Arc::new(SettingStore::from_initial(vec![], vec![]).unwrap()) as Arc<dyn SettingsReader>
+}
+
+/// Build a settings reader backed by a `SettingStore` initialized with the
+/// given DB-shaped rows, so tests can assert `PerUse` behavior.
+fn test_settings_reader_with(rows: Vec<(&str, serde_json::Value)>) -> Arc<dyn SettingsReader> {
+    let rows = rows.into_iter().map(|(k, v)| (k.to_string(), v)).collect();
+    Arc::new(SettingStore::from_initial(rows, vec![]).unwrap()) as Arc<dyn SettingsReader>
+}
 
 /// Create a test EPUB with an SVG cover image (EPUB 3 properties="cover-image").
 fn create_test_epub_with_svg_cover(title: &str, author: &str) -> Vec<u8> {
@@ -234,7 +245,7 @@ async fn setup_test_env(tmp: &TempDir) -> ImportService<LocalStorage> {
         ..ImportConfig::default()
     };
 
-    ImportService::new(pool, storage, config)
+    ImportService::new(pool, storage, config, test_settings_reader())
 }
 
 /// Helper to get a fresh DB pool from the same temp dir.
@@ -339,7 +350,10 @@ async fn import_worker_with_scan_on_import_enqueues_only_scan_child() {
     let pool = get_pool(&tmp).await;
     let (queue_inner, rx) = TaskQueue::new(pool.clone());
     let queue = Arc::new(queue_inner);
-    let worker = worker.with_isbn_scan(Arc::clone(&queue), true);
+    let worker = worker.with_isbn_scan(
+        Arc::clone(&queue),
+        test_settings_reader_with(vec![("isbn_scan.scan_on_import", serde_json::json!(true))]),
+    );
 
     let epub_bytes = create_test_epub("Dune", "Frank Herbert");
     let epub_path = tmp.path().join("dune.epub");
@@ -396,7 +410,7 @@ async fn manual_isbn_scan_noop_does_not_enqueue_resolution_child() {
     let scan_service = Arc::new(IsbnScanService::new(
         pool.clone(),
         storage,
-        IsbnScanConfig::default(),
+        test_settings_reader(),
     ));
     let (queue_inner, rx) = TaskQueue::new(pool.clone());
     let queue = Arc::new(queue_inner);
@@ -767,17 +781,33 @@ async fn self_duplicate_link_not_created() {
     pool.close().await;
 }
 
+async fn setup_test_env_with_settings(
+    tmp: &TempDir,
+    settings: Arc<dyn SettingsReader>,
+) -> ImportService<LocalStorage> {
+    let db_path = tmp.path().join("test.db");
+    let pool = archivis_db::create_pool(&db_path).await.unwrap();
+    archivis_db::run_migrations(&pool).await.unwrap();
+
+    let storage_dir = tmp.path().join("storage");
+    let storage = LocalStorage::new(&storage_dir).await.unwrap();
+
+    let config = ImportConfig {
+        data_dir: tmp.path().join("data"),
+        ..ImportConfig::default()
+    };
+
+    ImportService::new(pool, storage, config, settings)
+}
+
 #[tokio::test]
 async fn auto_link_disabled_creates_separate_books() {
     let tmp = TempDir::new().unwrap();
-    let service = setup_test_env(&tmp).await;
-
-    // Disable auto-linking via setting
-    let pool = get_pool(&tmp).await;
-    SettingRepository::set(&pool, "import.auto_link_formats", "false")
-        .await
-        .unwrap();
-    pool.close().await;
+    let service = setup_test_env_with_settings(
+        &tmp,
+        test_settings_reader_with(vec![("import.auto_link_formats", serde_json::json!(false))]),
+    )
+    .await;
 
     // Import EPUB
     let epub = create_test_epub("Permanent Record", "Edward Snowden");

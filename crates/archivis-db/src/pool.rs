@@ -37,7 +37,7 @@ pub async fn create_pool(db_path: &Path) -> Result<DbPool, DbError> {
         .journal_mode(SqliteJournalMode::Wal)
         .synchronous(SqliteSynchronous::Normal)
         .foreign_keys(true)
-        .busy_timeout(Duration::from_millis(5000));
+        .busy_timeout(Duration::from_secs(5));
 
     let pool = SqlitePoolOptions::new()
         .max_connections(8)

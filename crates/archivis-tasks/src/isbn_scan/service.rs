@@ -63,26 +63,34 @@ impl Default for IsbnScanConfig {
 }
 
 impl IsbnScanConfig {
-    /// Build from individual app-config values without requiring the caller
-    /// to depend on `archivis_formats` directly.
-    pub fn from_app_config(
-        confidence: f32,
-        skip_threshold: f32,
-        epub_spine_items: usize,
-        pdf_pages: usize,
-        fb2_sections: usize,
-        txt_bytes: usize,
-        mobi_bytes: usize,
-    ) -> Self {
+    /// Read a fresh snapshot from the settings store. Called at the start of
+    /// every task so `PerUse` changes take effect without restarting.
+    pub fn from_reader(settings: &dyn archivis_core::settings::SettingsReader) -> Self {
+        use archivis_core::settings::SettingsReaderExt;
+        let default = Self::default();
         Self {
-            confidence,
-            skip_threshold,
+            confidence: settings
+                .get_f32("isbn_scan.confidence")
+                .unwrap_or(default.confidence),
+            skip_threshold: settings
+                .get_f32("isbn_scan.skip_threshold")
+                .unwrap_or(default.skip_threshold),
             text_config: ContentScanConfig {
-                epub_spine_items,
-                pdf_pages,
-                fb2_sections,
-                txt_bytes,
-                mobi_bytes,
+                epub_spine_items: settings
+                    .get_usize("isbn_scan.epub_spine_items")
+                    .unwrap_or(default.text_config.epub_spine_items),
+                pdf_pages: settings
+                    .get_usize("isbn_scan.pdf_pages")
+                    .unwrap_or(default.text_config.pdf_pages),
+                fb2_sections: settings
+                    .get_usize("isbn_scan.fb2_sections")
+                    .unwrap_or(default.text_config.fb2_sections),
+                txt_bytes: settings
+                    .get_usize("isbn_scan.txt_bytes")
+                    .unwrap_or(default.text_config.txt_bytes),
+                mobi_bytes: settings
+                    .get_usize("isbn_scan.mobi_bytes")
+                    .unwrap_or(default.text_config.mobi_bytes),
             },
         }
     }
@@ -116,15 +124,19 @@ pub struct IsbnScanResult {
 pub struct IsbnScanService<S: StorageBackend> {
     db_pool: DbPool,
     storage: S,
-    config: IsbnScanConfig,
+    settings: std::sync::Arc<dyn archivis_core::settings::SettingsReader>,
 }
 
 impl<S: StorageBackend> IsbnScanService<S> {
-    pub fn new(db_pool: DbPool, storage: S, config: IsbnScanConfig) -> Self {
+    pub fn new(
+        db_pool: DbPool,
+        storage: S,
+        settings: std::sync::Arc<dyn archivis_core::settings::SettingsReader>,
+    ) -> Self {
         Self {
             db_pool,
             storage,
-            config,
+            settings,
         }
     }
 
@@ -134,6 +146,9 @@ impl<S: StorageBackend> IsbnScanService<S> {
     /// identifier with confidence >= `skip_threshold`.
     #[allow(clippy::too_many_lines)] // linear sequence of steps, splitting would hurt readability
     pub async fn scan_book(&self, book_id: Uuid) -> Result<IsbnScanResult, TaskError> {
+        // Snapshot the runtime config once per task (`PerUse`).
+        let config = IsbnScanConfig::from_reader(self.settings.as_ref());
+
         // 1. Check existing identifiers — skip if any ISBN has high confidence.
         let existing = IdentifierRepository::get_by_book_id(&self.db_pool, book_id)
             .await
@@ -142,13 +157,13 @@ impl<S: StorageBackend> IsbnScanService<S> {
         let has_high_confidence_isbn = existing.iter().any(|id| {
             (id.identifier_type == IdentifierType::Isbn13
                 || id.identifier_type == IdentifierType::Isbn10)
-                && id.confidence >= self.config.skip_threshold
+                && id.confidence >= config.skip_threshold
         });
 
         if has_high_confidence_isbn {
             debug!(
                 book_id = %book_id,
-                threshold = self.config.skip_threshold,
+                threshold = config.skip_threshold,
                 "skipping ISBN scan: existing ISBN meets confidence threshold"
             );
             return Ok(IsbnScanResult {
@@ -201,7 +216,7 @@ impl<S: StorageBackend> IsbnScanService<S> {
             let text = match archivis_formats::content_text::extract_content_text(
                 &data,
                 file.format,
-                &self.config.text_config,
+                &config.text_config,
             ) {
                 Ok(Some(text)) => text,
                 Ok(None) => {
@@ -262,13 +277,12 @@ impl<S: StorageBackend> IsbnScanService<S> {
 
         // 4. Evidence weighting: discount confidence when multiple ISBNs are
         //    found (more ISBNs = higher probability of bibliography noise).
-        let effective_confidence =
-            scan_evidence_confidence(self.config.confidence, all_isbns.len());
+        let effective_confidence = scan_evidence_confidence(config.confidence, all_isbns.len());
 
         debug!(
             book_id = %book_id,
             total_isbns = all_isbns.len(),
-            base_confidence = self.config.confidence,
+            base_confidence = config.confidence,
             effective_confidence,
             "scan evidence weighting applied"
         );
@@ -361,7 +375,7 @@ impl<S: StorageBackend> IsbnScanService<S> {
                 IdentifierType::Lccn,
                 lccn_value,
                 MetadataSource::ContentScan,
-                self.config.confidence,
+                config.confidence,
             );
 
             IdentifierRepository::create(&self.db_pool, &identifier)

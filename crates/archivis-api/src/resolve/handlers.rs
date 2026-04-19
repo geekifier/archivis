@@ -587,7 +587,6 @@ fn candidate_to_response(candidate: IdentificationCandidate) -> CandidateRespons
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
     use std::sync::Arc;
 
     use archivis_auth::{AuthService, LocalAuthAdapter};
@@ -645,14 +644,7 @@ mod tests {
             storage.clone(),
             tmp.path().to_path_buf(),
         ));
-        let config_service = Arc::new(ConfigService::new(
-            HashMap::new(),
-            HashMap::new(),
-            HashMap::new(),
-            HashMap::new(),
-            HashMap::new(),
-            db_pool.clone(),
-        ));
+        let config_service = Arc::new(ConfigService::for_tests(db_pool.clone()));
 
         AppState::new(
             db_pool,

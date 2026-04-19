@@ -1,4 +1,4 @@
-import type { ApiErrorResponse } from './types.js';
+import type { ApiErrorResponse, SettingError } from './types.js';
 
 /** A structured error from the API with status code and message. */
 export class ApiError extends Error {
@@ -55,12 +55,52 @@ export class ApiError extends Error {
 }
 
 /**
+ * A 400 from `PUT /api/settings` carrying per-key error details.
+ * Extends `ApiError` so callers that don't care about per-key detail still see
+ * a familiar shape, while UIs that want to highlight individual fields can
+ * read `.errors`.
+ */
+export class SettingsUpdateError extends ApiError {
+  readonly errors: SettingError[];
+
+  constructor(errors: SettingError[]) {
+    const summary =
+      errors.length === 1 ? errors[0].message : `${errors.length} setting errors`;
+    super(400, summary);
+    this.name = 'SettingsUpdateError';
+    this.errors = errors;
+  }
+
+  /** Find the error for `key`, if any. */
+  forKey(key: string): SettingError | undefined {
+    return this.errors.find((e) => e.key === key);
+  }
+
+  /** Map from key → error (convenient for reactive UIs). */
+  byKey(): Record<string, SettingError> {
+    const map: Record<string, SettingError> = {};
+    for (const e of this.errors) map[e.key] = e;
+    return map;
+  }
+}
+
+/**
  * Parse an API error response body into an `ApiError`.
  * Falls back to a generic error if the body doesn't match the expected format.
+ *
+ * Recognises:
+ * * `{ "error": { "status", "message" } }` — the default shape.
+ * * `{ "errors": [{ "key", "code", "message" }] }` — structured per-key errors
+ *   returned by `PUT /api/settings`.
  */
 export async function parseApiError(response: Response): Promise<ApiError> {
   try {
-    const body = (await response.json()) as ApiErrorResponse;
+    const body = (await response.json()) as ApiErrorResponse & {
+      errors?: SettingError[];
+    };
+    if (Array.isArray(body?.errors) && body.errors.length > 0) {
+      return new SettingsUpdateError(body.errors);
+    }
     if (body?.error?.message) {
       return new ApiError(body.error.status ?? response.status, body.error.message);
     }

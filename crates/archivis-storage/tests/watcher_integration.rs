@@ -42,7 +42,7 @@ const NO_EVENT_TIMEOUT: Duration = Duration::from_millis(800);
 
 /// Time to wait when asserting no event in poll mode (must cover ≥1 poll
 /// cycle + debounce so absence is meaningful).
-const POLL_NO_EVENT_TIMEOUT: Duration = Duration::from_millis(3000);
+const POLL_NO_EVENT_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// Small pause after filesystem operations to let the OS flush events.
 const FS_SETTLE: Duration = Duration::from_millis(100);

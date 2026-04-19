@@ -11,7 +11,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use archivis_core::models::{TaskProgress, TaskStatus, TaskType};
-use archivis_db::{BookFileRepository, DbPool, SettingRepository, WatchedDirectoryRepository};
+use archivis_core::settings::{SettingsReader, SettingsReaderExt};
+use archivis_db::{BookFileRepository, DbPool, WatchedDirectoryRepository};
 use archivis_storage::watcher::WatcherEvent;
 use sha2::{Digest, Sha256};
 use tokio::sync::mpsc;
@@ -40,6 +41,7 @@ pub async fn run(
     mut event_rx: mpsc::Receiver<WatcherEvent>,
     task_queue: Arc<TaskQueue>,
     db_pool: DbPool,
+    settings: Arc<dyn SettingsReader>,
 ) {
     info!("watcher event processor started");
 
@@ -79,7 +81,7 @@ pub async fn run(
                     Ok(update) => {
                         handle_task_completion(
                             &update,
-                            &db_pool,
+                            settings.as_ref(),
                             &mut pending_watcher_imports,
                             &mut recently_deleted,
                         )
@@ -359,7 +361,7 @@ async fn persist_watcher_error(
 /// Handle a completed watcher-sourced import task: optionally delete the source file.
 async fn handle_task_completion(
     update: &TaskProgress,
-    db_pool: &DbPool,
+    settings: &dyn SettingsReader,
     pending_watcher_imports: &mut HashMap<Uuid, PathBuf>,
     recently_deleted: &mut HashMap<PathBuf, Instant>,
 ) {
@@ -398,14 +400,11 @@ async fn handle_task_completion(
         }
     }
 
-    // Check if delete_source_after_import is enabled.
-    let delete_enabled =
-        match SettingRepository::get(db_pool, "watcher.delete_source_after_import").await {
-            Ok(Some(value)) => value == "true" || value == "\"true\"",
-            _ => false,
-        };
-
-    if !delete_enabled {
+    // PerUse: re-read the current setting on every completion.
+    if !settings
+        .get_bool("watcher.delete_source_after_import")
+        .unwrap_or(false)
+    {
         return;
     }
 

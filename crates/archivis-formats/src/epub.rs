@@ -361,16 +361,12 @@ fn process_meta_element(
     //         <meta property="group-position">...</meta>
     if let (Some(prop), Some(val)) = (property, content) {
         match prop {
-            "belongs-to-collection" => {
-                if meta.series.is_none() {
-                    meta.series = Some(val.to_owned());
-                }
+            "belongs-to-collection" if meta.series.is_none() => {
+                meta.series = Some(val.to_owned());
             }
-            "group-position" => {
-                if meta.series_position.is_none() {
-                    if let Ok(pos) = val.parse::<f32>() {
-                        meta.series_position = Some(pos);
-                    }
+            "group-position" if meta.series_position.is_none() => {
+                if let Ok(pos) = val.parse::<f32>() {
+                    meta.series_position = Some(pos);
                 }
             }
             _ => {}

@@ -126,24 +126,18 @@ describe('identifierTypeOptions', () => {
 });
 
 describe('sectionLabel', () => {
-  it('maps top-level section "server"', () => {
+  it('title-cases single-word sections', () => {
     expect(sectionLabel('server')).toBe('Server');
-  });
-
-  it('maps top-level section "metadata"', () => {
-    expect(sectionLabel('metadata')).toBe('Metadata Providers');
-  });
-
-  it('maps top-level section "import"', () => {
+    expect(sectionLabel('auth')).toBe('Auth');
     expect(sectionLabel('import')).toBe('Import');
   });
 
-  it('maps top-level section "auth"', () => {
-    expect(sectionLabel('auth')).toBe('Authentication');
+  it('title-cases multi-word section keys', () => {
+    expect(sectionLabel('isbn_scan')).toBe('Isbn Scan');
   });
 
-  it('maps top-level section "isbn_scan"', () => {
-    expect(sectionLabel('isbn_scan')).toBe('ISBN Scanning');
+  it('joins dotted sections with a separator', () => {
+    expect(sectionLabel('auth.proxy')).toBe('Auth · Proxy');
   });
 
   it('derives metadata subsection labels via providerLabel', () => {
@@ -153,7 +147,7 @@ describe('sectionLabel', () => {
     expect(sectionLabel('metadata.loc')).toBe('Library of Congress');
   });
 
-  it('returns raw section string for unknown sections', () => {
-    expect(sectionLabel('unknown_section')).toBe('unknown_section');
+  it('falls back to a title-cased derivation for unknown sections', () => {
+    expect(sectionLabel('unknown_section')).toBe('Unknown Section');
   });
 });

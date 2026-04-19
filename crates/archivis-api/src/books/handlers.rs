@@ -135,17 +135,15 @@ fn set_field_protection(
     for field in fields {
         let provenance = provenance_for_field_mut(book, field)?;
         match provenance {
-            Some(existing) => {
-                if existing.protected != protected {
-                    existing.protected = protected;
-                    changed = true;
-                }
+            Some(existing) if existing.protected != protected => {
+                existing.protected = protected;
+                changed = true;
             }
             None if protected => {
                 *provenance = Some(user_field_provenance());
                 changed = true;
             }
-            None => {}
+            Some(_) | None => {}
         }
     }
 
@@ -2021,7 +2019,6 @@ async fn apply_batch_tags(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
     use std::sync::Arc;
 
     use axum::extract::{Path, State};
@@ -2086,14 +2083,7 @@ mod tests {
             storage.clone(),
             tmp.path().to_path_buf(),
         ));
-        let config_service = Arc::new(ConfigService::new(
-            HashMap::new(),
-            HashMap::new(),
-            HashMap::new(),
-            HashMap::new(),
-            HashMap::new(),
-            db_pool.clone(),
-        ));
+        let config_service = Arc::new(ConfigService::for_tests(db_pool.clone()));
 
         AppState::new(
             db_pool,
@@ -3466,7 +3456,7 @@ mod tests {
             )
             .await;
 
-            assert!(result.is_ok(), "q={q:?} returned error: {:?}", result.err(),);
+            assert!(result.is_ok(), "q={q:?} returned error: {:?}", result.err());
         }
     }
 

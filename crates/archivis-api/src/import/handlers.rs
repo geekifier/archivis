@@ -133,6 +133,7 @@ pub async fn scan_directory(
         state.db_pool().clone(),
         state.storage().clone(),
         import_config,
+        state.settings_reader(),
     );
     let bulk_service = BulkImportService::new(import_service);
 
@@ -152,7 +153,7 @@ pub async fn scan_directory(
         .collect();
 
     // Sort by count descending for a predictable, useful ordering.
-    formats.sort_by(|a, b| b.count.cmp(&a.count));
+    formats.sort_by_key(|f| std::cmp::Reverse(f.count));
 
     Ok(Json(ScanManifestResponse {
         total_files: manifest.total_files,

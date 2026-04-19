@@ -118,6 +118,11 @@ impl AppState {
         &self.inner.config_service
     }
 
+    /// Borrow the config service as a `SettingsReader` (owned `Arc`).
+    pub fn settings_reader(&self) -> Arc<dyn archivis_core::settings::SettingsReader> {
+        Arc::clone(&self.inner.config_service) as Arc<dyn archivis_core::settings::SettingsReader>
+    }
+
     pub fn watcher_service(&self) -> Option<&Arc<RwLock<WatcherService>>> {
         self.inner.watcher_service.as_ref()
     }

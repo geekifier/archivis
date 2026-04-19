@@ -1,3 +1,6 @@
+# Pin local + CI to the same Rust release so clippy lint sets stay aligned.
+# Bumping this requires running `just check` first to catch any new lints.
 [toolchain]
-channel = "stable"
+channel = "1.95.0"
 components = ["rustfmt", "clippy"]
+profile = "minimal"

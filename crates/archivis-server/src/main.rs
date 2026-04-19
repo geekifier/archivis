@@ -13,7 +13,7 @@ use archivis_metadata::{
 use archivis_storage::local::LocalStorage;
 use archivis_storage::watcher::{service::WatcherRuntimeConfig, WatcherService};
 use archivis_tasks::import::{BulkImportService, ImportConfig, ImportService};
-use archivis_tasks::isbn_scan::{IsbnScanConfig as TaskIsbnScanConfig, IsbnScanService};
+use archivis_tasks::isbn_scan::IsbnScanService;
 use archivis_tasks::merge::MergeService;
 use archivis_tasks::queue::{self, TaskQueue, Worker};
 use archivis_tasks::resolve::ResolutionService;
@@ -129,7 +129,8 @@ async fn main() {
     // 4. Metadata providers
     let settings_reader: Arc<dyn archivis_core::settings::SettingsReader> =
         Arc::clone(&config_service) as _;
-    let provider_registry = init_metadata_providers(&config.metadata, &settings_reader);
+    let provider_registry =
+        init_metadata_providers(&config.metadata, &settings_reader, config_service.store());
 
     // 5. Task queue, workers, and services
     let (router, watcher_service) = init_services_and_router(
@@ -254,52 +255,74 @@ async fn bootstrap_admin(auth_service: &AuthService<LocalAuthAdapter>) {
     }
 }
 
-/// Load settings from the database, apply them to the effective config, and build
-/// the `ConfigService` that powers the admin settings API.
+/// Normalize legacy DB rows, build the `SettingStore`, and wrap it in the
+/// `ConfigService` that powers the admin settings API.
+///
+/// Side effect: after this function, `config` has DB overrides applied so that
+/// the existing worker-init paths see runtime values. Phase 3 will remove this
+/// coupling by making workers read from the store directly.
 async fn init_config_service(
     cli: &Cli,
     config: &mut AppConfig,
     db_pool: &archivis_db::DbPool,
 ) -> Arc<archivis_api::settings::service::ConfigService> {
-    let db_settings = archivis_db::SettingRepository::get_all(db_pool)
-        .await
-        .unwrap_or_else(|err| {
-            tracing::warn!(%err, "Failed to load settings from database");
-            Vec::new()
-        });
-    let db_keys: Vec<String> = db_settings.iter().map(|(k, _)| k.clone()).collect();
+    // 1. Normalize legacy DB rows (one-shot: canonicalize, delete-if-default,
+    //    hard-fail on unknown / bootstrap keys).
+    let normalized = match archivis_api::settings::normalize::normalize_settings(db_pool).await {
+        Ok(r) => r,
+        Err(err) => {
+            tracing::error!(%err, "Settings normalization failed");
+            std::process::exit(1);
+        }
+    };
 
-    // Load file-only config once (defaults + TOML, no env/CLI).
-    // Used for bootstrap source detection and as the base for "configured" values.
+    // Convert normalized rows into a (String, String) list mirroring the old
+    // shape that `apply_db_settings` consumes.
+    let db_settings_stringy: Vec<(String, String)> = normalized
+        .rows
+        .iter()
+        .map(|(k, v)| {
+            (
+                k.clone(),
+                serde_json::to_string(v).unwrap_or_else(|_| "null".into()),
+            )
+        })
+        .collect();
+
+    // 2. File-only config snapshot (defaults + TOML, no env/CLI) — used for
+    //    bootstrap source detection.
     let config_path = cli.config.to_str().unwrap_or("config.toml");
     let file_cli = Cli::parse_from::<[&str; 3], &str>(["archivis", "--config", config_path]);
     let file_config = AppConfig::load(&file_cli).unwrap_or_default();
     let file_flat = config::flatten_config(&file_config);
 
-    // Build "configured" config: file-loaded base (bootstrap) + DB overlay (runtime)
-    let configured_config = {
-        let mut base = file_config;
-        config::apply_db_settings(&mut base, &db_settings);
-        base
-    };
-
-    // Apply DB settings to the effective config (which already has env/CLI)
-    config::apply_db_settings(config, &db_settings);
-
-    // Flatten for source detection and API exposure
+    // 3. Apply DB overrides to the effective `AppConfig` so existing worker
+    //    init code still sees runtime values. Phase 3 migrates consumers off
+    //    of this shim and onto `SettingsReader`.
+    config::apply_db_settings(config, &db_settings_stringy);
     let default_flat = config::flatten_config(&AppConfig::default());
-    let configured_flat = config::flatten_config(&configured_config);
     let effective_flat = config::flatten_config(config);
 
-    let configured_sources = config::detect_configured_sources(&default_flat, &file_flat, &db_keys);
+    // 4. Env/CLI pin detection.
     let env_overrides = config::detect_env_overrides(cli);
+    let runtime_pins = config::build_runtime_pins(&env_overrides, &effective_flat);
+
+    // 5. Build the core `SettingStore` from normalized runtime rows + pins.
+    let store =
+        match archivis_core::settings::SettingStore::from_initial(normalized.rows, runtime_pins) {
+            Ok(s) => std::sync::Arc::new(s),
+            Err(err) => {
+                tracing::error!(%err, "Failed to build setting store");
+                std::process::exit(1);
+            }
+        };
+
+    // 6. Build the bootstrap view exposed read-only via the admin UI.
+    let bootstrap_view = config::build_bootstrap_view(&default_flat, &file_flat, &effective_flat);
 
     Arc::new(archivis_api::settings::service::ConfigService::new(
-        effective_flat,
-        file_flat,
-        configured_flat,
-        configured_sources,
-        env_overrides,
+        store,
+        bootstrap_view,
         db_pool.clone(),
     ))
 }
@@ -324,7 +347,7 @@ async fn init_services_and_router(
     // Build shared resolution service (used by both workers and compatibility handlers)
     let resolver = Arc::new(MetadataResolver::new(
         Arc::clone(&provider_registry),
-        settings_reader,
+        Arc::clone(&settings_reader),
     ));
     let resolve_service = Arc::new(ResolutionService::new(
         db_pool.clone(),
@@ -340,6 +363,7 @@ async fn init_services_and_router(
         &provider_registry,
         &resolve_service,
         &task_queue,
+        &settings_reader,
     );
     let progress = task_queue.progress_sender();
     let dispatcher_pool = db_pool.clone();
@@ -368,7 +392,7 @@ async fn init_services_and_router(
 
     // Initialize filesystem watcher if enabled
     let watcher_service = if config.watcher.enabled {
-        match init_watcher(&db_pool, &task_queue).await {
+        match init_watcher(&db_pool, &task_queue, &settings_reader).await {
             Ok(ws) => Some(ws),
             Err(err) => {
                 tracing::error!(%err, "Failed to initialize watcher service");
@@ -424,17 +448,18 @@ fn init_workers(
     _provider_registry: &Arc<ProviderRegistry>,
     resolve_service: &Arc<ResolutionService<LocalStorage>>,
     task_queue: &Arc<TaskQueue>,
+    settings_reader: &Arc<dyn archivis_core::settings::SettingsReader>,
 ) -> HashMap<archivis_core::models::TaskType, Arc<dyn Worker>> {
     let import_config = ImportConfig {
         data_dir: config.data_dir.clone(),
         scoring_profile: config.metadata.scoring_profile,
-        auto_link_formats: config.import.auto_link_formats,
         ..ImportConfig::default()
     };
     let import_service = Arc::new(ImportService::new(
         db_pool.clone(),
         storage.clone(),
         import_config,
+        Arc::clone(settings_reader),
     ));
     let bulk_import_service = Arc::new(BulkImportService::new(ImportService::new(
         db_pool.clone(),
@@ -442,26 +467,24 @@ fn init_workers(
         ImportConfig {
             data_dir: config.data_dir.clone(),
             scoring_profile: config.metadata.scoring_profile,
-            auto_link_formats: config.import.auto_link_formats,
             ..ImportConfig::default()
         },
+        Arc::clone(settings_reader),
     )));
-
-    let isbn_scan_on_import = config.isbn_scan.scan_on_import;
 
     let mut workers: HashMap<archivis_core::models::TaskType, Arc<dyn Worker>> = HashMap::new();
     workers.insert(
         archivis_core::models::TaskType::ImportFile,
         Arc::new(
             ImportFileWorker::new(Arc::clone(&import_service))
-                .with_isbn_scan(Arc::clone(task_queue), isbn_scan_on_import),
+                .with_isbn_scan(Arc::clone(task_queue), Arc::clone(settings_reader)),
         ),
     );
     workers.insert(
         archivis_core::models::TaskType::ImportDirectory,
         Arc::new(
             ImportDirectoryWorker::new(Arc::clone(&bulk_import_service))
-                .with_isbn_scan(Arc::clone(task_queue), isbn_scan_on_import),
+                .with_isbn_scan(Arc::clone(task_queue), Arc::clone(settings_reader)),
         ),
     );
     workers.insert(
@@ -469,20 +492,12 @@ fn init_workers(
         Arc::new(ResolveWorker::new(Arc::clone(resolve_service))),
     );
 
-    // ISBN content-scan worker
-    let isbn_scan_config = TaskIsbnScanConfig::from_app_config(
-        config.isbn_scan.confidence,
-        config.isbn_scan.skip_threshold,
-        config.isbn_scan.epub_spine_items,
-        config.isbn_scan.pdf_pages,
-        config.isbn_scan.fb2_sections,
-        config.isbn_scan.txt_bytes,
-        config.isbn_scan.mobi_bytes,
-    );
+    // ISBN content-scan worker — runtime knobs are read from the store at
+    // task start (`PerUse`).
     let isbn_scan_service = Arc::new(IsbnScanService::new(
         db_pool.clone(),
         storage.clone(),
-        isbn_scan_config,
+        Arc::clone(settings_reader),
     ));
     workers.insert(
         archivis_core::models::TaskType::ScanIsbn,
@@ -509,22 +524,17 @@ fn init_workers(
 async fn init_watcher(
     db_pool: &archivis_db::DbPool,
     task_queue: &Arc<TaskQueue>,
+    settings_reader: &Arc<dyn archivis_core::settings::SettingsReader>,
 ) -> Result<Arc<RwLock<WatcherService>>, Box<dyn std::error::Error + Send + Sync>> {
-    // Load runtime watcher settings from DB, falling back to defaults.
-    let debounce_ms = archivis_db::SettingRepository::get(db_pool, "watcher.debounce_ms")
-        .await
-        .ok()
-        .flatten()
-        .and_then(|v| v.parse::<u64>().ok())
+    use archivis_core::settings::SettingsReaderExt;
+    // Boot snapshot — watcher debounce/poll keys are RestartRequired, so a
+    // one-shot read here is the authoritative source until the next restart.
+    let debounce_ms = settings_reader
+        .get_u64("watcher.debounce_ms")
         .unwrap_or(2000);
-
-    let default_poll_interval_secs =
-        archivis_db::SettingRepository::get(db_pool, "watcher.default_poll_interval_secs")
-            .await
-            .ok()
-            .flatten()
-            .and_then(|v| v.parse::<u64>().ok())
-            .unwrap_or(30);
+    let default_poll_interval_secs = settings_reader
+        .get_u64("watcher.default_poll_interval_secs")
+        .unwrap_or(30);
 
     let watcher_config = WatcherRuntimeConfig {
         debounce_ms,
@@ -587,8 +597,9 @@ async fn init_watcher(
     if let Some(event_rx) = event_rx {
         let task_queue_clone = Arc::clone(task_queue);
         let db_pool_clone = db_pool.clone();
+        let settings_clone = Arc::clone(settings_reader);
         tokio::spawn(async move {
-            watcher_processor::run(event_rx, task_queue_clone, db_pool_clone).await;
+            watcher_processor::run(event_rx, task_queue_clone, db_pool_clone, settings_clone).await;
         });
     }
 
@@ -602,10 +613,12 @@ async fn init_watcher(
 fn init_metadata_providers(
     metadata_config: &config::MetadataConfig,
     settings: &Arc<dyn archivis_core::settings::SettingsReader>,
+    store: &Arc<archivis_core::settings::SettingStore>,
 ) -> Arc<ProviderRegistry> {
     let version = env!("ARCHIVIS_VERSION");
     let mut http_client =
-        MetadataHttpClient::new(version, metadata_config.contact_email.as_deref());
+        MetadataHttpClient::new(version, metadata_config.contact_email.as_deref())
+            .with_settings(Arc::clone(settings));
 
     // Register rate limiters before wrapping in Arc
     OpenLibraryProvider::register_rate_limiter_with_limit(
@@ -622,6 +635,9 @@ fn init_metadata_providers(
     );
 
     let http_client = Arc::new(http_client);
+
+    // Subscribe to store changes and live-reload rate-limit settings.
+    spawn_rate_limit_reloader(Arc::clone(&http_client), store);
 
     let ol_provider = OpenLibraryProvider::new(Arc::clone(&http_client), Arc::clone(settings));
     let hc_provider = HardcoverProvider::new(Arc::clone(&http_client), Arc::clone(settings));
@@ -646,6 +662,34 @@ fn init_metadata_providers(
     );
 
     Arc::new(registry)
+}
+
+/// Subscribe to setting changes and live-reload metadata provider rate limits.
+///
+/// One central reload path for all three `Subscribed` keys; in-flight requests
+/// keep the limiter they observed at start, while new requests see the
+/// updated rate.
+fn spawn_rate_limit_reloader(
+    http_client: Arc<MetadataHttpClient>,
+    store: &Arc<archivis_core::settings::SettingStore>,
+) {
+    use archivis_core::settings::SettingsReaderExt;
+    let mut rx = store.subscribe();
+    let store = Arc::clone(store);
+    tokio::spawn(async move {
+        while rx.changed().await.is_ok() {
+            // Snapshot is already the new one. Apply fresh rates.
+            if let Some(rpm) = store.get_u32("metadata.open_library.max_requests_per_minute") {
+                http_client.update_rate("open_library", rpm);
+            }
+            if let Some(rpm) = store.get_u32("metadata.hardcover.max_requests_per_minute") {
+                http_client.update_rate("hardcover", rpm);
+            }
+            if let Some(rpm) = store.get_u32("metadata.loc.max_requests_per_minute") {
+                http_client.update_rate("loc", rpm);
+            }
+        }
+    });
 }
 
 async fn shutdown_signal() {

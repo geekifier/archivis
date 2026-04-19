@@ -384,8 +384,16 @@ impl AppConfig {
 
 use std::collections::HashMap;
 
-use archivis_api::settings::registry::SettingScope;
-use archivis_api::settings::service::{ConfigOverride, ConfigSource};
+use archivis_api::settings::registry::{SettingMeta, SettingScope};
+use archivis_api::settings::service::ConfigSource;
+use archivis_core::settings::ConfigSource as CoreConfigSource;
+
+/// Local override record for boot-time wiring. Not exposed via the API.
+#[derive(Debug, Clone)]
+pub struct ConfigOverride {
+    pub source: ConfigSource,
+    pub env_var: Option<String>,
+}
 
 /// Flatten an `AppConfig` into a `HashMap<String, serde_json::Value>` with dotted keys.
 pub fn flatten_config(config: &AppConfig) -> HashMap<String, serde_json::Value> {
@@ -580,6 +588,7 @@ pub fn detect_env_overrides(cli: &Cli) -> HashMap<String, ConfigOverride> {
 /// - **Bootstrap** keys: compare file values vs defaults → `File` if different, then
 ///   check DB → `Database`, else `Default`.
 /// - **Runtime** keys: check DB → `Database`, else `Default` — never `File`.
+#[allow(dead_code)] // Still exported for tests; Phase 2 reshapes DTOs around this.
 pub fn detect_configured_sources(
     default_flat: &HashMap<String, serde_json::Value>,
     file_flat: &HashMap<String, serde_json::Value>,
@@ -588,15 +597,16 @@ pub fn detect_configured_sources(
     let mut sources = HashMap::new();
 
     for meta in archivis_api::settings::registry::all_settings() {
-        let has_db_value = db_keys.contains(&meta.key.to_string())
-            || archivis_api::settings::registry::legacy_setting_keys(meta.key)
+        let key = meta.key();
+        let has_db_value = db_keys.contains(&key.to_string())
+            || archivis_api::settings::registry::legacy_setting_keys(key)
                 .iter()
                 .any(|legacy| db_keys.contains(&(*legacy).to_string()));
-        let source = match meta.scope {
+        let source = match meta.scope() {
             SettingScope::Bootstrap => {
                 if has_db_value {
                     ConfigSource::Database
-                } else if file_flat.get(meta.key) != default_flat.get(meta.key) {
+                } else if file_flat.get(key) != default_flat.get(key) {
                     ConfigSource::File
                 } else {
                     ConfigSource::Default
@@ -610,10 +620,66 @@ pub fn detect_configured_sources(
                 }
             }
         };
-        sources.insert(meta.key.to_string(), source);
+        sources.insert(key.to_string(), source);
     }
 
     sources
+}
+
+/// Build a `BootstrapView` for `ConfigService`.
+pub fn build_bootstrap_view(
+    default_flat: &HashMap<String, serde_json::Value>,
+    file_flat: &HashMap<String, serde_json::Value>,
+    effective_flat: &HashMap<String, serde_json::Value>,
+) -> archivis_api::settings::service::BootstrapView {
+    let mut values: HashMap<String, serde_json::Value> = HashMap::new();
+    let mut file_overrides: Vec<String> = Vec::new();
+    for meta in archivis_api::settings::registry::all_settings() {
+        if meta.scope() != SettingScope::Bootstrap {
+            continue;
+        }
+        let key = meta.key().to_string();
+        if let Some(v) = effective_flat.get(&key) {
+            values.insert(key.clone(), v.clone());
+        }
+        if file_flat.get(meta.key()) != default_flat.get(meta.key()) {
+            file_overrides.push(key);
+        }
+    }
+    archivis_api::settings::service::BootstrapView {
+        values,
+        file_overrides,
+    }
+}
+
+/// Convert detected env/CLI overrides into `SettingStore::from_initial` pins,
+/// extracting the values from the effective flat config. Only runtime keys are
+/// returned (bootstrap pins don't go into the store).
+pub fn build_runtime_pins(
+    overrides: &HashMap<String, ConfigOverride>,
+    effective_flat: &HashMap<String, serde_json::Value>,
+) -> Vec<(String, CoreConfigSource, serde_json::Value)> {
+    let mut pins = Vec::new();
+    for (key, ov) in overrides {
+        let Some(meta) = archivis_api::settings::registry::get_setting_meta(key) else {
+            continue;
+        };
+        if !matches!(meta, SettingMeta::Runtime(_)) {
+            continue;
+        }
+        let Some(value) = effective_flat.get(key).cloned() else {
+            continue;
+        };
+        let core_source = match ov.source {
+            ConfigSource::Env => CoreConfigSource::EnvPin {
+                var: ov.env_var.clone().unwrap_or_default(),
+            },
+            ConfigSource::Cli => CoreConfigSource::CliPin { flag: key.clone() },
+            _ => continue,
+        };
+        pins.push((key.clone(), core_source, value));
+    }
+    pins
 }
 
 /// Apply DB settings as overrides to an `AppConfig` by updating fields directly.
@@ -1035,43 +1101,35 @@ frontend_dir = "/opt/archivis/frontend"
         );
     }
 
-    /// Every setting in the registry must be backed by an `AppConfig` field so
-    /// that `flatten_config(AppConfig::default())` returns the correct default
-    /// and the API can surface it. This test catches the class of bug where a
-    /// setting is added to the registry without a corresponding `AppConfig` field.
+    /// Every bootstrap setting in the registry must be backed by an `AppConfig`
+    /// field so that `flatten_config(AppConfig::default())` returns the correct
+    /// default. Runtime settings live in the core `SettingStore` and are
+    /// validated there.
     #[test]
-    fn all_registry_settings_have_app_config_defaults() {
+    fn all_bootstrap_settings_have_app_config_defaults() {
         use archivis_api::settings::registry::{self, SettingType};
 
         let flat = flatten_config(&AppConfig::default());
         for meta in registry::all_settings() {
+            if meta.scope() != SettingScope::Bootstrap {
+                continue;
+            }
+            let key = meta.key();
             assert!(
-                flat.contains_key(meta.key),
-                "Registry setting '{}' has no corresponding field in AppConfig. \
-                 Every registered setting must be backed by an AppConfig field \
-                 so the API returns its default correctly.",
-                meta.key
+                flat.contains_key(key),
+                "Bootstrap setting '{key}' has no corresponding field in AppConfig."
             );
-            let val = &flat[meta.key];
-            match meta.value_type {
-                SettingType::Bool => assert!(
-                    val.is_boolean(),
-                    "'{}' default is not a boolean: {}",
-                    meta.key,
-                    val
-                ),
-                SettingType::Integer | SettingType::Float => assert!(
-                    val.is_number(),
-                    "'{}' default is not a number: {}",
-                    meta.key,
-                    val
-                ),
-                SettingType::String | SettingType::Select => assert!(
-                    val.is_string(),
-                    "'{}' default is not a string: {}",
-                    meta.key,
-                    val
-                ),
+            let val = &flat[key];
+            match meta.value_type() {
+                SettingType::Bool => {
+                    assert!(val.is_boolean(), "'{key}' default is not a boolean: {val}");
+                }
+                SettingType::Integer | SettingType::Float => {
+                    assert!(val.is_number(), "'{key}' default is not a number: {val}");
+                }
+                SettingType::String | SettingType::Select => {
+                    assert!(val.is_string(), "'{key}' default is not a string: {val}");
+                }
                 SettingType::OptionalString => {} // null or string, both fine
             }
         }

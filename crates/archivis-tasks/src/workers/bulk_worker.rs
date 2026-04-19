@@ -241,11 +241,7 @@ async fn execute_bulk_update(
         }
 
         #[allow(clippy::cast_possible_truncation)]
-        let pct = if total > 0 {
-            (((i + 1) * 100) / total) as u8
-        } else {
-            100
-        };
+        let pct = (((i + 1) * 100).checked_div(total).unwrap_or(100)) as u8;
 
         if (i + 1) % 50 == 0 || i + 1 == total {
             progress
@@ -308,11 +304,7 @@ async fn execute_bulk_set_tags(
         }
 
         #[allow(clippy::cast_possible_truncation)]
-        let pct = if total > 0 {
-            (((i + 1) * 100) / total) as u8
-        } else {
-            100
-        };
+        let pct = (((i + 1) * 100).checked_div(total).unwrap_or(100)) as u8;
 
         if (i + 1) % 50 == 0 || i + 1 == total {
             progress

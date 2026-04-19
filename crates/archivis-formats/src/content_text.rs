@@ -333,16 +333,14 @@ fn parse_fb2_sections(xml: &str) -> Result<Vec<String>, FormatError> {
                     section_depth += 1;
                 }
             }
-            Ok(Event::Text(ref t)) => {
-                if in_body && section_depth > 0 {
-                    let text = t.unescape().unwrap_or_default();
-                    let trimmed = text.trim();
-                    if !trimmed.is_empty() {
-                        if !current_section.is_empty() {
-                            current_section.push(' ');
-                        }
-                        current_section.push_str(trimmed);
+            Ok(Event::Text(ref t)) if in_body && section_depth > 0 => {
+                let text = t.unescape().unwrap_or_default();
+                let trimmed = text.trim();
+                if !trimmed.is_empty() {
+                    if !current_section.is_empty() {
+                        current_section.push(' ');
                     }
+                    current_section.push_str(trimmed);
                 }
             }
             Ok(Event::End(ref e)) => {

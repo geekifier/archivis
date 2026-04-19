@@ -1,14 +1,17 @@
 use std::fmt::Write as _;
 use std::path::Path;
 
+use std::sync::Arc;
+
 use archivis_core::models::metadata_rule::is_trusted_publisher;
 use archivis_core::models::{
     Book, BookFile, BookFormat, DuplicateLink, FieldProvenance, Identifier, MetadataProvenance,
     MetadataRule, MetadataSource, MetadataStatus,
 };
+use archivis_core::settings::{SettingsReader, SettingsReaderExt};
 use archivis_db::{
     AuthorRepository, BookFileRepository, BookRepository, DbPool, DuplicateRepository,
-    IdentifierRepository, PublisherRepository, SeriesRepository, SettingRepository, TagRepository,
+    IdentifierRepository, PublisherRepository, SeriesRepository, TagRepository,
 };
 use archivis_formats::sanitize::sanitize_text;
 use archivis_formats::{ExtractedMetadata, ParsedFilename};
@@ -24,17 +27,24 @@ pub struct ImportService<S: StorageBackend> {
     db_pool: DbPool,
     storage: S,
     config: ImportConfig,
+    settings: Arc<dyn SettingsReader>,
     /// Serializes fuzzy-check through book-creation to prevent concurrent
     /// imports from missing each other's uncommitted books (TOCTOU race).
     import_mutex: tokio::sync::Mutex<()>,
 }
 
 impl<S: StorageBackend> ImportService<S> {
-    pub fn new(db_pool: DbPool, storage: S, config: ImportConfig) -> Self {
+    pub fn new(
+        db_pool: DbPool,
+        storage: S,
+        config: ImportConfig,
+        settings: Arc<dyn SettingsReader>,
+    ) -> Self {
         Self {
             db_pool,
             storage,
             config,
+            settings,
             import_mutex: tokio::sync::Mutex::new(()),
         }
     }
@@ -507,11 +517,12 @@ impl<S: StorageBackend> ImportService<S> {
             return Ok(None);
         };
 
-        // Check if auto-linking is enabled (default from config, overridable via DB setting)
-        let enabled = SettingRepository::get(&self.db_pool, "import.auto_link_formats")
-            .await?
-            .map_or(self.config.auto_link_formats, |v| v != "false");
-        if !enabled {
+        // PerUse: re-read the current setting on every call.
+        if !self
+            .settings
+            .get_bool("import.auto_link_formats")
+            .unwrap_or(true)
+        {
             return Ok(None);
         }
 

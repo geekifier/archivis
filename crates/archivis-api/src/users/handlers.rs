@@ -260,12 +260,7 @@ mod tests {
             storage.clone(),
             dir.to_path_buf(),
         ));
-        let config_service = Arc::new(crate::settings::service::ConfigService::new(
-            std::collections::HashMap::new(),
-            std::collections::HashMap::new(),
-            std::collections::HashMap::new(),
-            std::collections::HashMap::new(),
-            std::collections::HashMap::new(),
+        let config_service = Arc::new(crate::settings::service::ConfigService::for_tests(
             db_pool.clone(),
         ));
 

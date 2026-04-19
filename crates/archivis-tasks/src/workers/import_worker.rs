@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use archivis_core::errors::TaskError;
 use archivis_core::models::TaskType;
+use archivis_core::settings::{SettingsReader, SettingsReaderExt};
 use archivis_db::MetadataRuleRepository;
 use archivis_storage::StorageBackend;
 
@@ -23,7 +24,7 @@ use crate::queue::{ProgressSender, TaskQueue, Worker};
 pub struct ImportFileWorker<S: StorageBackend> {
     import_service: Arc<ImportService<S>>,
     task_queue: Option<Arc<TaskQueue>>,
-    isbn_scan_on_import: bool,
+    settings: Option<Arc<dyn SettingsReader>>,
 }
 
 impl<S: StorageBackend> ImportFileWorker<S> {
@@ -31,15 +32,20 @@ impl<S: StorageBackend> ImportFileWorker<S> {
         Self {
             import_service,
             task_queue: None,
-            isbn_scan_on_import: false,
+            settings: None,
         }
     }
 
-    /// Enable automatic ISBN scanning after successful imports.
+    /// Enable automatic ISBN scanning. The `isbn_scan.scan_on_import` setting
+    /// is read from `settings` at task execution time (`PerUse`).
     #[must_use]
-    pub fn with_isbn_scan(mut self, task_queue: Arc<TaskQueue>, enabled: bool) -> Self {
+    pub fn with_isbn_scan(
+        mut self,
+        task_queue: Arc<TaskQueue>,
+        settings: Arc<dyn SettingsReader>,
+    ) -> Self {
         self.task_queue = Some(task_queue);
-        self.isbn_scan_on_import = enabled;
+        self.settings = Some(settings);
         self
     }
 }
@@ -82,7 +88,12 @@ impl<S: StorageBackend + 'static> Worker for ImportFileWorker<S> {
                 .await;
 
             if let Some(queue) = &self.task_queue {
-                if self.isbn_scan_on_import {
+                let scan_on_import = self
+                    .settings
+                    .as_ref()
+                    .and_then(|s| s.get_bool("isbn_scan.scan_on_import"))
+                    .unwrap_or(true);
+                if scan_on_import {
                     let scan_payload = serde_json::json!({
                         "book_id": result.book_id.to_string(),
                         "resolve_after_scan": true,
@@ -135,7 +146,7 @@ impl<S: StorageBackend + 'static> Worker for ImportFileWorker<S> {
 pub struct ImportDirectoryWorker<S: StorageBackend> {
     bulk_import_service: Arc<BulkImportService<S>>,
     task_queue: Option<Arc<TaskQueue>>,
-    isbn_scan_on_import: bool,
+    settings: Option<Arc<dyn SettingsReader>>,
 }
 
 impl<S: StorageBackend> ImportDirectoryWorker<S> {
@@ -143,15 +154,20 @@ impl<S: StorageBackend> ImportDirectoryWorker<S> {
         Self {
             bulk_import_service,
             task_queue: None,
-            isbn_scan_on_import: false,
+            settings: None,
         }
     }
 
-    /// Enable automatic ISBN scanning after successful bulk imports.
+    /// Enable automatic ISBN scanning. The `isbn_scan.scan_on_import` setting
+    /// is read from `settings` at task execution time (`PerUse`).
     #[must_use]
-    pub fn with_isbn_scan(mut self, task_queue: Arc<TaskQueue>, enabled: bool) -> Self {
+    pub fn with_isbn_scan(
+        mut self,
+        task_queue: Arc<TaskQueue>,
+        settings: Arc<dyn SettingsReader>,
+    ) -> Self {
         self.task_queue = Some(task_queue);
-        self.isbn_scan_on_import = enabled;
+        self.settings = Some(settings);
         self
     }
 }
@@ -197,37 +213,43 @@ impl<S: StorageBackend + 'static> Worker for ImportDirectoryWorker<S> {
 
             let book_ids = unique_book_ids(result.imported.iter().map(|import| import.book_id));
             if let Some(queue) = &self.task_queue {
-                if self.isbn_scan_on_import && !book_ids.is_empty() {
+                let scan_on_import = self
+                    .settings
+                    .as_ref()
+                    .and_then(|s| s.get_bool("isbn_scan.scan_on_import"))
+                    .unwrap_or(true);
+                if !book_ids.is_empty() {
                     let count = book_ids.len();
-                    let scan_payload = serde_json::json!({
-                        "book_ids": book_ids,
-                        "resolve_after_scan": true,
-                    });
-                    log_enqueue_result(
-                        queue
-                            .enqueue_child(TaskType::ScanIsbn, scan_payload, progress.task_id())
-                            .await,
-                        "batch ISBN scan after directory import",
-                        None,
-                        Some(count),
-                    );
-                } else if !self.isbn_scan_on_import && !book_ids.is_empty() {
-                    let count = book_ids.len();
-                    let resolve_payload = serde_json::json!({
-                        "book_ids": book_ids,
-                    });
-                    log_enqueue_result(
-                        queue
-                            .enqueue_child(
-                                TaskType::ResolveBook,
-                                resolve_payload,
-                                progress.task_id(),
-                            )
-                            .await,
-                        "batch resolution after directory import",
-                        None,
-                        Some(count),
-                    );
+                    if scan_on_import {
+                        let scan_payload = serde_json::json!({
+                            "book_ids": book_ids,
+                            "resolve_after_scan": true,
+                        });
+                        log_enqueue_result(
+                            queue
+                                .enqueue_child(TaskType::ScanIsbn, scan_payload, progress.task_id())
+                                .await,
+                            "batch ISBN scan after directory import",
+                            None,
+                            Some(count),
+                        );
+                    } else {
+                        let resolve_payload = serde_json::json!({
+                            "book_ids": book_ids,
+                        });
+                        log_enqueue_result(
+                            queue
+                                .enqueue_child(
+                                    TaskType::ResolveBook,
+                                    resolve_payload,
+                                    progress.task_id(),
+                                )
+                                .await,
+                            "batch resolution after directory import",
+                            None,
+                            Some(count),
+                        );
+                    }
                 }
             }
 

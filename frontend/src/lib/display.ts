@@ -55,14 +55,6 @@ const identifierTypes: Record<string, DisplayEntry> = {
   }
 };
 
-const topLevelSections: Record<string, string> = {
-  server: 'Server',
-  metadata: 'Metadata Providers',
-  import: 'Import',
-  auth: 'Authentication',
-  isbn_scan: 'ISBN Scanning'
-};
-
 export function providerLabel(slug: string): string {
   return providers[slug]?.label ?? slug;
 }
@@ -86,11 +78,26 @@ export function identifierTypeOptions(): { value: string; label: string }[] {
   }));
 }
 
+/**
+ * Render a human-readable label for a setting section key.
+ *
+ * Sections are computed from the dotted section path declared by the server
+ * registry (e.g. `metadata`, `metadata.open_library`, `watcher`). Provider
+ * sub-sections reuse the provider-label lookup; everything else is derived by
+ * splitting on `.` and title-casing each segment.
+ */
 export function sectionLabel(section: string): string {
-  if (topLevelSections[section]) return topLevelSections[section];
   if (section.startsWith('metadata.')) {
     const slug = section.slice('metadata.'.length);
     return providerLabel(slug);
   }
-  return section;
+  return section
+    .split('.')
+    .map((part) =>
+      part
+        .split('_')
+        .map((w) => (w.length === 0 ? w : w[0].toUpperCase() + w.slice(1)))
+        .join(' ')
+    )
+    .join(' · ');
 }

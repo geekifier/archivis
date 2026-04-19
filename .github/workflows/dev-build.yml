@@ -27,6 +27,10 @@ env:
   SQLX_OFFLINE: "true"
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
+  # Pinned Rust release. MUST match `rust-toolchain.toml` channel.
+  # Pass to every dtolnay/rust-toolchain step so `rustup target add` operates
+  # on the same toolchain name that cargo invokes via rust-toolchain.toml.
+  RUST_TOOLCHAIN: "1.95.0"
 
 jobs:
   # ── CI quality gate ────────────────────────────────────────────────────────
@@ -86,6 +90,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
         with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           targets: ${{ matrix.target }}
 
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1

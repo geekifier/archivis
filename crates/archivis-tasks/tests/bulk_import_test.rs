@@ -1,8 +1,9 @@
 use std::io::Write;
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
+use archivis_core::settings::{SettingStore, SettingsReader};
 use archivis_db::BookFileRepository;
 use archivis_storage::local::LocalStorage;
 use archivis_tasks::import::{
@@ -10,6 +11,10 @@ use archivis_tasks::import::{
     NoopProgress, SkipReason,
 };
 use tempfile::TempDir;
+
+fn test_settings_reader() -> Arc<dyn SettingsReader> {
+    Arc::new(SettingStore::from_initial(vec![], vec![]).unwrap()) as Arc<dyn SettingsReader>
+}
 
 /// Create a minimal valid EPUB file as bytes (same as `import_test.rs`).
 fn create_test_epub(title: &str, author: &str) -> Vec<u8> {
@@ -85,7 +90,7 @@ async fn setup_bulk_env(tmp: &TempDir) -> BulkImportService<LocalStorage> {
         ..ImportConfig::default()
     };
 
-    let import_service = ImportService::new(pool, storage, config);
+    let import_service = ImportService::new(pool, storage, config, test_settings_reader());
     BulkImportService::new(import_service)
 }
 

@@ -532,25 +532,31 @@ fn parse_mods_record(xml: &str) -> Option<ModsRecord> {
                             record.non_sort = Some(raw);
                         }
                     }
-                    b"title" if in_series_title_info && !text.is_empty() => {
-                        if record.series_title.is_none() {
-                            record.series_title = Some(text);
-                        }
+                    b"title"
+                        if in_series_title_info
+                            && !text.is_empty()
+                            && record.series_title.is_none() =>
+                    {
+                        record.series_title = Some(text);
                     }
-                    b"partNumber" if in_series_title_info && !text.is_empty() => {
-                        if record.series_position.is_none() {
-                            record.series_position = Some(text);
-                        }
+                    b"partNumber"
+                        if in_series_title_info
+                            && !text.is_empty()
+                            && record.series_position.is_none() =>
+                    {
+                        record.series_position = Some(text);
                     }
-                    b"title" if in_primary_title_info && !text.is_empty() => {
-                        if record.title.is_none() {
-                            record.title = Some(text);
-                        }
+                    b"title"
+                        if in_primary_title_info && !text.is_empty() && record.title.is_none() =>
+                    {
+                        record.title = Some(text);
                     }
-                    b"subTitle" if in_primary_title_info && !text.is_empty() => {
-                        if record.subtitle.is_none() {
-                            record.subtitle = Some(text);
-                        }
+                    b"subTitle"
+                        if in_primary_title_info
+                            && !text.is_empty()
+                            && record.subtitle.is_none() =>
+                    {
+                        record.subtitle = Some(text);
                     }
                     b"titleInfo" => {
                         in_series_title_info = false;
@@ -581,44 +587,41 @@ fn parse_mods_record(xml: &str) -> Option<ModsRecord> {
                         }
                     }
                     b"publisher" | b"namePart"
-                        if !in_name && !text.is_empty() && in_origin_info =>
+                        if !in_name
+                            && !text.is_empty()
+                            && in_origin_info
+                            && record.publisher.is_none() =>
                     {
-                        if record.publisher.is_none() {
-                            // Strip trailing comma/semicolon from publisher names
-                            let cleaned = text.trim_end_matches([',', ';']).trim().to_string();
-                            if !cleaned.is_empty() {
-                                record.publisher = Some(cleaned);
-                            }
+                        // Strip trailing comma/semicolon from publisher names
+                        let cleaned = text.trim_end_matches([',', ';']).trim().to_string();
+                        if !cleaned.is_empty() {
+                            record.publisher = Some(cleaned);
                         }
                     }
-                    b"dateIssued" if !text.is_empty() => {
-                        if record.date_issued.is_none() {
-                            record.date_issued = Some(text);
-                        }
+                    b"dateIssued" if !text.is_empty() && record.date_issued.is_none() => {
+                        record.date_issued = Some(text);
                     }
-                    b"extent" if in_physical_description && !text.is_empty() => {
-                        if record.extent.is_none() {
-                            record.extent = Some(text);
-                        }
+                    b"extent"
+                        if in_physical_description
+                            && !text.is_empty()
+                            && record.extent.is_none() =>
+                    {
+                        record.extent = Some(text);
                     }
-                    b"languageTerm" if !text.is_empty() => {
-                        if record.language_code.is_none() {
-                            record.language_code = Some(text);
-                        }
+                    b"languageTerm" if !text.is_empty() && record.language_code.is_none() => {
+                        record.language_code = Some(text);
                     }
-                    b"topic" | b"geographic" if !text.is_empty() => {
-                        if !record.topics.contains(&text) {
-                            record.topics.push(text);
-                        }
+                    b"topic" | b"geographic"
+                        if !text.is_empty() && !record.topics.contains(&text) =>
+                    {
+                        record.topics.push(text);
                     }
                     b"identifier" if !text.is_empty() => match identifier_type.as_str() {
                         "isbn" => {
                             record.isbns.push(text);
                         }
-                        "lccn" => {
-                            if record.lccn.is_none() {
-                                record.lccn = Some(text);
-                            }
+                        "lccn" if record.lccn.is_none() => {
+                            record.lccn = Some(text);
                         }
                         _ => {}
                     },

@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
-use super::service::SettingEntry;
+use super::service::{SettingEntry, SettingError};
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct SettingsResponse {
@@ -19,4 +19,9 @@ pub struct UpdateSettingsRequest {
 pub struct UpdateSettingsResponse {
     pub updated: Vec<String>,
     pub requires_restart: bool,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct UpdateSettingsErrorResponse {
+    pub errors: Vec<SettingError>,
 }

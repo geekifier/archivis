@@ -1,8 +1,9 @@
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use archivis_core::settings::{SettingsReader, SettingsReaderExt};
 use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE, RETRY_AFTER, USER_AGENT};
 use tokio::sync::Mutex;
 use tracing::{debug, warn};
@@ -10,29 +11,54 @@ use tracing::{debug, warn};
 use crate::errors::ProviderError;
 
 /// Token bucket rate limiter for a single provider.
+///
+/// The configured rate (`max_tokens` + `refill_interval`) is held behind
+/// atomics so that a central subscriber can adjust it live when the
+/// corresponding setting changes.
 struct RateLimiter {
     tokens: AtomicU32,
-    max_tokens: u32,
-    refill_interval: Duration,
+    max_tokens: AtomicU32,
+    refill_interval_ms: AtomicU64,
     last_refill: Mutex<Instant>,
 }
 
 impl RateLimiter {
     fn new(max_requests_per_minute: u32) -> Self {
-        // Each token represents one request. Refill interval is calculated
-        // so that over one minute, max_requests_per_minute tokens are added.
-        let refill_interval = if max_requests_per_minute == 0 {
+        let (max_tokens, refill_interval) = Self::derive(max_requests_per_minute);
+        Self {
+            tokens: AtomicU32::new(max_tokens),
+            max_tokens: AtomicU32::new(max_tokens),
+            #[allow(clippy::cast_possible_truncation)]
+            refill_interval_ms: AtomicU64::new(refill_interval.as_millis() as u64),
+            last_refill: Mutex::new(Instant::now()),
+        }
+    }
+
+    fn derive(max_requests_per_minute: u32) -> (u32, Duration) {
+        let interval = if max_requests_per_minute == 0 {
             Duration::from_secs(60)
         } else {
             Duration::from_secs(60) / max_requests_per_minute
         };
+        (max_requests_per_minute, interval)
+    }
 
-        Self {
-            tokens: AtomicU32::new(max_requests_per_minute),
-            max_tokens: max_requests_per_minute,
-            refill_interval,
-            last_refill: Mutex::new(Instant::now()),
+    /// Update the configured rate without recreating the limiter.
+    fn update_rate(&self, max_requests_per_minute: u32) {
+        let (max_tokens, refill_interval) = Self::derive(max_requests_per_minute);
+        self.max_tokens.store(max_tokens, Ordering::Relaxed);
+        #[allow(clippy::cast_possible_truncation)]
+        self.refill_interval_ms
+            .store(refill_interval.as_millis() as u64, Ordering::Relaxed);
+        // Cap any stale token count at the new ceiling.
+        let current = self.tokens.load(Ordering::Relaxed);
+        if current > max_tokens {
+            self.tokens.store(max_tokens, Ordering::Relaxed);
         }
+    }
+
+    fn refill_interval(&self) -> Duration {
+        Duration::from_millis(self.refill_interval_ms.load(Ordering::Relaxed))
     }
 
     /// Refill tokens based on elapsed time since last refill.
@@ -40,13 +66,14 @@ impl RateLimiter {
         let mut last_refill = self.last_refill.lock().await;
         let now = Instant::now();
         let elapsed = now.duration_since(*last_refill);
+        let interval_ms = self.refill_interval_ms.load(Ordering::Relaxed).max(1);
         let new_tokens =
-            u32::try_from(elapsed.as_millis() / self.refill_interval.as_millis().max(1))
-                .unwrap_or(u32::MAX);
+            u32::try_from(elapsed.as_millis() / u128::from(interval_ms)).unwrap_or(u32::MAX);
 
         if new_tokens > 0 {
+            let max_tokens = self.max_tokens.load(Ordering::Relaxed);
             let current = self.tokens.load(Ordering::Relaxed);
-            let refilled = (current + new_tokens).min(self.max_tokens);
+            let refilled = (current + new_tokens).min(max_tokens);
             self.tokens.store(refilled, Ordering::Relaxed);
             *last_refill = now;
         }
@@ -68,7 +95,7 @@ impl RateLimiter {
             }
 
             // No tokens available — wait for one refill interval before retrying.
-            tokio::time::sleep(self.refill_interval).await;
+            tokio::time::sleep(self.refill_interval()).await;
         }
     }
 }
@@ -81,6 +108,17 @@ pub struct MetadataHttpClient {
     client: reqwest::Client,
     rate_limiters: HashMap<String, Arc<RateLimiter>>,
     user_agent: String,
+    version: String,
+    /// When set, `metadata.contact_email` is read from settings at every
+    /// request and composed into the `User-Agent` header (`PerUse`).
+    settings: Option<Arc<dyn SettingsReader>>,
+}
+
+fn build_user_agent(version: &str, contact: Option<&str>) -> String {
+    contact.map_or_else(
+        || format!("Archivis/{version} (+https://github.com/geekifier/archivis)"),
+        |email| format!("Archivis/{version} ({email}; +https://github.com/geekifier/archivis)"),
+    )
 }
 
 impl MetadataHttpClient {
@@ -89,10 +127,7 @@ impl MetadataHttpClient {
     /// `version` — application version string (e.g. "0.1.0").
     /// `contact` — optional contact email for API identification.
     pub fn new(version: &str, contact: Option<&str>) -> Self {
-        let user_agent = contact.map_or_else(
-            || format!("Archivis/{version} (+https://github.com/geekifier/archivis)"),
-            |email| format!("Archivis/{version} ({email}; +https://github.com/geekifier/archivis)"),
-        );
+        let user_agent = build_user_agent(version, contact);
 
         let mut default_headers = HeaderMap::new();
         if let Ok(ua_value) = HeaderValue::from_str(&user_agent) {
@@ -109,7 +144,28 @@ impl MetadataHttpClient {
             client,
             rate_limiters: HashMap::new(),
             user_agent,
+            version: version.to_string(),
+            settings: None,
         }
+    }
+
+    /// Make `metadata.contact_email` live: subsequent requests read the value
+    /// from the settings store and override the `User-Agent` header (`PerUse`).
+    #[must_use]
+    pub fn with_settings(mut self, settings: Arc<dyn SettingsReader>) -> Self {
+        self.settings = Some(settings);
+        self
+    }
+
+    /// Compute the `User-Agent` to send on the next request.
+    fn current_user_agent(&self) -> String {
+        self.settings.as_ref().map_or_else(
+            || self.user_agent.clone(),
+            |s| {
+                let contact = s.get_optional_string("metadata.contact_email");
+                build_user_agent(&self.version, contact.as_deref())
+            },
+        )
     }
 
     /// Register a per-provider rate limiter.
@@ -118,6 +174,14 @@ impl MetadataHttpClient {
             name.to_string(),
             Arc::new(RateLimiter::new(max_requests_per_minute)),
         );
+    }
+
+    /// Update an existing provider's rate limit without reconstructing the
+    /// client. Silently ignored for unknown providers.
+    pub fn update_rate(&self, name: &str, max_requests_per_minute: u32) {
+        if let Some(limiter) = self.rate_limiters.get(name) {
+            limiter.update_rate(max_requests_per_minute);
+        }
     }
 
     /// Returns the User-Agent string.
@@ -140,7 +204,12 @@ impl MetadataHttpClient {
         loop {
             debug!(provider = provider_name, url = url, "GET request");
 
-            let response = self.client.get(url).send().await?;
+            let response = self
+                .client
+                .get(url)
+                .header(USER_AGENT, self.current_user_agent())
+                .send()
+                .await?;
             let status = response.status().as_u16();
 
             if status == 429 || status == 503 {
@@ -173,6 +242,7 @@ impl MetadataHttpClient {
             let response = self
                 .client
                 .post(url)
+                .header(USER_AGENT, self.current_user_agent())
                 .header(CONTENT_TYPE, "application/json")
                 .json(body)
                 .send()
@@ -219,6 +289,7 @@ impl MetadataHttpClient {
             let mut request = self
                 .client
                 .post(url)
+                .header(USER_AGENT, self.current_user_agent())
                 .header(CONTENT_TYPE, "application/json");
 
             for &(name, value) in extra_headers {

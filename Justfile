@@ -47,8 +47,17 @@ test-frontend-watch:
 deny:
     cargo deny check
 
-# Full quality gate: fmt + clippy + test + deny
-check: fmt-check clippy test deny
+# Enforce settings-subsystem boundary (no direct SettingRepository reads
+# outside allowed modules).
+settings-isolation:
+    ./scripts/check-settings-isolation.sh
+
+# Verify rust-toolchain.toml and CI's RUST_TOOLCHAIN env var match.
+toolchain-pin:
+    ./scripts/check-toolchain-pin.sh
+
+# Full quality gate: fmt + clippy + test + deny + isolation + toolchain pin
+check: fmt-check clippy test deny settings-isolation toolchain-pin
 
 # Full frontend gate: build + lint + check + test
 check-frontend:

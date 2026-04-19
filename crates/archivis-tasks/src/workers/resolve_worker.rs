@@ -54,11 +54,7 @@ impl<S: StorageBackend> ResolveWorker<S> {
                 .map_err(|e| TaskError::Failed(format!("invalid UUID '{id_str}': {e}")))?;
 
             #[allow(clippy::cast_possible_truncation)]
-            let pct = if total > 0 {
-                ((index * 100) / total) as u8
-            } else {
-                0
-            };
+            let pct = ((index * 100).checked_div(total).unwrap_or(0)) as u8;
 
             progress
                 .send_progress_with_data(

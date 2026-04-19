@@ -705,36 +705,68 @@ export interface BatchIsbnScanResponse {
 export type ConfigSource = 'default' | 'file' | 'database' | 'env' | 'cli';
 export type SettingScope = 'bootstrap' | 'runtime';
 export type SettingType = 'string' | 'optional_string' | 'bool' | 'integer' | 'float' | 'select';
+export type ApplyMode = 'per_use' | 'subscribed' | 'restart_required';
+export type PinSource = 'env' | 'cli';
 
-export interface SettingOverride {
-  source: 'env' | 'cli';
-  env_var?: string;
+export interface PinDetail {
+  source: PinSource;
+  /** For `env`: the environment variable name. For `cli`: the flag name. */
+  var_or_flag: string;
 }
 
 export interface SettingEntry {
   key: string;
-  value: unknown;
-  effective_value: unknown;
-  source: ConfigSource;
   scope: SettingScope;
-  override: SettingOverride | null;
+  value_type: SettingType;
+
+  /** The admin-requested value (default or DB-persisted). */
+  configured_value: unknown;
+  configured_source: ConfigSource;
+
+  /** What the server is actually using right now. */
+  effective_value: unknown;
+  effective_source: ConfigSource;
+
+  /** True for bootstrap keys and runtime keys held by an env/CLI pin. */
+  readonly: boolean;
   requires_restart: boolean;
+  pin_detail?: PinDetail;
+
   label: string;
   description: string;
   section: string;
-  value_type: SettingType;
-  sensitive?: boolean;
-  is_set?: boolean;
+  sensitive: boolean;
   options?: string[];
+  /** `undefined` for bootstrap keys. */
+  apply_mode?: ApplyMode;
+  /** For sensitive optional-string keys: whether a value is persisted. */
+  is_set?: boolean;
 }
 
 export interface SettingsResponse {
   settings: SettingEntry[];
 }
 
+export type SettingErrorCode =
+  | 'type_invalid'
+  | 'pinned'
+  | 'bootstrap'
+  | 'unknown'
+  | 'invalid';
+
+export interface SettingError {
+  key: string;
+  code: SettingErrorCode;
+  message: string;
+}
+
 export interface UpdateSettingsResponse {
   updated: string[];
   requires_restart: boolean;
+}
+
+export interface UpdateSettingsErrorResponse {
+  errors: SettingError[];
 }
 
 // --- Reader types ---
