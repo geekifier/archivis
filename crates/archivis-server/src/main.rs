@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use archivis_api::state::{ApiConfig, AppState};
 use archivis_auth::{AuthService, LocalAuthAdapter};
+use archivis_core::public_url::PublicBaseUrl;
 use archivis_metadata::{
     HardcoverProvider, LocProvider, MetadataHttpClient, MetadataResolver, OpenLibraryProvider,
     ProviderRegistry,
@@ -44,6 +45,7 @@ async fn main() {
     let frontend_display = config.frontend_dir.as_deref().map(std::path::Path::display);
     tracing::info!(
         listen = %config.bind_address(),
+        public_base_url = ?config.public_base_url,
         data_dir = %config.data_dir.display(),
         book_storage_path = %config.book_storage_path.display(),
         frontend_dir = ?frontend_display,
@@ -318,7 +320,8 @@ async fn init_config_service(
         };
 
     // 6. Build the bootstrap view exposed read-only via the admin UI.
-    let bootstrap_view = config::build_bootstrap_view(&default_flat, &file_flat, &effective_flat);
+    let bootstrap_view =
+        config::build_bootstrap_view(&default_flat, &file_flat, &effective_flat, &env_overrides);
 
     Arc::new(archivis_api::settings::service::ConfigService::new(
         store,
@@ -414,6 +417,10 @@ async fn init_services_and_router(
     let api_config = ApiConfig {
         data_dir: config.data_dir.clone(),
         frontend_dir: config.frontend_dir.clone(),
+        public_base_url: config
+            .public_base_url
+            .as_deref()
+            .map(|value| PublicBaseUrl::parse(value).expect("public_base_url validated at load")),
     };
 
     // Generate ephemeral scope signing key (not persisted — server restart

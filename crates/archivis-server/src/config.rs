@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use archivis_core::models::ScoringProfile;
+use archivis_core::public_url::{PublicBaseUrl, PublicBaseUrlError};
 use clap::Parser;
 use figment::{
     providers::{Env, Format, Serialized, Toml},
@@ -27,6 +28,10 @@ pub struct Cli {
     /// Port to bind the HTTP server to.
     #[arg(short, long)]
     pub port: Option<u16>,
+
+    /// Stable externally reachable URL used when Archivis must emit absolute links.
+    #[arg(long)]
+    pub public_base_url: Option<String>,
 
     /// Directory for application data (database, cache, etc.).
     #[arg(long)]
@@ -61,6 +66,9 @@ pub struct AppConfig {
     pub listen_address: String,
     /// Port to bind the HTTP server to.
     pub port: u16,
+    /// Stable externally reachable URL used when Archivis must emit absolute links.
+    #[serde(default)]
+    pub public_base_url: Option<String>,
     /// Root directory for application data (database, cache, etc.).
     pub data_dir: PathBuf,
     /// Root directory for book file storage.
@@ -298,6 +306,7 @@ impl Default for AppConfig {
         Self {
             listen_address: "127.0.0.1".to_owned(),
             port: 9514,
+            public_base_url: None,
             data_dir: PathBuf::from("data"),
             // Empty sentinel — resolved to {data_dir}/books in resolve_derived_defaults
             book_storage_path: PathBuf::new(),
@@ -321,6 +330,8 @@ struct CliOverrides {
     #[serde(skip_serializing_if = "Option::is_none")]
     port: Option<u16>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    public_base_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     data_dir: Option<PathBuf>,
     #[serde(skip_serializing_if = "Option::is_none")]
     book_storage_path: Option<PathBuf>,
@@ -330,12 +341,29 @@ struct CliOverrides {
     log_level: Option<String>,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum ConfigLoadError {
+    #[error(transparent)]
+    Figment(Box<figment::Error>),
+    #[error("invalid value for public_base_url: {source}")]
+    PublicBaseUrl {
+        #[source]
+        source: PublicBaseUrlError,
+    },
+}
+
+impl From<figment::Error> for ConfigLoadError {
+    fn from(source: figment::Error) -> Self {
+        Self::Figment(Box::new(source))
+    }
+}
+
 impl AppConfig {
     /// Load configuration from all available sources.
     ///
     /// Priority: CLI flags > environment variables > TOML config file > defaults.
     /// A missing config file is not an error (defaults and env vars are sufficient).
-    pub fn load(cli: &Cli) -> Result<Self, Box<figment::Error>> {
+    pub fn load(cli: &Cli) -> Result<Self, ConfigLoadError> {
         let mut figment = Figment::from(Serialized::defaults(Self::default()));
 
         if cli.config.exists() {
@@ -345,6 +373,7 @@ impl AppConfig {
         let overrides = CliOverrides {
             listen_address: cli.listen_address.clone(),
             port: cli.port,
+            public_base_url: cli.public_base_url.clone(),
             data_dir: cli.data_dir.clone(),
             book_storage_path: cli.book_storage_path.clone(),
             frontend_dir: cli.frontend_dir.clone(),
@@ -357,6 +386,7 @@ impl AppConfig {
 
         let mut config: Self = figment.extract()?;
         config.resolve_derived_defaults();
+        config.validate()?;
         Ok(config)
     }
 
@@ -365,6 +395,15 @@ impl AppConfig {
         if self.book_storage_path.as_os_str().is_empty() {
             self.book_storage_path = self.data_dir.join("books");
         }
+    }
+
+    fn validate(&mut self) -> Result<(), ConfigLoadError> {
+        if let Some(raw) = self.public_base_url.as_deref() {
+            let normalized = PublicBaseUrl::parse(raw)
+                .map_err(|source| ConfigLoadError::PublicBaseUrl { source })?;
+            self.public_base_url = Some(normalized.to_string());
+        }
+        Ok(())
     }
 
     /// Create required directories if they don't already exist.
@@ -392,7 +431,7 @@ use archivis_core::settings::ConfigSource as CoreConfigSource;
 #[derive(Debug, Clone)]
 pub struct ConfigOverride {
     pub source: ConfigSource,
-    pub env_var: Option<String>,
+    pub var_or_flag: String,
 }
 
 /// Flatten an `AppConfig` into a `HashMap<String, serde_json::Value>` with dotted keys.
@@ -453,6 +492,7 @@ pub fn detect_env_overrides(cli: &Cli) -> HashMap<String, ConfigOverride> {
     let env_mappings: &[(&str, &str)] = &[
         ("listen_address", "ARCHIVIS_LISTEN_ADDRESS"),
         ("port", "ARCHIVIS_PORT"),
+        ("public_base_url", "ARCHIVIS_PUBLIC_BASE_URL"),
         ("data_dir", "ARCHIVIS_DATA_DIR"),
         ("book_storage_path", "ARCHIVIS_BOOK_STORAGE_PATH"),
         ("frontend_dir", "ARCHIVIS_FRONTEND_DIR"),
@@ -551,29 +591,42 @@ pub fn detect_env_overrides(cli: &Cli) -> HashMap<String, ConfigOverride> {
                 key.to_string(),
                 ConfigOverride {
                     source: ConfigSource::Env,
-                    env_var: Some(env_var.to_string()),
+                    var_or_flag: env_var.to_string(),
                 },
             );
         }
     }
 
     // CLI overrides: detect by checking if the Option fields were provided
-    let cli_mappings: &[(&str, bool)] = &[
-        ("listen_address", cli.listen_address.is_some()),
-        ("port", cli.port.is_some()),
-        ("data_dir", cli.data_dir.is_some()),
-        ("book_storage_path", cli.book_storage_path.is_some()),
-        ("frontend_dir", cli.frontend_dir.is_some()),
-        ("log_level", cli.log_level.is_some()),
+    let cli_mappings: &[(&str, &str, bool)] = &[
+        (
+            "listen_address",
+            "--listen-address",
+            cli.listen_address.is_some(),
+        ),
+        ("port", "--port", cli.port.is_some()),
+        (
+            "public_base_url",
+            "--public-base-url",
+            cli.public_base_url.is_some(),
+        ),
+        ("data_dir", "--data-dir", cli.data_dir.is_some()),
+        (
+            "book_storage_path",
+            "--book-storage-path",
+            cli.book_storage_path.is_some(),
+        ),
+        ("frontend_dir", "--frontend-dir", cli.frontend_dir.is_some()),
+        ("log_level", "--log-level", cli.log_level.is_some()),
     ];
 
-    for &(key, present) in cli_mappings {
+    for &(key, flag, present) in cli_mappings {
         if present {
             overrides.insert(
                 key.to_string(),
                 ConfigOverride {
                     source: ConfigSource::Cli,
-                    env_var: None,
+                    var_or_flag: flag.to_string(),
                 },
             );
         }
@@ -631,9 +684,14 @@ pub fn build_bootstrap_view(
     default_flat: &HashMap<String, serde_json::Value>,
     file_flat: &HashMap<String, serde_json::Value>,
     effective_flat: &HashMap<String, serde_json::Value>,
+    overrides: &HashMap<String, ConfigOverride>,
 ) -> archivis_api::settings::service::BootstrapView {
     let mut values: HashMap<String, serde_json::Value> = HashMap::new();
-    let mut file_overrides: Vec<String> = Vec::new();
+    let mut sources: HashMap<String, archivis_api::settings::service::ConfigSource> =
+        HashMap::new();
+    let mut pin_details: HashMap<String, archivis_api::settings::service::PinDetail> =
+        HashMap::new();
+
     for meta in archivis_api::settings::registry::all_settings() {
         if meta.scope() != SettingScope::Bootstrap {
             continue;
@@ -642,13 +700,39 @@ pub fn build_bootstrap_view(
         if let Some(v) = effective_flat.get(&key) {
             values.insert(key.clone(), v.clone());
         }
-        if file_flat.get(meta.key()) != default_flat.get(meta.key()) {
-            file_overrides.push(key);
+        if let Some(ov) = overrides.get(&key) {
+            let source = match ov.source {
+                ConfigSource::Env => archivis_api::settings::service::ConfigSource::Env,
+                ConfigSource::Cli => archivis_api::settings::service::ConfigSource::Cli,
+                ConfigSource::Default | ConfigSource::File | ConfigSource::Database => ov.source,
+            };
+            let pin_source = match ov.source {
+                ConfigSource::Env => archivis_api::settings::service::PinSource::Env,
+                ConfigSource::Cli => archivis_api::settings::service::PinSource::Cli,
+                ConfigSource::Default | ConfigSource::File | ConfigSource::Database => continue,
+            };
+            sources.insert(key.clone(), source);
+            pin_details.insert(
+                key,
+                archivis_api::settings::service::PinDetail {
+                    source: pin_source,
+                    var_or_flag: ov.var_or_flag.clone(),
+                },
+            );
+            continue;
         }
+
+        let source = if file_flat.get(meta.key()) == default_flat.get(meta.key()) {
+            archivis_api::settings::service::ConfigSource::Default
+        } else {
+            archivis_api::settings::service::ConfigSource::File
+        };
+        sources.insert(key, source);
     }
     archivis_api::settings::service::BootstrapView {
         values,
-        file_overrides,
+        sources,
+        pin_details,
     }
 }
 
@@ -672,9 +756,11 @@ pub fn build_runtime_pins(
         };
         let core_source = match ov.source {
             ConfigSource::Env => CoreConfigSource::EnvPin {
-                var: ov.env_var.clone().unwrap_or_default(),
+                var: ov.var_or_flag.clone(),
             },
-            ConfigSource::Cli => CoreConfigSource::CliPin { flag: key.clone() },
+            ConfigSource::Cli => CoreConfigSource::CliPin {
+                flag: ov.var_or_flag.clone(),
+            },
             _ => continue,
         };
         pins.push((key.clone(), core_source, value));
@@ -710,6 +796,13 @@ fn apply_setting_to_config(config: &mut AppConfig, key: &str, value: &serde_json
                 }
             }
         }
+        "public_base_url" => match value {
+            serde_json::Value::Null => config.public_base_url = None,
+            serde_json::Value::String(s) => {
+                config.public_base_url = Some(s.clone());
+            }
+            _ => {}
+        },
         "data_dir" => {
             if let Some(s) = value.as_str() {
                 config.data_dir = PathBuf::from(s);
@@ -970,6 +1063,7 @@ mod tests {
         let config = AppConfig::load(&cli).expect("should load from defaults");
         assert_eq!(config.listen_address, "127.0.0.1");
         assert_eq!(config.port, 9514);
+        assert!(config.public_base_url.is_none());
         assert_eq!(config.data_dir, PathBuf::from("data"));
         assert_eq!(config.book_storage_path, PathBuf::from("data/books"));
         assert!(config.frontend_dir.is_none());
@@ -986,6 +1080,8 @@ mod tests {
             "0.0.0.0",
             "--port",
             "3000",
+            "--public-base-url",
+            "https://books.example.com",
             "--data-dir",
             "/tmp/archivis",
             "--book-storage-path",
@@ -998,6 +1094,10 @@ mod tests {
         let config = AppConfig::load(&cli).expect("should load with CLI overrides");
         assert_eq!(config.listen_address, "0.0.0.0");
         assert_eq!(config.port, 3000);
+        assert_eq!(
+            config.public_base_url.as_deref(),
+            Some("https://books.example.com")
+        );
         assert_eq!(config.data_dir, PathBuf::from("/tmp/archivis"));
         assert_eq!(config.book_storage_path, PathBuf::from("/mnt/books"));
         assert_eq!(
@@ -1036,6 +1136,75 @@ frontend_dir = "/opt/archivis/frontend"
         assert_eq!(config.data_dir, PathBuf::from("data"));
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn public_base_url_is_normalized_on_load() {
+        let dir = std::env::temp_dir().join(format!(
+            "archivis-test-public-base-url-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let config_path = dir.join("config.toml");
+        std::fs::write(
+            &config_path,
+            r#"
+public_base_url = "https://books.example.com/"
+"#,
+        )
+        .unwrap();
+
+        let cli = Cli::parse_from(["archivis", "--config", config_path.to_str().unwrap()]);
+        let config = AppConfig::load(&cli).expect("should normalize public_base_url");
+        assert_eq!(
+            config.public_base_url.as_deref(),
+            Some("https://books.example.com")
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn invalid_public_base_url_rejects_load() {
+        let cases = [
+            (r#""/archivis""#, "must be an absolute URL"),
+            (r#""ftp://books.example.com""#, "must use http or https"),
+            (
+                r#""https://user:pass@books.example.com""#,
+                "must not include username or password",
+            ),
+            (
+                r#""https://books.example.com?token=1""#,
+                "must not include a query string",
+            ),
+            (
+                r#""https://books.example.com/#frag""#,
+                "must not include a fragment",
+            ),
+            (
+                r#""https://books.example.com/archivis""#,
+                "must not include a path",
+            ),
+        ];
+
+        for (idx, (value, expected)) in cases.iter().enumerate() {
+            let dir = std::env::temp_dir().join(format!(
+                "archivis-test-invalid-public-base-url-{}-{idx}",
+                std::process::id()
+            ));
+            std::fs::create_dir_all(&dir).unwrap();
+            let config_path = dir.join("config.toml");
+            std::fs::write(&config_path, format!("public_base_url = {value}\n")).unwrap();
+
+            let cli = Cli::parse_from(["archivis", "--config", config_path.to_str().unwrap()]);
+            let err = AppConfig::load(&cli).unwrap_err();
+            assert!(
+                err.to_string().contains(expected),
+                "expected error containing '{expected}', got '{err}'"
+            );
+
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 
     #[test]
@@ -1143,5 +1312,37 @@ frontend_dir = "/opt/archivis/frontend"
         assert!(flat.contains_key("metadata.max_concurrent_resolutions"));
         assert!(!flat.contains_key("metadata.auto_identify_threshold"));
         assert!(!flat.contains_key("metadata.max_concurrent_identifies"));
+    }
+
+    #[test]
+    fn build_bootstrap_view_tracks_env_source_and_pin_detail() {
+        use archivis_api::settings::service::PinSource;
+
+        let default_flat = flatten_config(&AppConfig::default());
+        let mut effective_flat = default_flat.clone();
+        effective_flat.insert(
+            "public_base_url".to_string(),
+            serde_json::json!("https://books.example.com"),
+        );
+
+        let mut overrides = HashMap::new();
+        overrides.insert(
+            "public_base_url".to_string(),
+            ConfigOverride {
+                source: ConfigSource::Env,
+                var_or_flag: "ARCHIVIS_PUBLIC_BASE_URL".to_string(),
+            },
+        );
+
+        let view = build_bootstrap_view(&default_flat, &default_flat, &effective_flat, &overrides);
+
+        assert_eq!(
+            view.values["public_base_url"],
+            serde_json::json!("https://books.example.com")
+        );
+        assert_eq!(view.sources["public_base_url"], ConfigSource::Env);
+        let pin = &view.pin_details["public_base_url"];
+        assert!(matches!(pin.source, PinSource::Env));
+        assert_eq!(pin.var_or_flag, "ARCHIVIS_PUBLIC_BASE_URL");
     }
 }

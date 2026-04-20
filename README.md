@@ -73,6 +73,7 @@ Settings are divided into two scopes:
 | --------------------- | ---------------------------- | ------------------ |
 | `--listen-address`    | `ARCHIVIS_LISTEN_ADDRESS`    | `127.0.0.1`        |
 | `--port`              | `ARCHIVIS_PORT`              | `9514`             |
+| `--public-base-url`   | `ARCHIVIS_PUBLIC_BASE_URL`   | _(none)_           |
 | `--data-dir`          | `ARCHIVIS_DATA_DIR`          | `data`             |
 | `--book-storage-path` | `ARCHIVIS_BOOK_STORAGE_PATH` | `<data_dir>/books` |
 | `--frontend-dir`      | `ARCHIVIS_FRONTEND_DIR`      | _(none)_           |
@@ -86,12 +87,14 @@ Example TOML config file (bootstrap settings only):
 ```toml
 listen_address = "0.0.0.0"
 port = 9514
+public_base_url = "https://books.example.com"
 data_dir = "/var/lib/archivis"
 book_storage_path = "/mnt/books"
 log_level = "info"
 ```
 
 In Docker, `ARCHIVIS_LISTEN_ADDRESS` is set to `0.0.0.0` automatically.
+Set `ARCHIVIS_PUBLIC_BASE_URL` when Archivis must emit absolute links for clients or background jobs.
 
 ## Development
 

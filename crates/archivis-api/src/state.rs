@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use archivis_auth::{AuthService, LocalAuthAdapter, ProxyAuth};
+use archivis_core::public_url::PublicBaseUrl;
 use archivis_db::DbPool;
 use archivis_metadata::ProviderRegistry;
 use archivis_storage::local::LocalStorage;
@@ -22,6 +23,8 @@ pub struct ApiConfig {
     /// When `Some`, the router serves static files and falls back to
     /// `index.html` for SPA client-side routing.
     pub frontend_dir: Option<PathBuf>,
+    /// Stable external origin used when Archivis must emit absolute URLs.
+    pub public_base_url: Option<PublicBaseUrl>,
 }
 
 /// Shared application state passed to all API handlers.

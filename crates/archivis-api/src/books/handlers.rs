@@ -2096,6 +2096,7 @@ mod tests {
             ApiConfig {
                 data_dir: tmp.path().to_path_buf(),
                 frontend_dir: None,
+                public_base_url: None,
             },
             config_service,
             None,

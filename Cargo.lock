@@ -172,6 +172,7 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tokio",
+ "url",
  "utoipa",
  "uuid",
 ]
@@ -246,6 +247,7 @@ dependencies = [
  "rand 0.8.5",
  "serde",
  "serde_json",
+ "thiserror",
  "tokio",
  "tracing",
  "tracing-subscriber",

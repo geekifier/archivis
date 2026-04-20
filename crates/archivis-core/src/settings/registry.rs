@@ -589,6 +589,15 @@ static BOOTSTRAP: &[BootstrapSettingMeta] = &[
         options: None,
     },
     BootstrapSettingMeta {
+        key: "public_base_url",
+        label: "Public Base URL",
+        description: "Stable externally reachable URL used for absolute outbound links",
+        section: "server",
+        value_type: SettingType::OptionalString,
+        sensitive: false,
+        options: None,
+    },
+    BootstrapSettingMeta {
         key: "data_dir",
         label: "Data Directory",
         description: "Root directory for application data (database, cache, etc.)",

@@ -8,6 +8,7 @@ services:
     image: ghcr.io/geekifier/archivis:latest
     environment:
       TZ: Australia/Lord_Howe
+      ARCHIVIS_PUBLIC_BASE_URL: https://books.example.com
     ports:
       - "9514:9514"
     volumes:
@@ -49,6 +50,7 @@ spec:
               tag: latest
             env:
               TZ: Australia/Lord_Howe
+              ARCHIVIS_PUBLIC_BASE_URL: https://books.example.com
             envFrom:
               - secretRef:
                   name: archivis-secret
@@ -124,6 +126,7 @@ spec:
 - **Health probes**: Archivis exposes `/health/live` (liveness) and `/health/ready` (readiness) endpoints on port 9514.
 - **Storage**: Use separate PVCs for `/data` (database + config) and `/books` (ebook storage) so they can be sized and backed up independently.
 - **Security context**: Archivis runs as non-root (UID 1000) with no privilege escalation.
+- **Public URL**: Set `ARCHIVIS_PUBLIC_BASE_URL` to the stable externally reachable Archivis URL. Features that emit absolute links outside request context depend on it.
 
 ### With Reverse Proxy Auth
 
@@ -133,6 +136,7 @@ If running behind an auth proxy (Authelia, Authentik, etc.), add the proxy auth 
 # Add to containers.app.env:
 env:
   TZ: Australia/Lord_Howe
+  ARCHIVIS_PUBLIC_BASE_URL: https://books.example.com
   ARCHIVIS_AUTH__PROXY__ENABLED: "true"
   ARCHIVIS_AUTH__PROXY__TRUSTED_PROXIES: "[100.64.0.0/16]"
   # Match these to the auth response headers configured in your auth proxy

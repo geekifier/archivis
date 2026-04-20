@@ -106,8 +106,10 @@ pub struct SettingEntry {
 #[derive(Debug, Clone, Default)]
 pub struct BootstrapView {
     pub values: HashMap<String, Value>,
-    /// Keys whose value came from the TOML file (for the source indicator).
-    pub file_overrides: Vec<String>,
+    /// Effective source for each bootstrap key.
+    pub sources: HashMap<String, ConfigSource>,
+    /// Optional env/CLI detail for bootstrap keys.
+    pub pin_details: HashMap<String, PinDetail>,
 }
 
 /// Per-key error on `PUT /api/settings`.
@@ -183,11 +185,13 @@ impl ConfigService {
                         .get(bm.key)
                         .cloned()
                         .unwrap_or(Value::Null);
-                    let source = if self.bootstrap.file_overrides.iter().any(|k| k == bm.key) {
-                        ConfigSource::File
-                    } else {
-                        ConfigSource::Default
-                    };
+                    let source = self
+                        .bootstrap
+                        .sources
+                        .get(bm.key)
+                        .copied()
+                        .unwrap_or(ConfigSource::Default);
+                    let pin_detail = self.bootstrap.pin_details.get(bm.key).cloned();
                     let (display, is_set) = mask_if_sensitive(bm.sensitive, &raw);
                     SettingEntry {
                         key: bm.key.to_string(),
@@ -199,7 +203,7 @@ impl ConfigService {
                         effective_source: source,
                         readonly: true,
                         requires_restart: true,
-                        pin_detail: None,
+                        pin_detail,
                         label: bm.label.to_string(),
                         description: bm.description.to_string(),
                         section: bm.section.to_string(),
@@ -424,13 +428,20 @@ mod tests {
     async fn test_service_with_pins(
         pins: Vec<(String, CoreConfigSource, SettingValue)>,
     ) -> (ConfigService, tempfile::TempDir) {
+        test_service_with_bootstrap(BootstrapView::default(), pins).await
+    }
+
+    async fn test_service_with_bootstrap(
+        bootstrap: BootstrapView,
+        pins: Vec<(String, CoreConfigSource, SettingValue)>,
+    ) -> (ConfigService, tempfile::TempDir) {
         let tmp = tempfile::tempdir().unwrap();
         let db_path = tmp.path().join("test.db");
         let pool = archivis_db::create_pool(&db_path).await.unwrap();
         archivis_db::run_migrations(&pool).await.unwrap();
 
         let store = Arc::new(SettingStore::from_initial(vec![], pins).unwrap());
-        let svc = ConfigService::new(store, BootstrapView::default(), pool);
+        let svc = ConfigService::new(store, bootstrap, pool);
         (svc, tmp)
     }
 
