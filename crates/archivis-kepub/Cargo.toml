@@ -1,5 +1,5 @@
 [package]
-name = "archivis-formats"
+name = "archivis-kepub"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -7,18 +7,13 @@ rust-version.workspace = true
 
 [dependencies]
 archivis-core.workspace = true
-thiserror.workspace = true
-tracing.workspace = true
-serde.workspace = true
-tokio = { workspace = true, features = ["sync"] }
-zip.workspace = true
+archivis-formats.workspace = true
 quick-xml.workspace = true
-lopdf = "0.34"
-mobi-book.workspace = true
-regex.workspace = true
+tracing.workspace = true
+zip.workspace = true
 
 [dev-dependencies]
-tempfile.workspace = true
+zip.workspace = true
 
 [lints]
 workspace = true

@@ -9,6 +9,7 @@ pub mod pdf;
 pub mod sanitize;
 pub mod scoring;
 pub mod similarity;
+pub mod transform;
 
 use archivis_core::models::{IdentifierType, MetadataSource};
 

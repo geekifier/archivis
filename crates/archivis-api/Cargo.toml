@@ -33,11 +33,13 @@ base64.workspace = true
 rand.workspace = true
 
 [dev-dependencies]
+archivis-kepub.workspace = true
 http = "1"
 serde_json.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt"] }
 tower = { version = "0.5", features = ["util"] }
+zip.workspace = true
 
 [lints]
 workspace = true

@@ -2,9 +2,10 @@ use std::collections::HashSet;
 
 use axum::extract::{Multipart, Path, Query, State};
 use axum::http::header::{
-    CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_TYPE, ETAG, IF_NONE_MATCH,
+    ACCEPT, CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_TYPE, ETAG, IF_NONE_MATCH,
+    VARY,
 };
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use uuid::Uuid;
@@ -39,10 +40,10 @@ use crate::state::AppState;
 use super::types::{
     AddIdentifierRequest, BatchAsyncResponse, BatchBookFields, BatchSetTagsRequest,
     BatchSyncResponse, BatchTagMode, BatchUpdateBooksRequest, BatchUpdateError, BookDetail,
-    BookListParams, BookSummary, CoverParams, FieldProtectionRequest, IssueSelectionScopeRequest,
-    IssueSelectionScopeResponse, OverrideStatusRequest, PaginatedBooks, QueryWarningResponse,
-    SelectionSpec, SetBookAuthorsRequest, SetBookSeriesRequest, SetBookTagsRequest,
-    UpdateBookRequest, UpdateIdentifierRequest,
+    BookListParams, BookSummary, ContentQuery, CoverParams, FieldProtectionRequest,
+    IssueSelectionScopeRequest, IssueSelectionScopeResponse, OverrideStatusRequest, PaginatedBooks,
+    QueryWarningResponse, SelectionSpec, SetBookAuthorsRequest, SetBookSeriesRequest,
+    SetBookTagsRequest, UpdateBookRequest, UpdateIdentifierRequest,
 };
 
 const USER_EDIT_TRIGGER: &str = "user_edit";
@@ -1231,6 +1232,102 @@ fn simple_hash(data: &[u8]) -> u64 {
     hasher.finish()
 }
 
+/// Build the `filename="…"` value for a `Content-Disposition` header.
+///
+/// Used by both the plain-EPUB and the transformed KEPUB branches; keeping
+/// the quoting in one place ensures the two paths can never diverge.
+fn sanitize_attachment_filename(stem: &str, ext: &str) -> String {
+    let raw = format!("{stem}.{ext}");
+    raw.replace('"', "'")
+}
+
+/// Maximum length of the `X-Archivis-Transform-Error` header value. The
+/// header is informational; we keep it short and ASCII-only so it never
+/// blows the request-line limit on intermediate proxies.
+const MAX_TRANSFORM_ERROR_HEADER_LEN: usize = 200;
+
+fn ascii_sanitize_error(msg: &str) -> String {
+    let mut out = String::with_capacity(msg.len().min(MAX_TRANSFORM_ERROR_HEADER_LEN));
+    for ch in msg.chars() {
+        if out.len() >= MAX_TRANSFORM_ERROR_HEADER_LEN {
+            break;
+        }
+        if ch.is_ascii_graphic() || ch == ' ' {
+            out.push(ch);
+        } else {
+            out.push('?');
+        }
+    }
+    out
+}
+
+/// Resolve the negotiated target id for an EPUB request.
+///
+/// `explicit_format` wins; otherwise, if `accept_header` advertises the
+/// MIME type of any registered transformer whose source format is EPUB
+/// with a non-zero q-value, that transformer's id is returned. Returns
+/// `None` when no transformation was requested (plain-EPUB response).
+fn negotiate_epub_target(
+    transformers: &archivis_formats::transform::TransformerRegistry,
+    explicit_format: Option<&str>,
+    accept_header: Option<&str>,
+) -> Option<String> {
+    if let Some(fmt) = explicit_format {
+        let trimmed = fmt.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_ascii_lowercase());
+        }
+    }
+    let wanted = parse_accept_header(accept_header?);
+    if wanted.is_empty() {
+        return None;
+    }
+    for id in transformers.known_target_ids() {
+        if let Some(t) = transformers.lookup(id) {
+            if t.source_format() == archivis_core::models::BookFormat::Epub
+                && wanted
+                    .iter()
+                    .any(|(media, _q)| media.eq_ignore_ascii_case(t.target_mime()))
+            {
+                return Some(t.id().to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Parse the entries of an `Accept` header, returning `(media-range, q)`
+/// pairs with `q > 0`. Only the bits we need: exact media-type matches
+/// and the `q=` parameter. Other params (`level=…`, etc.) are ignored.
+fn parse_accept_header(header: &str) -> Vec<(String, f32)> {
+    header
+        .split(',')
+        .filter_map(|item| {
+            let mut parts = item.split(';');
+            let media = parts.next()?.trim();
+            if media.is_empty() {
+                return None;
+            }
+            let mut q: f32 = 1.0;
+            for param in parts {
+                let Some((k, v)) = param.split_once('=') else {
+                    continue;
+                };
+                if k.trim().eq_ignore_ascii_case("q") {
+                    if let Ok(parsed) = v.trim().parse::<f32>() {
+                        q = parsed;
+                    }
+                }
+            }
+            if q <= 0.0 {
+                None
+            } else {
+                Some((media.to_ascii_lowercase(), q))
+            }
+        })
+        .collect()
+}
+
 /// `GET /api/books/{id}/files/{file_id}/download` — stream book file.
 #[utoipa::path(
     get,
@@ -1239,6 +1336,7 @@ fn simple_hash(data: &[u8]) -> u64 {
     params(
         ("id" = Uuid, Path, description = "Book ID"),
         ("file_id" = Uuid, Path, description = "Book file ID"),
+        ("format" = Option<String>, Query, description = "Optional target format id (e.g. `kepub`). Falls back to the source file on transform failure."),
     ),
     responses(
         (status = 200, description = "File download", content_type = "application/octet-stream"),
@@ -1251,6 +1349,7 @@ pub async fn download_file(
     State(state): State<AppState>,
     AuthUser(_user): AuthUser,
     Path((book_id, file_id)): Path<(Uuid, Uuid)>,
+    Query(query): Query<ContentQuery>,
 ) -> Result<Response, ApiError> {
     let pool = state.db_pool();
     let book_file = BookFileRepository::get_by_id(pool, file_id).await?;
@@ -1264,17 +1363,89 @@ pub async fn download_file(
     let data = storage.read(&book_file.storage_path).await?;
 
     let book = BookRepository::get_by_id(pool, book_id).await?;
+
+    // Negotiate target. Download endpoint is query-param-only by design;
+    // the `Accept` header is intentionally ignored.
+    let target_id = if book_file.format == archivis_core::models::BookFormat::Epub {
+        negotiate_epub_target(state.transformers(), query.format.as_deref(), None)
+    } else {
+        None
+    };
+
+    if let Some(target_id) = target_id {
+        if let Some(transformer) = state.transformers().lookup(&target_id) {
+            if transformer.source_format() == book_file.format {
+                let permits = state.transformers().permits();
+                let _permit = permits
+                    .acquire_owned()
+                    .await
+                    .map_err(|e| ApiError::Internal(format!("transform permit closed: {e}")))?;
+                let t = transformer.clone();
+                let bytes = data.clone();
+                let result = tokio::task::spawn_blocking(move || t.transform(&bytes))
+                    .await
+                    .map_err(|e| ApiError::Internal(format!("transform task: {e}")))?;
+                match result {
+                    Ok(out) => {
+                        let safe = sanitize_attachment_filename(
+                            &book.title,
+                            transformer.target_extension(),
+                        );
+                        return Ok((
+                            [
+                                (CONTENT_TYPE, transformer.target_mime().to_string()),
+                                (
+                                    CONTENT_DISPOSITION,
+                                    format!("attachment; filename=\"{safe}\""),
+                                ),
+                                (CONTENT_LENGTH, out.len().to_string()),
+                            ],
+                            out,
+                        )
+                            .into_response());
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            book_id = %book_id,
+                            file_id = %file_id,
+                            transformer = %transformer.id(),
+                            error = %e,
+                            "transform failed; falling back to source EPUB",
+                        );
+                        // Fall through to plain response below, with an
+                        // informational error header.
+                        let ext = book_file.format.extension();
+                        let safe = sanitize_attachment_filename(&book.title, ext);
+                        let err_value = ascii_sanitize_error(&e.to_string());
+                        let mut headers = HeaderMap::new();
+                        insert_header(&mut headers, CONTENT_TYPE, book_file.format.mime_type());
+                        insert_header(
+                            &mut headers,
+                            CONTENT_DISPOSITION,
+                            &format!("attachment; filename=\"{safe}\""),
+                        );
+                        insert_header(&mut headers, CONTENT_LENGTH, &data.len().to_string());
+                        insert_header(
+                            &mut headers,
+                            HeaderName::from_static("x-archivis-transform-error"),
+                            &err_value,
+                        );
+                        return Ok((headers, data).into_response());
+                    }
+                }
+            }
+        }
+    }
+
     let ext = book_file.format.extension();
-    let filename = format!("{}.{ext}", book.title);
-    // Sanitize filename for Content-Disposition
-    let safe_filename = filename.replace('"', "'");
+    let safe = sanitize_attachment_filename(&book.title, ext);
 
     Ok((
         [
             (CONTENT_TYPE, book_file.format.mime_type().to_string()),
             (
                 CONTENT_DISPOSITION,
-                format!("attachment; filename=\"{safe_filename}\""),
+                format!("attachment; filename=\"{safe}\""),
             ),
             (CONTENT_LENGTH, data.len().to_string()),
         ],
@@ -1294,6 +1465,7 @@ pub async fn download_file(
     params(
         ("id" = Uuid, Path, description = "Book ID"),
         ("file_id" = Uuid, Path, description = "Book file ID"),
+        ("format" = Option<String>, Query, description = "Optional target format id (e.g. `kepub`). Falls back to the source file on transform failure."),
     ),
     responses(
         (status = 200, description = "File content", content_type = "application/octet-stream"),
@@ -1303,10 +1475,12 @@ pub async fn download_file(
     ),
     security(("bearer" = []))
 )]
+#[allow(clippy::too_many_lines)]
 pub async fn serve_file_content(
     State(state): State<AppState>,
     AuthUser(_user): AuthUser,
     Path((book_id, file_id)): Path<(Uuid, Uuid)>,
+    Query(query): Query<ContentQuery>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     let pool = state.db_pool();
@@ -1317,30 +1491,176 @@ pub async fn serve_file_content(
         return Err(ApiError::NotFound("book file not found".into()));
     }
 
-    // ETag based on the file's SHA-256 hash
-    let etag = format!("\"{}\"", book_file.hash);
-
-    // Check If-None-Match for conditional request
-    if let Some(if_none_match) = headers.get(IF_NONE_MATCH).and_then(|v| v.to_str().ok()) {
-        if if_none_match == etag {
-            return Ok(StatusCode::NOT_MODIFIED.into_response());
+    // For non-EPUB book files, behavior is unchanged (no negotiation, no Vary).
+    if book_file.format != archivis_core::models::BookFormat::Epub {
+        let etag = format!("\"{}\"", book_file.hash);
+        if let Some(inm) = headers.get(IF_NONE_MATCH).and_then(|v| v.to_str().ok()) {
+            if inm == etag {
+                return Ok(StatusCode::NOT_MODIFIED.into_response());
+            }
         }
+        let storage = state.storage();
+        let data = storage.read(&book_file.storage_path).await?;
+        return Ok((
+            [
+                (CONTENT_TYPE, book_file.format.mime_type().to_string()),
+                (CONTENT_DISPOSITION, "inline".to_string()),
+                (CONTENT_LENGTH, data.len().to_string()),
+                (ETAG, etag),
+                (CACHE_CONTROL, "public, max-age=604800, immutable".into()),
+            ],
+            data,
+        )
+            .into_response());
+    }
+
+    let plain_etag = format!("\"{}\"", book_file.hash);
+    let accept = headers
+        .get(ACCEPT)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
+    let target_id = negotiate_epub_target(
+        state.transformers(),
+        query.format.as_deref(),
+        accept.as_deref(),
+    );
+
+    let book = BookRepository::get_by_id(pool, book_id).await?;
+
+    // Plain-EPUB branch (target == source).
+    if target_id.is_none() {
+        if let Some(inm) = headers.get(IF_NONE_MATCH).and_then(|v| v.to_str().ok()) {
+            if inm == plain_etag {
+                let mut resp = StatusCode::NOT_MODIFIED.into_response();
+                resp.headers_mut()
+                    .insert(VARY, HeaderValue::from_static("Accept"));
+                return Ok(resp);
+            }
+        }
+        let storage = state.storage();
+        let data = storage.read(&book_file.storage_path).await?;
+        let safe = sanitize_attachment_filename(&book.title, book_file.format.extension());
+        return Ok((
+            [
+                (CONTENT_TYPE, book_file.format.mime_type().to_string()),
+                (CONTENT_DISPOSITION, format!("inline; filename=\"{safe}\"")),
+                (CONTENT_LENGTH, data.len().to_string()),
+                (ETAG, plain_etag),
+                (CACHE_CONTROL, "public, max-age=604800, immutable".into()),
+                (VARY, "Accept".into()),
+            ],
+            data,
+        )
+            .into_response());
+    }
+
+    // Transformed branch.
+    let target_id = target_id.expect("checked above");
+    let Some(transformer) = state.transformers().lookup(&target_id) else {
+        // Unknown transformer id → fall through to plain response.
+        return serve_plain_epub_with_vary(&state, &book_file, &book).await;
+    };
+    if transformer.source_format() != book_file.format {
+        return serve_plain_epub_with_vary(&state, &book_file, &book).await;
     }
 
     let storage = state.storage();
     let data = storage.read(&book_file.storage_path).await?;
 
+    let permits = state.transformers().permits();
+    let _permit = permits
+        .acquire_owned()
+        .await
+        .map_err(|e| ApiError::Internal(format!("transform permit closed: {e}")))?;
+    let t = transformer.clone();
+    let bytes = data.clone();
+    let result = tokio::task::spawn_blocking(move || t.transform(&bytes))
+        .await
+        .map_err(|e| ApiError::Internal(format!("transform task: {e}")))?;
+
+    match result {
+        Ok(out) => {
+            let etag = format!(
+                "\"{}-{}-{}\"",
+                book_file.hash,
+                transformer.id(),
+                transformer.version()
+            );
+            let safe = sanitize_attachment_filename(&book.title, transformer.target_extension());
+            Ok((
+                [
+                    (CONTENT_TYPE, transformer.target_mime().to_string()),
+                    (CONTENT_DISPOSITION, format!("inline; filename=\"{safe}\"")),
+                    (CONTENT_LENGTH, out.len().to_string()),
+                    (ETAG, etag),
+                    (CACHE_CONTROL, "public, max-age=604800, immutable".into()),
+                    (VARY, "Accept".into()),
+                ],
+                out,
+            )
+                .into_response())
+        }
+        Err(e) => {
+            tracing::warn!(
+                book_id = %book_id,
+                file_id = %file_id,
+                transformer = %transformer.id(),
+                error = %e,
+                "transform failed; falling back to source EPUB",
+            );
+            let safe = sanitize_attachment_filename(&book.title, book_file.format.extension());
+            let err_value = ascii_sanitize_error(&e.to_string());
+            let mut hm = HeaderMap::new();
+            insert_header(&mut hm, CONTENT_TYPE, book_file.format.mime_type());
+            insert_header(
+                &mut hm,
+                CONTENT_DISPOSITION,
+                &format!("inline; filename=\"{safe}\""),
+            );
+            insert_header(&mut hm, CONTENT_LENGTH, &data.len().to_string());
+            insert_header(&mut hm, ETAG, &plain_etag);
+            insert_header(&mut hm, CACHE_CONTROL, "public, max-age=604800, immutable");
+            insert_header(&mut hm, VARY, "Accept");
+            insert_header(
+                &mut hm,
+                HeaderName::from_static("x-archivis-transform-error"),
+                &err_value,
+            );
+            Ok((hm, data).into_response())
+        }
+    }
+}
+
+/// Helper: build a plain-EPUB inline response for the negotiation route
+/// when the requested transformer is unknown or mismatched. Always emits
+/// `Vary: Accept` because the URL is negotiable.
+async fn serve_plain_epub_with_vary(
+    state: &AppState,
+    book_file: &archivis_core::models::BookFile,
+    book: &archivis_core::models::Book,
+) -> Result<Response, ApiError> {
+    let storage = state.storage();
+    let data = storage.read(&book_file.storage_path).await?;
+    let etag = format!("\"{}\"", book_file.hash);
+    let safe = sanitize_attachment_filename(&book.title, book_file.format.extension());
     Ok((
         [
             (CONTENT_TYPE, book_file.format.mime_type().to_string()),
-            (CONTENT_DISPOSITION, "inline".to_string()),
+            (CONTENT_DISPOSITION, format!("inline; filename=\"{safe}\"")),
             (CONTENT_LENGTH, data.len().to_string()),
             (ETAG, etag),
             (CACHE_CONTROL, "public, max-age=604800, immutable".into()),
+            (VARY, "Accept".into()),
         ],
         data,
     )
         .into_response())
+}
+
+fn insert_header(map: &mut HeaderMap, name: HeaderName, value: &str) {
+    if let Ok(v) = HeaderValue::from_str(value) {
+        map.insert(name, v);
+    }
 }
 
 /// POST /api/books/{id}/authors — replace book-author links.
@@ -2085,6 +2405,11 @@ mod tests {
         ));
         let config_service = Arc::new(ConfigService::for_tests(db_pool.clone()));
 
+        let transformers =
+            archivis_formats::transform::TransformerRegistry::new(vec![std::sync::Arc::new(
+                archivis_kepub::KepubTransformer,
+            )
+                as std::sync::Arc<dyn archivis_formats::transform::FormatTransformer>]);
         AppState::new(
             db_pool,
             Arc::new(task_queue),
@@ -2099,6 +2424,7 @@ mod tests {
                 public_base_url: None,
             },
             config_service,
+            Arc::new(transformers),
             None,
             None,
             [0u8; 32],
@@ -3802,5 +4128,433 @@ mod tests {
                 .any(|item| item.title == "Some-Hyphenated-Phrase"),
             "hyphenated search should find the intended title"
         );
+    }
+
+    // ── KEPUB on-the-fly conversion ───────────────────────────────────
+
+    use archivis_core::models::BookFile;
+    use archivis_storage::StorageBackend;
+    use axum::http::header::{
+        ACCEPT, CONTENT_DISPOSITION, CONTENT_TYPE, ETAG, IF_NONE_MATCH, VARY,
+    };
+    use axum::http::HeaderMap;
+    use axum::http::HeaderValue;
+
+    /// Minimal in-memory EPUB used by handler tests.
+    fn build_test_epub() -> Vec<u8> {
+        use std::io::{Cursor, Write};
+        let mut out = Vec::new();
+        {
+            let mut zip = zip::ZipWriter::new(Cursor::new(&mut out));
+            let stored = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored);
+            let deflated = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Deflated);
+
+            zip.start_file("mimetype", stored).unwrap();
+            zip.write_all(b"application/epub+zip").unwrap();
+
+            zip.start_file("META-INF/container.xml", deflated).unwrap();
+            zip.write_all(
+                br#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#,
+            )
+            .unwrap();
+
+            zip.start_file("OEBPS/content.opf", deflated).unwrap();
+            zip.write_all(
+                br#"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Fixture</dc:title>
+    <dc:identifier id="uid">urn:uuid:fixture</dc:identifier>
+    <dc:language>en</dc:language>
+  </metadata>
+  <manifest>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#,
+            )
+            .unwrap();
+
+            zip.start_file("OEBPS/ch1.xhtml", deflated).unwrap();
+            zip.write_all(
+                br#"<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>t</title></head><body><p>Hello.</p></body></html>"#,
+            )
+            .unwrap();
+
+            zip.finish().unwrap();
+        }
+        out
+    }
+
+    /// Same envelope as `build_test_epub` but with a corrupted XHTML document
+    /// (the OPF parses, but the spine doc has a mismatched tag) — used to
+    /// drive the per-document fallback. Note: per-document failures are
+    /// swallowed inside the pipeline; for the *handler-level* fallback we
+    /// need an OPF-level error. So we ship a non-ZIP body to force the
+    /// transformer to fail at the ZIP open step.
+    fn build_corrupt_epub() -> Vec<u8> {
+        // Bytes that look like an EPUB by extension/format flag in the DB
+        // but aren't a valid ZIP: the transformer will return an error on
+        // the very first read.
+        b"this is not a zip but is recorded as an EPUB".to_vec()
+    }
+
+    async fn seed_epub_book(state: &AppState, bytes: Vec<u8>) -> (Uuid, Uuid) {
+        let pool = state.db_pool();
+        let book = Book::new("Hello World");
+        BookRepository::create(pool, &book).await.unwrap();
+
+        let storage = state.storage();
+        let stored = storage
+            .store(&format!("h/{}.epub", book.id), &bytes)
+            .await
+            .unwrap();
+        let file = BookFile::new(
+            book.id,
+            archivis_core::models::BookFormat::Epub,
+            &stored.path,
+            #[allow(clippy::cast_possible_wrap)]
+            (stored.size as i64),
+            &stored.hash,
+            None,
+        );
+        BookFileRepository::create(pool, &file).await.unwrap();
+        (book.id, file.id)
+    }
+
+    fn empty_headers() -> HeaderMap {
+        HeaderMap::new()
+    }
+
+    fn header_has(resp: &Response, name: axum::http::HeaderName, expected: &str) -> bool {
+        resp.headers()
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|v| v.contains(expected))
+    }
+
+    async fn body_bytes(resp: Response) -> Vec<u8> {
+        axum::body::to_bytes(resp.into_body(), 50 * 1024 * 1024)
+            .await
+            .unwrap()
+            .to_vec()
+    }
+
+    #[tokio::test]
+    async fn serves_kepub_with_query_param() {
+        let tmp = TempDir::new().unwrap();
+        let state = test_state(&tmp).await;
+        let (book_id, file_id) = seed_epub_book(&state, build_test_epub()).await;
+
+        let resp = serve_file_content(
+            State(state.clone()),
+            auth_user(),
+            Path((book_id, file_id)),
+            Query(ContentQuery {
+                format: Some("kepub".into()),
+            }),
+            empty_headers(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert!(header_has(&resp, CONTENT_TYPE, "application/kepub+zip"));
+        assert!(header_has(&resp, VARY, "Accept"));
+        let body = body_bytes(resp).await;
+        // mimetype entry sits at offset 30 in EPUB-style ZIPs (PK\x03\x04 header + fixed prefix).
+        assert_eq!(&body[..2], b"PK", "kepub must start with ZIP magic");
+    }
+
+    #[tokio::test]
+    async fn serves_kepub_via_accept_header() {
+        let tmp = TempDir::new().unwrap();
+        let state = test_state(&tmp).await;
+        let (book_id, file_id) = seed_epub_book(&state, build_test_epub()).await;
+
+        let mut headers = HeaderMap::new();
+        headers.insert(ACCEPT, HeaderValue::from_static("application/kepub+zip"));
+
+        let resp = serve_file_content(
+            State(state.clone()),
+            auth_user(),
+            Path((book_id, file_id)),
+            Query(ContentQuery::default()),
+            headers,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert!(header_has(&resp, CONTENT_TYPE, "application/kepub+zip"));
+        assert!(header_has(&resp, VARY, "Accept"));
+    }
+
+    #[tokio::test]
+    async fn plain_epub_response_includes_vary() {
+        let tmp = TempDir::new().unwrap();
+        let state = test_state(&tmp).await;
+        let (book_id, file_id) = seed_epub_book(&state, build_test_epub()).await;
+
+        let resp = serve_file_content(
+            State(state.clone()),
+            auth_user(),
+            Path((book_id, file_id)),
+            Query(ContentQuery::default()),
+            empty_headers(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert!(header_has(&resp, CONTENT_TYPE, "application/epub+zip"));
+        assert!(header_has(&resp, VARY, "Accept"));
+    }
+
+    #[tokio::test]
+    async fn plain_epub_304_includes_vary() {
+        let tmp = TempDir::new().unwrap();
+        let state = test_state(&tmp).await;
+        let (book_id, file_id) = seed_epub_book(&state, build_test_epub()).await;
+
+        // First call, capture etag.
+        let resp = serve_file_content(
+            State(state.clone()),
+            auth_user(),
+            Path((book_id, file_id)),
+            Query(ContentQuery::default()),
+            empty_headers(),
+        )
+        .await
+        .unwrap();
+        let etag = resp
+            .headers()
+            .get(ETAG)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+
+        // Second call with If-None-Match.
+        let mut headers = HeaderMap::new();
+        headers.insert(IF_NONE_MATCH, HeaderValue::from_str(&etag).unwrap());
+
+        let resp = serve_file_content(
+            State(state.clone()),
+            auth_user(),
+            Path((book_id, file_id)),
+            Query(ContentQuery::default()),
+            headers,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::NOT_MODIFIED);
+        assert!(header_has(&resp, VARY, "Accept"));
+    }
+
+    #[tokio::test]
+    async fn falls_back_on_corrupt_epub() {
+        let tmp = TempDir::new().unwrap();
+        let state = test_state(&tmp).await;
+        let (book_id, file_id) = seed_epub_book(&state, build_corrupt_epub()).await;
+
+        let resp = serve_file_content(
+            State(state.clone()),
+            auth_user(),
+            Path((book_id, file_id)),
+            Query(ContentQuery {
+                format: Some("kepub".into()),
+            }),
+            empty_headers(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert!(header_has(&resp, CONTENT_TYPE, "application/epub+zip"));
+        assert!(resp
+            .headers()
+            .contains_key(axum::http::HeaderName::from_static(
+                "x-archivis-transform-error"
+            )));
+        assert!(header_has(&resp, VARY, "Accept"));
+        // ETag is the plain-EPUB ETag — no transformer suffix.
+        let etag = resp.headers().get(ETAG).unwrap().to_str().unwrap();
+        assert!(
+            !etag.contains("kepub"),
+            "fallback ETag should be plain: {etag}"
+        );
+    }
+
+    #[tokio::test]
+    async fn kepub_request_never_returns_304_in_p1() {
+        let tmp = TempDir::new().unwrap();
+        let state = test_state(&tmp).await;
+        let (book_id, file_id) = seed_epub_book(&state, build_test_epub()).await;
+
+        // First call: get a transformed ETag.
+        let resp = serve_file_content(
+            State(state.clone()),
+            auth_user(),
+            Path((book_id, file_id)),
+            Query(ContentQuery {
+                format: Some("kepub".into()),
+            }),
+            empty_headers(),
+        )
+        .await
+        .unwrap();
+        let etag = resp
+            .headers()
+            .get(ETAG)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+
+        // Second call with If-None-Match should still return 200, not 304.
+        let mut headers = HeaderMap::new();
+        headers.insert(IF_NONE_MATCH, HeaderValue::from_str(&etag).unwrap());
+        let resp = serve_file_content(
+            State(state.clone()),
+            auth_user(),
+            Path((book_id, file_id)),
+            Query(ContentQuery {
+                format: Some("kepub".into()),
+            }),
+            headers,
+        )
+        .await
+        .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert!(header_has(&resp, VARY, "Accept"));
+    }
+
+    #[tokio::test]
+    async fn kepub_request_ignores_plain_epub_inm() {
+        let tmp = TempDir::new().unwrap();
+        let state = test_state(&tmp).await;
+        let (book_id, file_id) = seed_epub_book(&state, build_test_epub()).await;
+
+        // Get plain etag.
+        let resp = serve_file_content(
+            State(state.clone()),
+            auth_user(),
+            Path((book_id, file_id)),
+            Query(ContentQuery::default()),
+            empty_headers(),
+        )
+        .await
+        .unwrap();
+        let plain_etag = resp
+            .headers()
+            .get(ETAG)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+
+        // Use plain etag while requesting kepub — must not 304.
+        let mut headers = HeaderMap::new();
+        headers.insert(IF_NONE_MATCH, HeaderValue::from_str(&plain_etag).unwrap());
+        let resp = serve_file_content(
+            State(state.clone()),
+            auth_user(),
+            Path((book_id, file_id)),
+            Query(ContentQuery {
+                format: Some("kepub".into()),
+            }),
+            headers,
+        )
+        .await
+        .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert!(header_has(&resp, CONTENT_TYPE, "application/kepub+zip"));
+    }
+
+    #[tokio::test]
+    async fn accept_with_kepub_q_zero_returns_plain_epub() {
+        let tmp = TempDir::new().unwrap();
+        let state = test_state(&tmp).await;
+        let (book_id, file_id) = seed_epub_book(&state, build_test_epub()).await;
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            ACCEPT,
+            HeaderValue::from_static("application/kepub+zip;q=0, application/epub+zip"),
+        );
+
+        let resp = serve_file_content(
+            State(state.clone()),
+            auth_user(),
+            Path((book_id, file_id)),
+            Query(ContentQuery::default()),
+            headers,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert!(
+            header_has(&resp, CONTENT_TYPE, "application/epub+zip"),
+            "q=0 must veto KEPUB negotiation"
+        );
+        assert!(
+            !header_has(&resp, CONTENT_TYPE, "application/kepub+zip"),
+            "must not select kepub when q=0"
+        );
+        assert!(header_has(&resp, VARY, "Accept"));
+    }
+
+    #[tokio::test]
+    async fn download_file_query_param_only() {
+        let tmp = TempDir::new().unwrap();
+        let state = test_state(&tmp).await;
+        let (book_id, file_id) = seed_epub_book(&state, build_test_epub()).await;
+
+        let resp = download_file(
+            State(state.clone()),
+            auth_user(),
+            Path((book_id, file_id)),
+            Query(ContentQuery {
+                format: Some("kepub".into()),
+            }),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert!(header_has(&resp, CONTENT_TYPE, "application/kepub+zip"));
+        assert!(header_has(&resp, CONTENT_DISPOSITION, ".kepub.epub"));
+        assert!(!resp.headers().contains_key(ETAG));
+        assert!(!resp.headers().contains_key(VARY));
+    }
+
+    #[tokio::test]
+    async fn download_file_ignores_accept_header() {
+        let tmp = TempDir::new().unwrap();
+        let state = test_state(&tmp).await;
+        let (book_id, file_id) = seed_epub_book(&state, build_test_epub()).await;
+
+        // /download does not parse Accept, so this should produce plain EPUB.
+        let resp = download_file(
+            State(state.clone()),
+            auth_user(),
+            Path((book_id, file_id)),
+            Query(ContentQuery::default()),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert!(header_has(&resp, CONTENT_TYPE, "application/epub+zip"));
+        assert!(!resp.headers().contains_key(VARY));
     }
 }

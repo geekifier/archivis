@@ -4,6 +4,7 @@ use std::sync::Arc;
 use archivis_auth::{AuthService, LocalAuthAdapter, ProxyAuth};
 use archivis_core::public_url::PublicBaseUrl;
 use archivis_db::DbPool;
+use archivis_formats::transform::TransformerRegistry;
 use archivis_metadata::ProviderRegistry;
 use archivis_storage::local::LocalStorage;
 use archivis_storage::watcher::WatcherService;
@@ -43,6 +44,7 @@ struct AppStateInner {
     merge_service: Arc<MergeService<LocalStorage>>,
     config: ApiConfig,
     config_service: Arc<ConfigService>,
+    transformers: Arc<TransformerRegistry>,
     /// Optional — `None` when the watcher subsystem is disabled.
     watcher_service: Option<Arc<RwLock<WatcherService>>>,
     /// Optional — `None` when proxy auth is not configured.
@@ -63,6 +65,7 @@ impl AppState {
         merge_service: Arc<MergeService<LocalStorage>>,
         config: ApiConfig,
         config_service: Arc<ConfigService>,
+        transformers: Arc<TransformerRegistry>,
         watcher_service: Option<Arc<RwLock<WatcherService>>>,
         proxy_auth: Option<Arc<ProxyAuth>>,
         scope_signing_key: [u8; 32],
@@ -78,6 +81,7 @@ impl AppState {
                 merge_service,
                 config,
                 config_service,
+                transformers,
                 watcher_service,
                 proxy_auth,
                 scope_signing_key,
@@ -99,6 +103,10 @@ impl AppState {
 
     pub fn storage(&self) -> &LocalStorage {
         &self.inner.storage
+    }
+
+    pub fn transformers(&self) -> &Arc<TransformerRegistry> {
+        &self.inner.transformers
     }
 
     pub fn provider_registry(&self) -> &Arc<ProviderRegistry> {

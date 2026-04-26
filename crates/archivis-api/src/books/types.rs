@@ -202,6 +202,16 @@ pub struct CoverParams {
     pub size: Option<String>,
 }
 
+/// Query parameters for the inline content + download endpoints.
+///
+/// `format` requests an on-the-fly transformation (e.g. `kepub`). When
+/// the transformation fails, the original file is served instead.
+#[derive(Debug, Default, Deserialize, IntoParams)]
+pub struct ContentQuery {
+    /// Optional target format id (e.g. `kepub`).
+    pub format: Option<String>,
+}
+
 // ── Request Bodies ──────────────────────────────────────────────
 
 /// Request body for `PUT /api/books/{id}`.

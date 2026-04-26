@@ -278,6 +278,7 @@ mod tests {
                 public_base_url: None,
             },
             config_service,
+            Arc::new(archivis_formats::transform::TransformerRegistry::empty()),
             None,
             None,
             [0u8; 32],

@@ -7,6 +7,8 @@ use std::sync::Arc;
 use archivis_api::state::{ApiConfig, AppState};
 use archivis_auth::{AuthService, LocalAuthAdapter};
 use archivis_core::public_url::PublicBaseUrl;
+use archivis_formats::transform::{FormatTransformer, TransformerRegistry};
+use archivis_kepub::KepubTransformer;
 use archivis_metadata::{
     HardcoverProvider, LocProvider, MetadataHttpClient, MetadataResolver, OpenLibraryProvider,
     ProviderRegistry,
@@ -430,6 +432,10 @@ async fn init_services_and_router(
     // Keep a clone of the watcher handle for graceful shutdown.
     let watcher_handle = watcher_service.clone();
 
+    let transformers: Arc<TransformerRegistry> = Arc::new(TransformerRegistry::new(vec![
+        Arc::new(KepubTransformer) as Arc<dyn FormatTransformer>,
+    ]));
+
     let state = AppState::new(
         db_pool,
         task_queue,
@@ -440,6 +446,7 @@ async fn init_services_and_router(
         merge_service,
         api_config,
         config_service,
+        transformers,
         watcher_service,
         proxy_auth,
         scope_signing_key,

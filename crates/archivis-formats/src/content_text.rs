@@ -14,7 +14,9 @@ use archivis_core::models::BookFormat;
 use quick_xml::events::Event;
 use quick_xml::Reader;
 
-use crate::epub::{find_attr, find_opf_path, local_name, opf_directory, read_zip_entry};
+use crate::epub::{
+    find_attr, find_opf_path, local_name, opf_directory, read_zip_entry, resolve_manifest_href,
+};
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -209,10 +211,7 @@ fn parse_spine_hrefs(opf_xml: &str, opf_dir: &str) -> Result<Vec<String>, Format
             manifest
                 .iter()
                 .find(|(id, _)| id == idref)
-                .map(|(_, href)| {
-                    href.strip_prefix('/')
-                        .map_or_else(|| format!("{opf_dir}{href}"), ToOwned::to_owned)
-                })
+                .map(|(_, href)| resolve_manifest_href(opf_dir, href))
         })
         .collect();
 

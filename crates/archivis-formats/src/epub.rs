@@ -60,7 +60,23 @@ pub(crate) fn find_opf_path(
     archive: &mut zip::ZipArchive<Cursor<&[u8]>>,
 ) -> Result<String, FormatError> {
     let xml = read_zip_entry(archive, "META-INF/container.xml")?;
-    let mut reader = Reader::from_str(&xml);
+    parse_container_rootfile(xml.as_bytes()).map_err(|message| FormatError::Parse {
+        format: "EPUB".into(),
+        message,
+    })
+}
+
+/// Parse `META-INF/container.xml` bytes and return the rootfile path.
+///
+/// Returns the `full-path` attribute of the first `<rootfile>` element.
+/// Tolerant of namespace prefixes, attribute whitespace, and either quote
+/// style — anything a conforming XML parser accepts.
+///
+/// On error, yields a `String` describing the parse problem; callers wrap
+/// it in their own format-specific error type.
+pub fn parse_container_rootfile(xml: &[u8]) -> Result<String, String> {
+    let xml_str = std::str::from_utf8(xml).map_err(|e| format!("container.xml utf-8: {e}"))?;
+    let mut reader = Reader::from_str(xml_str);
 
     loop {
         match reader.read_event() {
@@ -71,30 +87,19 @@ pub(crate) fn find_opf_path(
                     if local_name(attr.key.as_ref()) == b"full-path" {
                         let path = String::from_utf8_lossy(&attr.value).into_owned();
                         if path.is_empty() {
-                            return Err(FormatError::Parse {
-                                format: "EPUB".into(),
-                                message: "rootfile full-path is empty".into(),
-                            });
+                            return Err("rootfile full-path is empty".into());
                         }
                         return Ok(path);
                     }
                 }
             }
             Ok(Event::Eof) => break,
-            Err(e) => {
-                return Err(FormatError::Parse {
-                    format: "EPUB".into(),
-                    message: format!("malformed container.xml: {e}"),
-                });
-            }
+            Err(e) => return Err(format!("malformed container.xml: {e}")),
             _ => {}
         }
     }
 
-    Err(FormatError::Parse {
-        format: "EPUB".into(),
-        message: "no rootfile found in container.xml".into(),
-    })
+    Err("no rootfile found in container.xml".into())
 }
 
 /// Return the directory portion of the OPF path (for resolving relative references).
@@ -102,6 +107,29 @@ pub(crate) fn opf_directory(opf_path: &str) -> String {
     opf_path
         .rfind('/')
         .map_or_else(String::new, |pos| format!("{}/", &opf_path[..pos]))
+}
+
+/// Resolve a manifest `href` against the OPF's directory inside the EPUB ZIP.
+///
+/// `opf_dir` is the parent of the OPF file (with or without trailing `/`).
+/// A leading `/` on `href` means archive root; otherwise the href is
+/// resolved relative to `opf_dir`. `.` and `..` segments are collapsed.
+pub fn resolve_manifest_href(opf_dir: &str, href: &str) -> String {
+    let mut parts: Vec<&str> = if href.starts_with('/') {
+        Vec::new()
+    } else {
+        opf_dir.split('/').filter(|s| !s.is_empty()).collect()
+    };
+    for seg in href.split('/') {
+        match seg {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            other => parts.push(other),
+        }
+    }
+    parts.join("/")
 }
 
 // ── OPF parsing ──────────────────────────────────────────────────────

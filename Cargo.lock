@@ -117,6 +117,7 @@ dependencies = [
  "archivis-core",
  "archivis-db",
  "archivis-formats",
+ "archivis-kepub",
  "archivis-metadata",
  "archivis-storage",
  "archivis-tasks",
@@ -140,6 +141,7 @@ dependencies = [
  "utoipa-swagger-ui",
  "uuid",
  "validator",
+ "zip 2.4.2",
 ]
 
 [[package]]
@@ -205,6 +207,18 @@ dependencies = [
  "serde",
  "tempfile",
  "thiserror",
+ "tokio",
+ "tracing",
+ "zip 2.4.2",
+]
+
+[[package]]
+name = "archivis-kepub"
+version = "0.1.0"
+dependencies = [
+ "archivis-core",
+ "archivis-formats",
+ "quick-xml",
  "tracing",
  "zip 2.4.2",
 ]
@@ -238,6 +252,8 @@ dependencies = [
  "archivis-auth",
  "archivis-core",
  "archivis-db",
+ "archivis-formats",
+ "archivis-kepub",
  "archivis-metadata",
  "archivis-storage",
  "archivis-tasks",

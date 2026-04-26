@@ -3,6 +3,7 @@ members = [
     "crates/archivis-core",
     "crates/archivis-db",
     "crates/archivis-formats",
+    "crates/archivis-kepub",
     "crates/archivis-metadata",
     "crates/archivis-tasks",
     "crates/archivis-storage",
@@ -24,6 +25,7 @@ rust-version = "1.87"
 archivis-core = { path = "crates/archivis-core", version = "0.1.0" }
 archivis-db = { path = "crates/archivis-db", version = "0.1.0" }
 archivis-formats = { path = "crates/archivis-formats", version = "0.1.0" }
+archivis-kepub = { path = "crates/archivis-kepub", version = "0.1.0" }
 archivis-metadata = { path = "crates/archivis-metadata", version = "0.1.0" }
 archivis-tasks = { path = "crates/archivis-tasks", version = "0.1.0" }
 archivis-storage = { path = "crates/archivis-storage", version = "0.1.0" }
@@ -117,6 +119,9 @@ futures = "0.3"
 
 # XML parsing
 quick-xml = "0.37"
+
+# ZIP archives (EPUB/KEPUB)
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
 # Regex
 regex = "1"

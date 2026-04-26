@@ -377,6 +377,7 @@ mod tests {
                 public_base_url: None,
             },
             config_service,
+            Arc::new(archivis_formats::transform::TransformerRegistry::empty()),
             None,
             proxy_auth,
             [0u8; 32],
