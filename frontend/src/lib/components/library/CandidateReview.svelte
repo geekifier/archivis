@@ -1,6 +1,6 @@
 <script lang="ts">
   import { untrack } from 'svelte';
-  import { api } from '$lib/api/index.js';
+  import { api, formatError } from '$lib/api/index.js';
   import type { BookDetail, CandidateResponse } from '$lib/api/index.js';
   import { Button } from '$lib/components/ui/button/index.js';
   import * as AlertDialog from '$lib/components/ui/alert-dialog/index.js';
@@ -14,7 +14,6 @@
     getExcludedFields,
     tierColorClass,
     tierLabel,
-    extractErrorMessage,
     isWarningReason,
     warningFields,
     type CandidateFieldName
@@ -110,7 +109,7 @@
       onapply(updated);
       delete fieldSelections[candidateId];
     } catch (err) {
-      actionError = extractErrorMessage(err, 'Failed to apply candidate');
+      actionError = formatError(err, 'Failed to apply candidate');
     } finally {
       applyingId = null;
     }
@@ -124,7 +123,7 @@
       onreject(candidateId);
       delete fieldSelections[candidateId];
     } catch (err) {
-      actionError = extractErrorMessage(err, 'Failed to reject candidate');
+      actionError = formatError(err, 'Failed to reject candidate');
     } finally {
       rejectingId = null;
     }
@@ -137,7 +136,7 @@
       const updated = await api.resolution.undoCandidate(book.id, candidateId);
       onundo(updated);
     } catch (err) {
-      actionError = extractErrorMessage(err, 'Failed to undo candidate');
+      actionError = formatError(err, 'Failed to undo candidate');
     } finally {
       undoingId = null;
     }

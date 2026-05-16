@@ -1,7 +1,7 @@
 pub(crate) mod handlers;
 pub mod types;
 
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::Router;
 
 use crate::state::AppState;
@@ -13,6 +13,7 @@ pub fn router() -> Router<AppState> {
             "/",
             get(handlers::list_series).post(handlers::create_series),
         )
+        .route("/merge", post(handlers::merge_series))
         .route(
             "/{id}",
             get(handlers::get_series)

@@ -3055,3 +3055,258 @@ async fn search_resolve_tag_unknown_no_fts_fallback() {
         QueryWarning::UnknownRelation { field, .. } if field == "tag"
     ));
 }
+
+// ── SeriesRepository::merge ─────────────────────────────────────────
+
+/// Fetch a book's `series_names` from `books_fts` (raw column read).
+async fn fts_series_names_for(pool: &DbPool, book_id: Uuid) -> String {
+    let id_str = book_id.to_string();
+    sqlx::query_scalar::<_, String>("SELECT series_names FROM books_fts WHERE book_id = ?")
+        .bind(id_str)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn series_merge_happy_path() {
+    let (pool, _dir) = test_pool().await;
+
+    let s_target = Series::new("Lady Darby");
+    let s_a = Series::new("Lady Darby Mysteries");
+    let s_b = Series::new("Lady Darby Mystery");
+    SeriesRepository::create(&pool, &s_target).await.unwrap();
+    SeriesRepository::create(&pool, &s_a).await.unwrap();
+    SeriesRepository::create(&pool, &s_b).await.unwrap();
+
+    let b1 = test_book("Anatomist's Wife");
+    let b2 = test_book("Mortal Arts");
+    let b3 = test_book("A Grave Matter");
+    BookRepository::create(&pool, &b1).await.unwrap();
+    BookRepository::create(&pool, &b2).await.unwrap();
+    BookRepository::create(&pool, &b3).await.unwrap();
+
+    BookRepository::add_series(&pool, b1.id, s_target.id, Some(1.0))
+        .await
+        .unwrap();
+    BookRepository::add_series(&pool, b2.id, s_a.id, Some(2.0))
+        .await
+        .unwrap();
+    BookRepository::add_series(&pool, b3.id, s_b.id, Some(3.0))
+        .await
+        .unwrap();
+
+    SeriesRepository::merge(
+        &pool,
+        s_target.id,
+        &[s_a.id, s_b.id],
+        Some("Lady Darby Mysteries"),
+    )
+    .await
+    .unwrap();
+
+    // (a) Survivor renamed.
+    let survivor = SeriesRepository::get_by_id(&pool, s_target.id)
+        .await
+        .unwrap();
+    assert_eq!(survivor.name, "Lady Darby Mysteries");
+
+    // (c) Sources gone.
+    assert!(SeriesRepository::get_by_id(&pool, s_a.id).await.is_err());
+    assert!(SeriesRepository::get_by_id(&pool, s_b.id).await.is_err());
+
+    // (b) All books reachable via survivor; (d) no duplicate rows.
+    let with_count = SeriesRepository::get_by_id_with_count(&pool, s_target.id)
+        .await
+        .unwrap();
+    assert_eq!(with_count.book_count, 3);
+
+    // (e) Positions preserved for the books that moved without conflict.
+    let rel_b2 = BookRepository::get_with_relations(&pool, b2.id)
+        .await
+        .unwrap();
+    assert_eq!(rel_b2.series.len(), 1);
+    assert_eq!(rel_b2.series[0].series.id, s_target.id);
+    assert!((rel_b2.series[0].position.unwrap() - 2.0).abs() < f64::EPSILON);
+
+    let rel_b3 = BookRepository::get_with_relations(&pool, b3.id)
+        .await
+        .unwrap();
+    assert!((rel_b3.series[0].position.unwrap() - 3.0).abs() < f64::EPSILON);
+}
+
+#[tokio::test]
+async fn series_merge_position_conflict_target_wins() {
+    let (pool, _dir) = test_pool().await;
+
+    let target = Series::new("Target");
+    let source = Series::new("Source");
+    SeriesRepository::create(&pool, &target).await.unwrap();
+    SeriesRepository::create(&pool, &source).await.unwrap();
+
+    let book = test_book("Shared Book");
+    BookRepository::create(&pool, &book).await.unwrap();
+
+    // Book is in BOTH series, with different positions.
+    BookRepository::add_series(&pool, book.id, target.id, Some(1.0))
+        .await
+        .unwrap();
+    BookRepository::add_series(&pool, book.id, source.id, Some(5.0))
+        .await
+        .unwrap();
+
+    SeriesRepository::merge(&pool, target.id, &[source.id], None)
+        .await
+        .unwrap();
+
+    let rel = BookRepository::get_with_relations(&pool, book.id)
+        .await
+        .unwrap();
+    assert_eq!(rel.series.len(), 1, "book has exactly one series row");
+    assert_eq!(rel.series[0].series.id, target.id);
+    assert!(
+        (rel.series[0].position.unwrap() - 1.0).abs() < f64::EPSILON,
+        "target's position wins"
+    );
+}
+
+#[tokio::test]
+async fn series_merge_keeps_fts_consistent_without_rename() {
+    let (pool, _dir) = test_pool().await;
+
+    let target = Series::new("Lady Darby");
+    let source = Series::new("Lady Darby Mysteries");
+    SeriesRepository::create(&pool, &target).await.unwrap();
+    SeriesRepository::create(&pool, &source).await.unwrap();
+
+    let book = test_book("Anatomist's Wife");
+    BookRepository::create(&pool, &book).await.unwrap();
+    BookRepository::add_series(&pool, book.id, source.id, Some(1.0))
+        .await
+        .unwrap();
+
+    // Sanity: before merge, FTS has the source name.
+    let before = fts_series_names_for(&pool, book.id).await;
+    assert!(before.contains("Lady Darby Mysteries"));
+
+    SeriesRepository::merge(&pool, target.id, &[source.id], None)
+        .await
+        .unwrap();
+
+    // After merge, FTS has the target name and NOT the deleted source name.
+    let after = fts_series_names_for(&pool, book.id).await;
+    assert!(
+        after.contains("Lady Darby"),
+        "expected survivor name in FTS, got {after:?}"
+    );
+    assert!(
+        !after.contains("Mysteries"),
+        "deleted source name should no longer appear in FTS, got {after:?}"
+    );
+}
+
+#[tokio::test]
+async fn series_merge_with_rename_updates_fts() {
+    let (pool, _dir) = test_pool().await;
+
+    let target = Series::new("Lady Darby");
+    let source = Series::new("Lady Darby Mysteries");
+    SeriesRepository::create(&pool, &target).await.unwrap();
+    SeriesRepository::create(&pool, &source).await.unwrap();
+
+    let book_in_target = test_book("Anatomist's Wife");
+    let book_in_source = test_book("Mortal Arts");
+    BookRepository::create(&pool, &book_in_target)
+        .await
+        .unwrap();
+    BookRepository::create(&pool, &book_in_source)
+        .await
+        .unwrap();
+    BookRepository::add_series(&pool, book_in_target.id, target.id, Some(1.0))
+        .await
+        .unwrap();
+    BookRepository::add_series(&pool, book_in_source.id, source.id, Some(2.0))
+        .await
+        .unwrap();
+
+    SeriesRepository::merge(
+        &pool,
+        target.id,
+        &[source.id],
+        Some("Lady Darby Investigations"),
+    )
+    .await
+    .unwrap();
+
+    let in_target_fts = fts_series_names_for(&pool, book_in_target.id).await;
+    let in_source_fts = fts_series_names_for(&pool, book_in_source.id).await;
+    assert!(
+        in_target_fts.contains("Investigations"),
+        "rename propagates to original target's book FTS, got {in_target_fts:?}"
+    );
+    assert!(
+        in_source_fts.contains("Investigations"),
+        "rename propagates to migrated book's FTS, got {in_source_fts:?}"
+    );
+}
+
+#[tokio::test]
+async fn series_merge_missing_source_rolls_back() {
+    let (pool, _dir) = test_pool().await;
+
+    let target = Series::new("Target");
+    let source = Series::new("Source");
+    SeriesRepository::create(&pool, &target).await.unwrap();
+    SeriesRepository::create(&pool, &source).await.unwrap();
+
+    let book = test_book("Book");
+    BookRepository::create(&pool, &book).await.unwrap();
+    BookRepository::add_series(&pool, book.id, source.id, Some(1.0))
+        .await
+        .unwrap();
+
+    let missing = Uuid::new_v4();
+
+    // Source comes first, missing second — but we want to verify a rollback
+    // even if the missing one is encountered partway through.
+    let result = SeriesRepository::merge(&pool, target.id, &[source.id, missing], None).await;
+    assert!(result.is_err());
+
+    // Source series still exists, its book still attached, target unchanged.
+    let s = SeriesRepository::get_by_id(&pool, source.id).await.unwrap();
+    assert_eq!(s.name, "Source");
+
+    let rel = BookRepository::get_with_relations(&pool, book.id)
+        .await
+        .unwrap();
+    assert_eq!(rel.series.len(), 1);
+    assert_eq!(rel.series[0].series.id, source.id);
+}
+
+#[tokio::test]
+async fn series_merge_missing_target_returns_not_found() {
+    let (pool, _dir) = test_pool().await;
+
+    let source = Series::new("Source");
+    SeriesRepository::create(&pool, &source).await.unwrap();
+
+    let missing_target = Uuid::new_v4();
+    let result = SeriesRepository::merge(&pool, missing_target, &[source.id], None).await;
+    assert!(result.is_err());
+
+    // Source untouched.
+    assert!(SeriesRepository::get_by_id(&pool, source.id).await.is_ok());
+}
+
+#[tokio::test]
+async fn series_get_by_id_with_count_no_books() {
+    let (pool, _dir) = test_pool().await;
+    let s = Series::new("Empty");
+    SeriesRepository::create(&pool, &s).await.unwrap();
+
+    let res = SeriesRepository::get_by_id_with_count(&pool, s.id)
+        .await
+        .unwrap();
+    assert_eq!(res.book_count, 0);
+    assert_eq!(res.series.name, "Empty");
+}

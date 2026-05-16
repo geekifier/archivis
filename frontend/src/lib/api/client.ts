@@ -41,6 +41,8 @@ import type {
   LoginRequest,
   LoginResponse,
   MergeRequest,
+  MergeSeriesRequest,
+  MergeSeriesResponse,
   PaginatedAuthors,
   PaginatedBooks,
   PaginatedDuplicates,
@@ -677,6 +679,13 @@ export const api = {
         'GET',
         `/series/${encodeURIComponent(id)}/books${qs ? `?${qs}` : ''}`
       );
+    },
+
+    /** Merge multiple series into one. */
+    async merge(data: MergeSeriesRequest): Promise<MergeSeriesResponse> {
+      const result = await request<MergeSeriesResponse>('POST', '/series/merge', data);
+      notifyCountsChanged();
+      return result;
     }
   },
 
@@ -1087,7 +1096,7 @@ export const api = {
   }
 } as const;
 
-export { ApiError } from './errors.js';
+export { ApiError, formatError } from './errors.js';
 export { isBatchAsync } from './types.js';
 export type { SidebarCountsResponse } from './types.js';
 export type {
@@ -1144,6 +1153,8 @@ export type {
   LoginRequest,
   LoginResponse,
   MergeRequest,
+  MergeSeriesRequest,
+  MergeSeriesResponse,
   MetadataField,
   MetadataProvenance,
   MetadataRuleResponse,

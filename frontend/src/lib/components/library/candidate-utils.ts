@@ -1,5 +1,3 @@
-import { ApiError } from '$lib/api/index.js';
-
 /** Field names that can be included/excluded in a candidate apply. */
 export type CandidateFieldName =
   | 'title'
@@ -13,13 +11,6 @@ export type CandidateFieldName =
   | 'series'
   | 'description'
   | 'cover';
-
-/** Extract a user-facing message from an unknown error. */
-export function extractErrorMessage(err: unknown, fallback = 'An error occurred'): string {
-  if (err instanceof ApiError) return err.userMessage;
-  if (err instanceof Error) return err.message;
-  return fallback;
-}
 
 /** Return a Tailwind background class for the confidence score bar. */
 export function scoreColor(score: number): string {

@@ -1,10 +1,11 @@
 <script lang="ts">
-  import { SvelteURLSearchParams } from 'svelte/reactivity';
-  import { api, type PaginatedSeries } from '$lib/api/index.js';
+  import { SvelteSet, SvelteURLSearchParams } from 'svelte/reactivity';
+  import { api, type PaginatedSeries, type SeriesResponse } from '$lib/api/index.js';
   import type { SortOrder } from '$lib/api/index.js';
   import { Input } from '$lib/components/ui/input/index.js';
   import { Button } from '$lib/components/ui/button/index.js';
   import Pagination from '$lib/components/library/Pagination.svelte';
+  import MergeSeriesDialog from '$lib/components/series/MergeSeriesDialog.svelte';
   import { page } from '$app/state';
   import { goto } from '$app/navigation';
 
@@ -44,6 +45,66 @@
 
   let activeSortBy = $state<'name' | 'book_count'>(_initSort || sortOptions[0].field);
   let activeSortOrder = $state<SortOrder>(_initOrder || sortOptions[0].order);
+
+  // Selection state for bulk operations (Merge Series). Mirrors the Library
+  // page pattern: an explicit "Select" mode toggle, checkboxes only visible in
+  // selection mode, and a toolbar with Select All / Deselect All / Merge.
+  type SelectionMode = 'none' | 'page';
+  let selectionMode = $state<SelectionMode>('none');
+  let selectedIds = new SvelteSet<string>();
+  let mergeOpen = $state(false);
+  let reloadToken = $state(0);
+
+  const selectionActive = $derived(selectionMode !== 'none');
+  const selectedCount = $derived(selectedIds.size);
+
+  function toggleSelectionMode() {
+    if (selectionActive) {
+      exitSelectionMode();
+    } else {
+      selectionMode = 'page';
+    }
+  }
+
+  function exitSelectionMode() {
+    selectionMode = 'none';
+    selectedIds.clear();
+  }
+
+  function toggleSelected(id: string) {
+    if (selectedIds.has(id)) {
+      selectedIds.delete(id);
+    } else {
+      selectedIds.add(id);
+    }
+  }
+
+  function selectAll() {
+    if (!data) return;
+    for (const s of data.items) {
+      selectedIds.add(s.id);
+    }
+  }
+
+  function deselectAll() {
+    selectedIds.clear();
+  }
+
+  function handleRowClick(id: string) {
+    if (!selectionActive) return;
+    toggleSelected(id);
+  }
+
+  const selectedItems = $derived.by<SeriesResponse[]>(() => {
+    if (!data) return [];
+    return data.items.filter((s) => selectedIds.has(s.id));
+  });
+
+  function handleMerged() {
+    exitSelectionMode();
+    mergeOpen = false;
+    reloadToken += 1;
+  }
 
   function handleSearchInput(e: Event) {
     const value = (e.target as HTMLInputElement).value;
@@ -124,6 +185,8 @@
     const field = activeSortBy;
     const order = activeSortOrder;
     const q = activeQuery;
+    // Bumping reloadToken forces a refetch (e.g. after a merge).
+    void reloadToken;
 
     loading = true;
     error = null;
@@ -178,7 +241,7 @@
 
   <!-- Controls bar -->
   <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-    <div class="relative w-full sm:max-w-xs">
+    <div class="relative min-w-0 flex-1">
       <svg
         class="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
         xmlns="http://www.w3.org/2000/svg"
@@ -202,15 +265,53 @@
       />
     </div>
 
-    <select
-      class="h-9 rounded-md border border-input bg-background px-3 text-sm shadow-xs focus-visible:border-ring focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
-      value={sortIndex}
-      onchange={handleSortChange}
-    >
-      {#each sortOptions as option, i (option.field + option.order)}
-        <option value={i}>{option.label}</option>
-      {/each}
-    </select>
+    <div class="flex flex-shrink-0 items-center gap-2">
+      <Button
+        size="sm"
+        variant={selectionActive ? 'default' : 'outline'}
+        onclick={toggleSelectionMode}
+      >
+        {#if selectionActive}
+          <svg
+            class="size-4"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <path d="M18 6 6 18" />
+            <path d="m6 6 12 12" />
+          </svg>
+          Exit Select
+        {:else}
+          <svg
+            class="size-4"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <polyline points="9 11 12 14 22 4" />
+            <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
+          </svg>
+          Select
+        {/if}
+      </Button>
+
+      <select
+        class="h-9 rounded-md border border-input bg-background px-3 text-sm shadow-xs focus-visible:border-ring focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+        value={sortIndex}
+        onchange={handleSortChange}
+      >
+        {#each sortOptions as option, i (option.field + option.order)}
+          <option value={i}>{option.label}</option>
+        {/each}
+      </select>
+    </div>
   </div>
 
   <!-- Content area -->
@@ -238,13 +339,44 @@
   {:else if data && data.items.length > 0}
     <p class="text-sm text-muted-foreground">
       {data.total}
-      {data.total === 1 ? 'series' : 'series'}
+      series
     </p>
+
+    {#if selectionActive}
+      <div
+        class="flex items-center gap-3 rounded-lg border border-primary/30 bg-primary/5 px-4 py-2"
+      >
+        <span class="text-sm font-medium">{selectedCount} selected</span>
+        <div class="flex items-center gap-1.5">
+          <Button size="sm" variant="ghost" class="h-7 text-xs" onclick={selectAll}>
+            Select All
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            class="h-7 text-xs"
+            onclick={deselectAll}
+            disabled={selectedCount === 0}
+          >
+            Deselect All
+          </Button>
+        </div>
+        <div class="flex-1"></div>
+        <Button size="sm" onclick={() => (mergeOpen = true)} disabled={selectedCount < 2}>
+          Merge Series
+        </Button>
+      </div>
+    {/if}
 
     <div class="overflow-hidden rounded-lg border border-border">
       <table class="w-full text-sm">
         <thead>
           <tr class="border-b border-border bg-muted/50">
+            {#if selectionActive}
+              <th class="w-10 px-2 py-2.5 text-center">
+                <span class="sr-only">Select</span>
+              </th>
+            {/if}
             <th
               class="cursor-pointer select-none px-4 py-2.5 text-left font-medium text-muted-foreground hover:text-foreground"
               onclick={() => handleHeaderSort('name')}
@@ -264,14 +396,47 @@
         </thead>
         <tbody>
           {#each data.items as s (s.id)}
-            <tr class="border-b border-border transition-colors last:border-b-0 hover:bg-muted/30">
+            {@const isSelected = selectedIds.has(s.id)}
+            <tr
+              class="border-b border-border transition-colors last:border-b-0 {selectionActive
+                ? 'cursor-pointer'
+                : ''} {isSelected ? 'bg-primary/10' : 'hover:bg-muted/30'}"
+              onclick={() => handleRowClick(s.id)}
+            >
+              {#if selectionActive}
+                <td class="w-10 px-2 py-2.5 text-center">
+                  <div
+                    class="mx-auto flex size-4 items-center justify-center rounded border transition-colors {isSelected
+                      ? 'border-primary bg-primary'
+                      : 'border-muted-foreground/50'}"
+                  >
+                    {#if isSelected}
+                      <svg
+                        class="size-3 text-primary-foreground"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="3"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                      >
+                        <polyline points="20 6 9 17 4 12" />
+                      </svg>
+                    {/if}
+                  </div>
+                </td>
+              {/if}
               <td class="px-4 py-2.5">
-                <a
-                  href="/series/{s.id}"
-                  class="font-medium text-foreground transition-colors hover:text-primary"
-                >
-                  {s.name}
-                </a>
+                {#if selectionActive}
+                  <span class="font-medium text-foreground">{s.name}</span>
+                {:else}
+                  <a
+                    href="/series/{s.id}"
+                    class="font-medium text-foreground transition-colors hover:text-primary"
+                  >
+                    {s.name}
+                  </a>
+                {/if}
               </td>
               <td class="hidden px-4 py-2.5 text-muted-foreground md:table-cell">
                 {#if s.description}
@@ -345,3 +510,10 @@
     </div>
   {/if}
 </div>
+
+<MergeSeriesDialog
+  bind:open={mergeOpen}
+  selected={selectedItems}
+  onclose={() => (mergeOpen = false)}
+  onmerged={handleMerged}
+/>

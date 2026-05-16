@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT OR IGNORE INTO book_series (book_id, series_id, position) SELECT book_id, ?, position FROM book_series WHERE series_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "3c9609d728e1733039f126768d857348a5853116fcd134ab68db5f702cd2b62d"
+}

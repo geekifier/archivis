@@ -43,9 +43,8 @@ const { mockApi } = vi.hoisted(() => {
   return { mockApi: createMockApiFn() };
 });
 
-vi.mock('$lib/api/index.js', () => ({
-  api: mockApi,
-  ApiError: class ApiError extends Error {
+vi.mock('$lib/api/index.js', () => {
+  class ApiError extends Error {
     status: number;
     constructor(status: number, message: string) {
       super(message);
@@ -56,7 +55,16 @@ vi.mock('$lib/api/index.js', () => ({
       return this.message;
     }
   }
-}));
+  return {
+    api: mockApi,
+    ApiError,
+    formatError(err: unknown, fallback = 'An error occurred'): string {
+      if (err instanceof ApiError) return err.userMessage;
+      if (err instanceof Error) return err.message;
+      return fallback;
+    }
+  };
+});
 
 import CandidateReview from './CandidateReview.svelte';
 

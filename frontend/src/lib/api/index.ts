@@ -4,6 +4,7 @@ export {
   setSessionToken,
   onCountsChanged,
   ApiError,
+  formatError,
   isBatchAsync
 } from './client.js';
 export type {
@@ -51,6 +52,8 @@ export type {
   LoginRequest,
   LoginResponse,
   MergeRequest,
+  MergeSeriesRequest,
+  MergeSeriesResponse,
   MetadataField,
   MetadataProvenance,
   MetadataSource,

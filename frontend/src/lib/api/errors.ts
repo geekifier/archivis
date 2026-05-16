@@ -109,3 +109,10 @@ export async function parseApiError(response: Response): Promise<ApiError> {
   }
   return new ApiError(response.status, response.statusText || 'Request failed');
 }
+
+/** Format an unknown caught error for display in a UI surface. */
+export function formatError(err: unknown, fallback = 'An error occurred'): string {
+  if (err instanceof ApiError) return err.userMessage;
+  if (err instanceof Error) return err.message;
+  return fallback;
+}

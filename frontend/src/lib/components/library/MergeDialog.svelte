@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { api, ApiError } from '$lib/api/index.js';
+  import { api, formatError } from '$lib/api/index.js';
   import type { BookDetail, DuplicateLinkResponse, MergeRequest } from '$lib/api/index.js';
   import { Button } from '$lib/components/ui/button/index.js';
   import * as Dialog from '$lib/components/ui/dialog/index.js';
@@ -62,7 +62,7 @@
           bookB = b;
         })
         .catch((err) => {
-          detailError = err instanceof Error ? err.message : 'Failed to load book details';
+          detailError = formatError(err, 'Failed to load book details');
         })
         .finally(() => {
           detailLoading = false;
@@ -88,12 +88,7 @@
       });
       onmerge(merged);
     } catch (err) {
-      mergeError =
-        err instanceof ApiError
-          ? err.userMessage
-          : err instanceof Error
-            ? err.message
-            : 'Failed to merge books';
+      mergeError = formatError(err, 'Failed to merge books');
     } finally {
       merging = false;
     }

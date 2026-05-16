@@ -15,8 +15,8 @@ use crate::errors::ApiError;
 use crate::state::AppState;
 
 use super::types::{
-    CreateSeriesRequest, PaginatedSeries, SeriesBooksParams, SeriesListParams, SeriesResponse,
-    UpdateSeriesRequest,
+    CreateSeriesRequest, MergeSeriesRequest, MergeSeriesResponse, PaginatedSeries,
+    SeriesBooksParams, SeriesListParams, SeriesResponse, UpdateSeriesRequest,
 };
 
 /// GET /api/series — paginated list of series.
@@ -151,6 +151,60 @@ pub async fn update_series(
 
     SeriesRepository::update(pool, &series).await?;
     Ok(Json(series.into()))
+}
+
+/// POST /api/series/merge — merge multiple series into one.
+#[utoipa::path(
+    post,
+    path = "/api/series/merge",
+    tag = "series",
+    request_body = MergeSeriesRequest,
+    responses(
+        (status = 200, description = "Merge result", body = MergeSeriesResponse),
+        (status = 400, description = "Validation error"),
+        (status = 404, description = "Series not found"),
+        (status = 401, description = "Not authenticated"),
+    ),
+    security(("bearer" = []))
+)]
+pub async fn merge_series(
+    State(state): State<AppState>,
+    AuthUser(_user): AuthUser,
+    Json(body): Json<MergeSeriesRequest>,
+) -> Result<Json<MergeSeriesResponse>, ApiError> {
+    body.validate()?;
+
+    if body.source_ids.contains(&body.target_id) {
+        return Err(ApiError::Validation(
+            "target_id must not appear in source_ids".into(),
+        ));
+    }
+
+    let mut sources: Vec<Uuid> = body.source_ids.clone();
+    sources.sort();
+    sources.dedup();
+
+    let new_name: Option<String> = match body.target_name.as_deref() {
+        Some(s) => {
+            let trimmed = s.trim();
+            if trimmed.is_empty() {
+                return Err(ApiError::Validation(
+                    "target_name must not be empty or whitespace".into(),
+                ));
+            }
+            Some(trimmed.to_string())
+        }
+        None => None,
+    };
+
+    let pool = state.db_pool();
+    SeriesRepository::merge(pool, body.target_id, &sources, new_name.as_deref()).await?;
+
+    let survivor = SeriesRepository::get_by_id_with_count(pool, body.target_id).await?;
+    Ok(Json(MergeSeriesResponse {
+        series: survivor.into(),
+        merged_count: sources.len(),
+    }))
 }
 
 /// DELETE /api/series/{id} — delete series.

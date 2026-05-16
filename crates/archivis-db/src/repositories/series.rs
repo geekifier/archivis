@@ -252,6 +252,130 @@ impl SeriesRepository {
 
         Ok(())
     }
+
+    /// Fetch a single series along with its `book_count`.
+    pub async fn get_by_id_with_count(
+        pool: &SqlitePool,
+        id: Uuid,
+    ) -> Result<SeriesWithBookCount, DbError> {
+        let id_str = id.to_string();
+        let row = sqlx::query_as!(
+            SeriesWithCountRow,
+            r#"SELECT s.id, s.name, s.description,
+                (SELECT COUNT(*) FROM book_series bs WHERE bs.series_id = s.id) AS "book_count!: i64"
+             FROM series s WHERE s.id = ?"#,
+            id_str,
+        )
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| DbError::Query(e.to_string()))?
+        .ok_or(DbError::NotFound {
+            entity: "series",
+            id: id_str,
+        })?;
+
+        row.into_series_with_count()
+    }
+
+    /// Merge `source_ids` into `target_id` in a single transaction.
+    ///
+    /// Rewrites `book_series` rows via DELETE+INSERT (not UPDATE) so the existing
+    /// `book_series_fts_insert`/`book_series_fts_delete` triggers fire and
+    /// `books_fts.series_names` stays correct. The schema has no UPDATE trigger
+    /// on `book_series`, so an `UPDATE … SET series_id = …` would silently leave
+    /// FTS stale.
+    ///
+    /// If `new_name` is provided, the target series is renamed in the same
+    /// transaction. The `series_fts_update` trigger refreshes FTS for every book
+    /// in the renamed series automatically.
+    pub async fn merge(
+        pool: &SqlitePool,
+        target_id: Uuid,
+        source_ids: &[Uuid],
+        new_name: Option<&str>,
+    ) -> Result<(), DbError> {
+        let target_str = target_id.to_string();
+
+        let mut tx = pool
+            .begin()
+            .await
+            .map_err(|e| DbError::Transaction(e.to_string()))?;
+
+        // 1. Verify the target exists. If a rename was requested, fold the
+        //    existence check into the UPDATE; otherwise do a cheap probe. The
+        //    series UPDATE trigger rebuilds books_fts for every book in the
+        //    renamed series.
+        if let Some(name) = new_name {
+            let result = sqlx::query!("UPDATE series SET name = ? WHERE id = ?", name, target_str,)
+                .execute(tx.as_mut())
+                .await
+                .map_err(|e| DbError::Query(e.to_string()))?;
+            if result.rows_affected() == 0 {
+                return Err(DbError::NotFound {
+                    entity: "series",
+                    id: target_str,
+                });
+            }
+        } else {
+            let exists = sqlx::query_scalar!(
+                r#"SELECT 1 AS "exists!: i64" FROM series WHERE id = ?"#,
+                target_str,
+            )
+            .fetch_optional(tx.as_mut())
+            .await
+            .map_err(|e| DbError::Query(e.to_string()))?
+            .is_some();
+            if !exists {
+                return Err(DbError::NotFound {
+                    entity: "series",
+                    id: target_str,
+                });
+            }
+        }
+
+        // 2. For each source: move books to target, then delete the source row.
+        //    Source existence is verified by the rows_affected check on the
+        //    series DELETE — the INSERT OR IGNORE and book_series DELETE are
+        //    intentional no-ops if the source has no rows.
+        for source_id in source_ids {
+            let source_str = source_id.to_string();
+
+            // Move books from source to target via INSERT OR IGNORE + DELETE so
+            // the existing book_series FTS triggers fire. PK conflict on
+            // (book_id, series_id) is resolved by INSERT OR IGNORE — the
+            // target's existing row wins, preserving its position.
+            sqlx::query!(
+                "INSERT OR IGNORE INTO book_series (book_id, series_id, position) \
+                 SELECT book_id, ?, position FROM book_series WHERE series_id = ?",
+                target_str,
+                source_str,
+            )
+            .execute(tx.as_mut())
+            .await
+            .map_err(|e| DbError::Query(e.to_string()))?;
+
+            sqlx::query!("DELETE FROM book_series WHERE series_id = ?", source_str,)
+                .execute(tx.as_mut())
+                .await
+                .map_err(|e| DbError::Query(e.to_string()))?;
+
+            let result = sqlx::query!("DELETE FROM series WHERE id = ?", source_str)
+                .execute(tx.as_mut())
+                .await
+                .map_err(|e| DbError::Query(e.to_string()))?;
+            if result.rows_affected() == 0 {
+                return Err(DbError::NotFound {
+                    entity: "series",
+                    id: source_str,
+                });
+            }
+        }
+
+        tx.commit()
+            .await
+            .map_err(|e| DbError::Transaction(e.to_string()))?;
+        Ok(())
+    }
 }
 
 #[derive(sqlx::FromRow)]

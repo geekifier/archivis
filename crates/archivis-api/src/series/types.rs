@@ -60,6 +60,19 @@ pub struct UpdateSeriesRequest {
     pub description: Option<String>,
 }
 
+/// Request body for `POST /api/series/merge`.
+#[derive(Debug, Deserialize, Validate, ToSchema)]
+pub struct MergeSeriesRequest {
+    /// The series ID that will absorb the others.
+    pub target_id: Uuid,
+    /// Series IDs to merge into the target. Must not contain `target_id`.
+    #[validate(length(min = 1, message = "at least one source series is required"))]
+    pub source_ids: Vec<Uuid>,
+    /// Optional new name for the target series. If `None`, the target's name is preserved.
+    #[validate(length(min = 1, message = "name must not be empty"))]
+    pub target_name: Option<String>,
+}
+
 // ── Response Types ──────────────────────────────────────────────
 
 /// Series response.
@@ -79,6 +92,15 @@ pub struct PaginatedSeries {
     pub page: u32,
     pub per_page: u32,
     pub total_pages: u32,
+}
+
+/// Response body for `POST /api/series/merge`.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct MergeSeriesResponse {
+    /// The merged (surviving) series, with updated `book_count`.
+    pub series: SeriesResponse,
+    /// Number of source series that were deleted.
+    pub merged_count: usize,
 }
 
 // ── Conversions ─────────────────────────────────────────────────

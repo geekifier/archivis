@@ -93,6 +93,7 @@ mod openapi {
             super::series::handlers::get_series,
             super::series::handlers::update_series,
             super::series::handlers::delete_series,
+            super::series::handlers::merge_series,
             super::series::handlers::list_series_books,
             // Tags
             super::tags::handlers::list_tags,
@@ -233,6 +234,8 @@ mod openapi {
             super::series::types::UpdateSeriesRequest,
             super::series::types::SeriesResponse,
             super::series::types::PaginatedSeries,
+            super::series::types::MergeSeriesRequest,
+            super::series::types::MergeSeriesResponse,
             // Tags
             super::tags::types::CreateTagRequest,
             super::tags::types::UpdateTagRequest,

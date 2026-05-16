@@ -448,6 +448,17 @@ export interface PaginatedSeries {
   total_pages: number;
 }
 
+export interface MergeSeriesRequest {
+  target_id: string;
+  source_ids: string[];
+  target_name?: string;
+}
+
+export interface MergeSeriesResponse {
+  series: SeriesResponse;
+  merged_count: number;
+}
+
 export interface PublisherResponse {
   id: string;
   name: string;
