@@ -197,6 +197,48 @@ export interface BookDetail {
   tags: TagEntry[];
   files: FileEntry[];
   identifiers: IdentifierEntry[];
+  kobo_sync?: KoboSyncStateResponse;
+}
+
+// --- Kobo Sync types ---
+
+export interface KoboDeviceResponse {
+  id: string;
+  display_name: string;
+  created_at: string;
+  last_seen_at: string | null;
+  revoked_at: string | null;
+}
+
+export interface PairKoboDeviceRequest {
+  display_name?: string;
+}
+
+export interface PairKoboDeviceResponse {
+  id: string;
+  display_name: string;
+  /** Raw token; shown to the user once. */
+  token: string;
+  api_endpoint: string;
+}
+
+export interface KoboSyncStateResponse {
+  enabled: boolean;
+  selected_book_file_id: string | null;
+  eligible_file_ids: string[];
+  stale: boolean;
+  reason: string | null;
+}
+
+export interface KoboStatusResponse {
+  enabled: boolean;
+  active_device_count: number;
+  device_count: number;
+}
+
+export interface UpsertKoboSelectionRequest {
+  enabled: boolean;
+  book_file_id?: string | null;
 }
 
 // --- Search warning types ---
@@ -721,6 +763,8 @@ export interface SettingEntry {
 
   /** The admin-requested value (default or DB-persisted). */
   configured_value: unknown;
+  /** Registry default value for runtime settings. */
+  default_value?: unknown;
   configured_source: ConfigSource;
 
   /** What the server is actually using right now. */

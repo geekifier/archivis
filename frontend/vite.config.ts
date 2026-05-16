@@ -9,6 +9,13 @@ export default defineConfig({
       '/api': {
         target: 'http://localhost:9514',
         changeOrigin: true
+      },
+      // Kobo protocol routes: /kobo/<token>/... — proxy to backend.
+      // The bare /kobo path is the device-management SPA page, so we only
+      // match paths that have at least one segment after the token.
+      '^/kobo/[^/]+/.+$': {
+        target: 'http://localhost:9514',
+        changeOrigin: true
       }
     }
   }

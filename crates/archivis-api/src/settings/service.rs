@@ -11,9 +11,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use archivis_core::settings::{
-    all_settings, canonicalize, get_runtime_meta, ApplyMode, ConfigSource as CoreConfigSource,
-    RuntimeSettingMeta, SettingMeta, SettingScope, SettingStore, SettingType, SettingValue,
-    SettingsReader,
+    all_settings, canonicalize, get_runtime_meta, runtime_default, ApplyMode,
+    ConfigSource as CoreConfigSource, RuntimeSettingMeta, SettingMeta, SettingScope, SettingStore,
+    SettingType, SettingValue, SettingsReader,
 };
 use archivis_db::{DbPool, SettingRepository};
 use serde::{Deserialize, Serialize};
@@ -68,6 +68,10 @@ pub struct SettingEntry {
 
     /// Value the admin has asked for (default or DB-persisted).
     pub configured_value: Value,
+    /// Registry default value for runtime settings. Bootstrap settings do not
+    /// have an app-managed default in this API layer.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_value: Option<Value>,
     /// Where the configured value came from.
     pub configured_source: ConfigSource,
 
@@ -198,6 +202,7 @@ impl ConfigService {
                         scope: SettingScope::Bootstrap,
                         value_type: bm.value_type,
                         configured_value: display.clone(),
+                        default_value: None,
                         configured_source: source,
                         effective_value: display,
                         effective_source: source,
@@ -236,12 +241,15 @@ impl ConfigService {
                         mask_if_sensitive(rm.sensitive, &resolved.configured_value);
                     let (effective_display, _) =
                         mask_if_sensitive(rm.sensitive, &resolved.effective_value);
+                    let (default_display, _) =
+                        mask_if_sensitive(rm.sensitive, &runtime_default(rm));
 
                     SettingEntry {
                         key: rm.key.to_string(),
                         scope: SettingScope::Runtime,
                         value_type: rm.value_type,
                         configured_value: configured_display,
+                        default_value: Some(default_display),
                         configured_source,
                         effective_value: effective_display,
                         effective_source,

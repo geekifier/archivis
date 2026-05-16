@@ -70,7 +70,15 @@
 
   function getCurrentValue(entry: SettingEntry): unknown {
     if (hasPendingEdit(entry.key)) {
-      return editedValues[entry.key];
+      const value = editedValues[entry.key];
+      if (
+        value === null &&
+        entry.value_type !== 'optional_string' &&
+        entry.default_value !== undefined
+      ) {
+        return entry.default_value;
+      }
+      return value;
     }
     return entry.configured_value;
   }
@@ -221,6 +229,7 @@
       successMessage = `Updated ${result.updated.length} setting${result.updated.length === 1 ? '' : 's'} successfully.`;
 
       await fetchSettings();
+      window.dispatchEvent(new CustomEvent('archivis:settings-updated'));
 
       setTimeout(() => {
         successMessage = null;

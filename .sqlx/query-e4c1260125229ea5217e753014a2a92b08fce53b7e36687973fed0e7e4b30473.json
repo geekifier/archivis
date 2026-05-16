@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE kobo_devices SET revoked_at = ?\n             WHERE id = ? AND user_id = ? AND revoked_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "e4c1260125229ea5217e753014a2a92b08fce53b7e36687973fed0e7e4b30473"
+}

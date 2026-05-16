@@ -16,6 +16,7 @@
   import CoverImage from '$lib/components/library/CoverImage.svelte';
   import CoverUploadDialog from '$lib/components/library/CoverUploadDialog.svelte';
   import IdentifierEditor from '$lib/components/library/IdentifierEditor.svelte';
+  import KoboSyncToggle from '$lib/components/library/KoboSyncToggle.svelte';
   import MergeDialog from '$lib/components/library/MergeDialog.svelte';
   import ReadingProgressBar from '$lib/components/library/ReadingProgressBar.svelte';
   import { isAuthorRole } from '$lib/components/library/book-list-utils.js';
@@ -994,6 +995,18 @@
                 </div>
               </div>
             {/each}
+          </div>
+        {/if}
+        {#if book.files.length > 0}
+          <div class="mt-3">
+            <KoboSyncToggle
+              bookId={book.id}
+              files={book.files}
+              initial={book.kobo_sync}
+              onchange={(s) => {
+                if (book) book = { ...book, kobo_sync: s ?? undefined };
+              }}
+            />
           </div>
         {/if}
       </div>

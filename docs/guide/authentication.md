@@ -1,11 +1,15 @@
+---
+outline: [2, 3] # Displays only h2 and h3 headings
+---
+
 # Authentication
 
 ## Roles and Permissions
 
-| Role | Permissions |
-|------|-------------|
-| **Admin** | Full access: library management, import, settings, user management |
-| **User** | Library access: browse, read, import. No access to settings or user management |
+| Role      | Permissions                                                                    |
+| --------- | ------------------------------------------------------------------------------ |
+| **Admin** | Full access: library management, import, settings, user management             |
+| **User**  | Library access: browse, read, import. No access to settings or user management |
 
 Only admins can see the **Settings** page in the sidebar.
 
@@ -105,13 +109,13 @@ All proxy auth settings require a **server restart** to take effect.
 
 #### All Options
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `ARCHIVIS_AUTH__PROXY__ENABLED` | `false` | Enable reverse proxy authentication |
-| `ARCHIVIS_AUTH__PROXY__TRUSTED_PROXIES` | (empty) | Array of trusted proxy IP addresses or CIDR ranges (e.g. `[10.0.0.1, 172.18.0.0/16]`) |
-| `ARCHIVIS_AUTH__PROXY__USER_HEADER` | `X-Forwarded-User` | Header containing the authenticated username |
-| `ARCHIVIS_AUTH__PROXY__EMAIL_HEADER` | `X-Forwarded-Email` | Header containing the user's email |
-| `ARCHIVIS_AUTH__PROXY__GROUPS_HEADER` | `X-Forwarded-Groups` | Header containing comma-separated group names (reserved for future role mapping) |
+| Variable                                | Default              | Description                                                                           |
+| --------------------------------------- | -------------------- | ------------------------------------------------------------------------------------- |
+| `ARCHIVIS_AUTH__PROXY__ENABLED`         | `false`              | Enable reverse proxy authentication                                                   |
+| `ARCHIVIS_AUTH__PROXY__TRUSTED_PROXIES` | (empty)              | Array of trusted proxy IP addresses or CIDR ranges (e.g. `[10.0.0.1, 172.18.0.0/16]`) |
+| `ARCHIVIS_AUTH__PROXY__USER_HEADER`     | `X-Forwarded-User`   | Header containing the authenticated username                                          |
+| `ARCHIVIS_AUTH__PROXY__EMAIL_HEADER`    | `X-Forwarded-Email`  | Header containing the user's email                                                    |
+| `ARCHIVIS_AUTH__PROXY__GROUPS_HEADER`   | `X-Forwarded-Groups` | Header containing comma-separated group names (reserved for future role mapping)      |
 
 These can also be set in `config.toml`:
 
@@ -153,6 +157,18 @@ The `trusted_proxies` field accepts:
 - Both IPv4 and IPv6 are supported.
 - An empty list means no proxy is trusted (proxy auth is effectively disabled).
 
+### Authentication Bypass Paths
+
+Some Archivis endpoints are designed for non-browser clients that cannot complete an interactive SSO flow. If your reverse proxy wraps the entire host in ForwardAuth, these requests will be redirected to the login page and fail. You must configure the upstream proxy to skip ForwardAuth for the following path prefixes:
+
+| Prefix    | Why it must bypass                                                                                     | Authentication it uses instead                                                        |
+| --------- | ------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------- |
+| `/kobo/*` | Kobo eReaders cannot follow SSO redirects or present session cookies. Required if Kobo Sync is in use. | Per-device token embedded in the URL path. Tokens are revocable from the Archivis UI. |
+
+::: tip
+This list is authoritative as of the current release. Future API-token endpoints intended for machine clients will be added here when they ship.
+:::
+
 ### Example: Authelia with Docker Compose
 
 ```yaml
@@ -188,15 +204,39 @@ Authelia sets the following headers by default (matching Archivis defaults):
 - `Remote-Email` — set `ARCHIVIS_AUTH__PROXY__EMAIL_HEADER=Remote-Email`
 - `Remote-Groups` — set `ARCHIVIS_AUTH__PROXY__GROUPS_HEADER=Remote-Groups`
 
+In your Authelia `configuration.yml`, allow the bypass paths so Kobo devices and health probes are not challenged:
+
+```yaml
+access_control:
+  default_policy: deny
+  rules:
+    # Bypass paths — see "Authentication Bypass Paths" above.
+    - domain: archivis.example.com
+      resources:
+        - "^/kobo/.*"
+      policy: bypass
+    # Everything else requires SSO.
+    - domain: archivis.example.com
+      policy: one_factor
+```
+
 ### Example: Caddy with forward_auth
 
 ```
 archivis.example.com {
-    forward_auth authelia:9091 {
-        uri /api/authz/forward-auth
-        copy_headers Remote-User Remote-Email Remote-Groups
+    # Bypass paths — see "Authentication Bypass Paths" above.
+    handle /kobo/* {
+        reverse_proxy archivis:9514
     }
-    reverse_proxy archivis:9514
+
+    # Everything else requires SSO.
+    handle {
+        forward_auth authelia:9091 {
+            uri /api/authz/forward-auth
+            copy_headers Remote-User Remote-Email Remote-Groups
+        }
+        reverse_proxy archivis:9514
+    }
 }
 ```
 
@@ -213,9 +253,17 @@ ARCHIVIS_AUTH__PROXY__GROUPS_HEADER=Remote-Groups
 ```yaml
 # docker-compose labels for the archivis service
 labels:
+  # Main router — everything goes through Authelia by default.
+  - "traefik.http.routers.archivis.rule=Host(`archivis.example.com`)"
   - "traefik.http.routers.archivis.middlewares=authelia@docker"
   - "traefik.http.middlewares.authelia.forwardAuth.address=http://authelia:9091/api/authz/forward-auth"
   - "traefik.http.middlewares.authelia.forwardAuth.authResponseHeaders=Remote-User,Remote-Email,Remote-Groups"
+
+  # Bypass router — see "Authentication Bypass Paths" above.
+  # Higher priority wins, and no middlewares means no ForwardAuth.
+  - "traefik.http.routers.archivis-bypass.rule=Host(`archivis.example.com`) && PathPrefix(`/kobo`)"
+  - "traefik.http.routers.archivis-bypass.priority=100"
+  - "traefik.http.routers.archivis-bypass.service=archivis"
 ```
 
 ### Example: nginx with auth_request
@@ -231,6 +279,12 @@ server {
         proxy_pass_request_body off;
         proxy_set_header Content-Length "";
         proxy_set_header X-Original-URL $scheme://$http_host$request_uri;
+    }
+
+    # Bypass paths — see "Authentication Bypass Paths" above.
+    # More specific locations win over `location /`, so no auth_request runs here.
+    location ~ ^/(kobo|health)/ {
+        proxy_pass http://archivis:9514;
     }
 
     location / {
