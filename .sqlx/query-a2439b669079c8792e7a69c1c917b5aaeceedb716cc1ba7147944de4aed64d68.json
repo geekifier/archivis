@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM kobo_sync_selections WHERE user_id = ? AND book_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "a2439b669079c8792e7a69c1c917b5aaeceedb716cc1ba7147944de4aed64d68"
+}

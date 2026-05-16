@@ -517,6 +517,10 @@ pub struct BookDetail {
     pub tags: Vec<TagEntry>,
     pub files: Vec<FileEntry>,
     pub identifiers: Vec<IdentifierEntry>,
+    /// Per-user Kobo Sync state for this book. Populated by the `get_book`
+    /// handler so it reflects the authenticated user's selection.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kobo_sync: Option<crate::kobo::types::KoboSyncStateResponse>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -756,6 +760,7 @@ impl From<BookWithRelations> for BookDetail {
                 .into_iter()
                 .map(IdentifierEntry::from)
                 .collect(),
+            kobo_sync: None,
         }
     }
 }

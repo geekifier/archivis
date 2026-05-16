@@ -10,8 +10,9 @@ use serde_json::{json, Value};
 use utoipa::ToSchema;
 
 use super::validation::{
-    bytes_range, concurrency_range, debounce_ms_range, pass, poll_interval_range, rpm_range,
-    small_count_range, unit_interval, validate_enum, ValidationError, Validator,
+    bytes_range, concurrency_range, debounce_ms_range, kobo_page_size_range, pass,
+    poll_interval_range, rpm_range, small_count_range, unit_interval, validate_enum,
+    ValidationError, Validator,
 };
 use super::value::{SettingDefault, SettingValue};
 
@@ -253,6 +254,11 @@ fn d_poll_interval() -> Value {
     json!(30)
 }
 
+// Kobo defaults
+fn d_kobo_sync_page_size() -> Value {
+    json!(25)
+}
+
 // ── Validator adapters for enums needing options ────────────────────
 
 fn scoring_profile_validator(v: &Value) -> Result<(), ValidationError> {
@@ -426,6 +432,32 @@ static RUNTIME: &[RuntimeSettingMeta] = &[
         apply_mode: ApplyMode::PerUse,
         default: d_true,
         validator: pass,
+        sensitive: false,
+        options: None,
+    },
+    // Kobo
+    RuntimeSettingMeta {
+        key: "kobo.enabled",
+        label: "Kobo Sync",
+        description: "Allow Kobo devices to pair, sync, and download selected books",
+        section: "kobo",
+        value_type: SettingType::Bool,
+        apply_mode: ApplyMode::PerUse,
+        default: d_true,
+        validator: pass,
+        sensitive: false,
+        options: None,
+    },
+    RuntimeSettingMeta {
+        key: "kobo.sync_page_size",
+        label: "Sync Page Size",
+        description:
+            "Maximum Kobo entitlement entries sent per sync response. Lower values reduce partial-sync ambiguity.",
+        section: "kobo",
+        value_type: SettingType::Integer,
+        apply_mode: ApplyMode::PerUse,
+        default: d_kobo_sync_page_size,
+        validator: kobo_page_size_range,
         sensitive: false,
         options: None,
     },

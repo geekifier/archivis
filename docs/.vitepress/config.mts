@@ -26,6 +26,7 @@ export default defineConfig({
         text: 'Features',
         items: [
           { text: 'Search', link: '/features/search' },
+          { text: 'Kobo Sync', link: '/features/kobo-sync' },
         ],
       },
       {

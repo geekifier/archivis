@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE kobo_device_sync_items\n             SET removed_at = COALESCE(removed_at, ?),\n                 removed_synced_at = ?\n             WHERE device_id = ? AND book_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "d4d382d21d708501ee6efb286038fcc901a32a00cb856b394d061937ed37707c"
+}

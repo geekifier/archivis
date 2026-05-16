@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM kobo_device_sync_items\n             WHERE removed_synced_at IS NOT NULL AND removed_synced_at < ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "9116f804ad5cfaabfc574346892a52e06145f38e8cafce341cfb12a8fd12cc8a"
+}

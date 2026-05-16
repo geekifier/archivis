@@ -1,5 +1,5 @@
-import { vi, describe, it, expect, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/svelte';
+import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { cleanup, render, screen } from '@testing-library/svelte';
 import { createBookDetail } from '$lib/test-utils/factories.js';
 import type { BookDetail } from '$lib/api/types.js';
 
@@ -58,6 +58,11 @@ import CoverUploadDialog from './CoverUploadDialog.svelte';
 describe('CoverUploadDialog', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  afterEach(async () => {
+    cleanup();
+    await new Promise((resolve) => setTimeout(resolve, 30));
   });
 
   // Note: bits-ui Dialog may not render its content in jsdom because it relies

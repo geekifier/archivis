@@ -4,6 +4,7 @@ use archivis_db::DbPool;
 use chrono::Utc;
 
 const TASK_RETENTION_DAYS: i64 = 30;
+const KOBO_TOMBSTONE_RETENTION_DAYS: i64 = 90;
 const MAINTENANCE_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
 const INITIAL_DELAY: Duration = Duration::from_secs(60);
 
@@ -39,5 +40,21 @@ async fn run_maintenance_cycle(db_pool: &DbPool) {
         Ok(0) => tracing::debug!("maintenance: no old tasks to clean up"),
         Ok(n) => tracing::info!(deleted = n, "maintenance: cleaned up old terminal tasks"),
         Err(e) => tracing::warn!(error = %e, "maintenance: failed to delete old tasks"),
+    }
+
+    // 3. Acknowledged Kobo tombstones older than the retention window.
+    let kobo_cutoff = Utc::now() - chrono::Duration::days(KOBO_TOMBSTONE_RETENTION_DAYS);
+    match archivis_db::KoboDeviceSyncItemRepository::delete_acknowledged_tombstones_before(
+        db_pool,
+        kobo_cutoff,
+    )
+    .await
+    {
+        Ok(0) => tracing::debug!("maintenance: no acknowledged Kobo tombstones to purge"),
+        Ok(n) => tracing::info!(
+            deleted = n,
+            "maintenance: purged acknowledged Kobo tombstones"
+        ),
+        Err(e) => tracing::warn!(error = %e, "maintenance: failed to purge Kobo tombstones"),
     }
 }

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO kobo_device_sync_items\n                (device_id, book_id, book_file_id, file_hash, desired_revision_hash,\n                 selection_updated_at, delivered_at, removed_at, removed_synced_at)\n             VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL)\n             ON CONFLICT(device_id, book_id) DO UPDATE SET\n                 book_file_id = excluded.book_file_id,\n                 file_hash = excluded.file_hash,\n                 desired_revision_hash = excluded.desired_revision_hash,\n                 selection_updated_at = excluded.selection_updated_at,\n                 delivered_at = excluded.delivered_at,\n                 removed_at = NULL,\n                 removed_synced_at = NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": []
+  },
+  "hash": "adddcb1f2eefea8091e5df9d714a9ddcd60adb38eccd365dd4b748b06966c542"
+}

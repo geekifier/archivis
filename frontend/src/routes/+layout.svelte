@@ -1,7 +1,9 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
-  import type { BookFormat, MetadataStatus } from '$lib/api/types.js';
+  import { onMount } from 'svelte';
+  import { api } from '$lib/api/index.js';
+  import type { BookFormat, KoboStatusResponse, MetadataStatus } from '$lib/api/types.js';
   import favicon from '$lib/assets/favicon.svg';
   import { Button } from '$lib/components/ui/button/index.js';
   import { auth } from '$lib/stores/auth.svelte.js';
@@ -15,6 +17,11 @@
 
   let sidebarOpen = $state(false);
   let changePasswordOpen = $state(false);
+  let koboStatus = $state<KoboStatusResponse | null>({
+    enabled: true,
+    active_device_count: 0,
+    device_count: 0
+  });
 
   /** Pages that don't require authentication. */
   const publicPaths = ['/login', '/setup'];
@@ -50,6 +57,10 @@
     }
   }
 
+  const showKoboNav = $derived(
+    koboStatus === null || koboStatus.enabled || koboStatus.active_device_count > 0
+  );
+
   const navItems = $derived([
     { href: '/', label: 'Library', icon: 'library' },
     { href: '/authors', label: 'Authors', icon: 'authors' },
@@ -58,6 +69,7 @@
     { href: '/import', label: 'Import', icon: 'import' },
     { href: '/stats', label: 'Statistics', icon: 'stats' },
     { href: '/duplicates', label: 'Duplicates', icon: 'duplicates' },
+    ...(showKoboNav ? [{ href: '/kobo', label: 'Kobo Sync', icon: 'kobo' }] : []),
     ...(auth.user?.role === 'admin'
       ? [{ href: '/settings', label: 'Settings', icon: 'settings' }]
       : [])
@@ -100,6 +112,37 @@
     if (auth.isAuthenticated) {
       navCounts.refresh();
     }
+  });
+
+  async function loadKoboStatus() {
+    try {
+      koboStatus = await api.kobo.status();
+    } catch {
+      koboStatus = null;
+    }
+  }
+
+  $effect(() => {
+    void page.url.pathname;
+    if (auth.isAuthenticated) {
+      void loadKoboStatus();
+    } else {
+      koboStatus = null;
+    }
+  });
+
+  onMount(() => {
+    const refreshKoboStatus = () => {
+      if (auth.isAuthenticated) {
+        void loadKoboStatus();
+      }
+    };
+    window.addEventListener('archivis:settings-updated', refreshKoboStatus);
+    window.addEventListener('archivis:kobo-status-updated', refreshKoboStatus);
+    return () => {
+      window.removeEventListener('archivis:settings-updated', refreshKoboStatus);
+      window.removeEventListener('archivis:kobo-status-updated', refreshKoboStatus);
+    };
   });
 </script>
 
@@ -333,6 +376,20 @@
               >
                 <rect x="8" y="2" width="13" height="13" rx="2" />
                 <path d="M5 8H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2v-1" />
+              </svg>
+            {:else if item.icon === 'kobo'}
+              <svg
+                class="size-4"
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <rect x="4" y="2" width="16" height="20" rx="2" />
+                <line x1="8" y1="18" x2="16" y2="18" />
               </svg>
             {:else if item.icon === 'settings'}
               <svg

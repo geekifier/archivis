@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO kobo_devices (id, user_id, token_hash, display_name, created_at, last_seen_at, revoked_at)\n             VALUES (?, ?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": []
+  },
+  "hash": "c3ef228dc78a39015745c6ec0352d04107382882c4b9f374226a6bad560f2639"
+}

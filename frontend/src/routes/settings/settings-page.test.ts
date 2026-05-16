@@ -72,6 +72,7 @@ function makeHardcoverTokenSetting(overrides: Partial<SettingEntry> = {}): Setti
     scope: 'runtime',
     value_type: 'optional_string',
     configured_value: '***',
+    default_value: null,
     configured_source: 'database',
     effective_value: '***',
     effective_source: 'database',
@@ -93,6 +94,7 @@ function makeBoolSetting(overrides: Partial<SettingEntry> = {}): SettingEntry {
     scope: 'runtime',
     value_type: 'bool',
     configured_value: false,
+    default_value: false,
     configured_source: 'default',
     effective_value: false,
     effective_source: 'default',
@@ -113,6 +115,7 @@ function makeIntegerSetting(overrides: Partial<SettingEntry> = {}): SettingEntry
     scope: 'runtime',
     value_type: 'integer',
     configured_value: 2000,
+    default_value: 2000,
     configured_source: 'default',
     effective_value: 2000,
     effective_source: 'default',
@@ -216,6 +219,37 @@ describe('Settings revert and reset behavior', () => {
     expect(within(row).queryByText('modified')).not.toBeInTheDocument();
     expect(within(row).getByText('unsaved')).toBeInTheDocument();
     expect(within(row).getByRole('button', { name: 'Undo change' })).toBeInTheDocument();
+  });
+
+  it('reset to default uses the registry default for Kobo enabled', async () => {
+    const user = userEvent.setup();
+    mockApi.settings.get.mockResolvedValue({
+      settings: [
+        makeBoolSetting({
+          key: 'kobo.enabled',
+          label: 'Kobo Sync',
+          description: 'Whether Kobo Sync is enabled',
+          section: 'kobo',
+          configured_source: 'database',
+          configured_value: false,
+          default_value: true,
+          effective_source: 'database',
+          effective_value: false
+        }),
+        makeHardcoverTokenSetting()
+      ]
+    });
+
+    render(SettingsPage);
+
+    const toggle = await screen.findByRole('switch', { name: 'Kobo Sync' });
+    expect(toggle).toHaveAttribute('aria-checked', 'false');
+
+    const row = getSettingRow('Kobo Sync');
+    await user.click(within(row).getByRole('button', { name: 'Reset to default' }));
+
+    expect(toggle).toHaveAttribute('aria-checked', 'true');
+    expect(within(row).getByText('unsaved')).toBeInTheDocument();
   });
 
   it('undo after reset to default restores modified badge', async () => {

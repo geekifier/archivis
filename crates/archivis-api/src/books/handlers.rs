@@ -544,11 +544,14 @@ pub async fn issue_selection_scope(
 )]
 pub async fn get_book(
     State(state): State<AppState>,
-    AuthUser(_user): AuthUser,
+    AuthUser(user): AuthUser,
     Path(id): Path<Uuid>,
 ) -> Result<Json<BookDetail>, ApiError> {
     let bwr = BookRepository::get_with_relations(state.db_pool(), id).await?;
-    Ok(Json(bwr.into()))
+    let mut detail: BookDetail = bwr.into();
+    detail.kobo_sync =
+        Some(crate::kobo::selection_handlers::current_state_for_book(&state, user.id, id).await?);
+    Ok(Json(detail))
 }
 
 fn validate_language(input: &str) -> Result<Option<String>, ApiError> {

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE kobo_devices SET last_seen_at = ? WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "87b8eb92eda8ecd86892a621d66e46f6937f33cdad156060016e5f94e7a7d5d9"
+}

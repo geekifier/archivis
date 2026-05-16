@@ -6,6 +6,7 @@ use axum::routing::{delete, get, post, put};
 use axum::Router;
 
 use crate::duplicates::handlers as duplicate_handlers;
+use crate::kobo::selection_handlers as kobo_selection_handlers;
 use crate::resolve::handlers as resolution_handlers;
 use crate::state::AppState;
 
@@ -92,5 +93,10 @@ pub fn router() -> Router<AppState> {
         .route(
             "/{id}/untrust-metadata",
             post(resolution_handlers::untrust_metadata),
+        )
+        .route(
+            "/{id}/kobo-sync",
+            put(kobo_selection_handlers::upsert_selection)
+                .delete(kobo_selection_handlers::delete_selection),
         )
 }

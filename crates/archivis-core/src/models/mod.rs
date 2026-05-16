@@ -7,6 +7,7 @@ mod duplicate;
 mod enums;
 pub mod filter;
 mod identifier;
+mod kobo;
 pub mod metadata_rule;
 mod publisher;
 mod reading_progress;
@@ -32,6 +33,7 @@ pub use enums::{
 };
 pub use filter::{LibraryFilterState, TagMatchMode};
 pub use identifier::Identifier;
+pub use kobo::{KoboDevice, KoboDeviceSyncItem, KoboSyncSelection};
 pub use metadata_rule::{MatchMode, MetadataRule, MetadataRuleType, RuleOutcome};
 pub use publisher::Publisher;
 pub use reading_progress::{Bookmark, ReadingProgress};

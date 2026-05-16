@@ -7,6 +7,7 @@ pub mod filesystem;
 pub mod health;
 pub mod import;
 pub mod isbn_scan;
+pub mod kobo;
 pub mod metadata_rules;
 pub mod publishers;
 pub mod reader;
@@ -171,6 +172,13 @@ mod openapi {
             super::metadata_rules::handlers::create_metadata_rule,
             super::metadata_rules::handlers::update_metadata_rule,
             super::metadata_rules::handlers::delete_metadata_rule,
+            // Kobo Sync (user-facing API only; protocol endpoints are not documented)
+            super::kobo::device_handlers::status,
+            super::kobo::device_handlers::list_devices,
+            super::kobo::device_handlers::pair_device,
+            super::kobo::device_handlers::revoke_device,
+            super::kobo::selection_handlers::upsert_selection,
+            super::kobo::selection_handlers::delete_selection,
         ),
         components(schemas(
             // Auth
@@ -310,6 +318,13 @@ mod openapi {
             super::stats::types::DbFileStats,
             super::stats::types::DbPageStats,
             super::stats::types::DbObjectStatResponse,
+            // Kobo
+            super::kobo::types::PairDeviceRequest,
+            super::kobo::types::PairDeviceResponse,
+            super::kobo::types::DeviceResponse,
+            super::kobo::types::KoboStatusResponse,
+            super::kobo::types::UpsertSelectionRequest,
+            super::kobo::types::KoboSyncStateResponse,
         )),
         tags(
             (name = "auth", description = "Authentication and user management"),
@@ -331,6 +346,7 @@ mod openapi {
             (name = "users", description = "User management"),
             (name = "watched-directories", description = "Watched directory management"),
             (name = "metadata-rules", description = "Metadata policy rules"),
+            (name = "kobo", description = "Kobo Sync device pairing and per-book selection"),
         )
     )]
     pub struct ApiDoc;
@@ -360,11 +376,13 @@ pub fn build_router(state: AppState) -> Router {
         .nest("/ui", ui::router())
         .nest("/users", users::router())
         .nest("/watched-directories", watcher::router())
-        .nest("/metadata-rules", metadata_rules::router());
+        .nest("/metadata-rules", metadata_rules::router())
+        .nest("/kobo", kobo::user_router());
 
     let mut router = Router::new()
         .merge(SwaggerUi::new("/api/docs").url("/api/openapi.json", openapi::ApiDoc::openapi()))
         .nest("/api", api_routes)
+        .nest("/kobo", kobo::protocol_router())
         .nest("/health", health::router());
 
     // Serve the built frontend from a configured directory.

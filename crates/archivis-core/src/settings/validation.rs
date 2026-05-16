@@ -83,6 +83,7 @@ range_i64_fn!(port_range, 1, 65535);
 range_i64_fn!(rpm_range, 1, 10_000);
 range_i64_fn!(concurrency_range, 1, 100);
 range_i64_fn!(small_count_range, 1, 100);
+range_i64_fn!(kobo_page_size_range, 1, 100);
 range_i64_fn!(bytes_range, 100, 100_000);
 range_i64_fn!(debounce_ms_range, 0, 600_000);
 range_i64_fn!(poll_interval_range, 1, 86_400);

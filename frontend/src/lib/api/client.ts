@@ -35,6 +35,9 @@ import type {
   IssueSelectionScopeRequest,
   IssueSelectionScopeResponse,
   IsbnScanResponse,
+  KoboDeviceResponse,
+  KoboStatusResponse,
+  KoboSyncStateResponse,
   LoginRequest,
   LoginResponse,
   MergeRequest,
@@ -44,6 +47,8 @@ import type {
   PaginatedPublishers,
   PaginatedSeries,
   PaginatedTags,
+  PairKoboDeviceRequest,
+  PairKoboDeviceResponse,
   PublisherResponse,
   ReadingProgressResponse,
   ScanManifestResponse,
@@ -62,6 +67,7 @@ import type {
   UpdateBookRequest,
   UpdateIdentifierRequest,
   UpdateProgressRequest,
+  UpsertKoboSelectionRequest,
   UpdateSettingsResponse,
   UpdateUserRequest,
   UpdateWatchedDirectoryRequest,
@@ -906,6 +912,45 @@ export const api = {
     }
   },
 
+  kobo: {
+    /** Read global Kobo availability and this user's device count. */
+    status(): Promise<KoboStatusResponse> {
+      return request<KoboStatusResponse>('GET', '/kobo/status');
+    },
+
+    /** List the current user's paired Kobo devices. */
+    listDevices(): Promise<KoboDeviceResponse[]> {
+      return request<KoboDeviceResponse[]>('GET', '/kobo/devices');
+    },
+
+    /** Pair a new Kobo device. Returns the raw token (shown once). */
+    pairDevice(data: PairKoboDeviceRequest = {}): Promise<PairKoboDeviceResponse> {
+      return request<PairKoboDeviceResponse>('POST', '/kobo/devices', data);
+    },
+
+    /** Revoke a Kobo device. Idempotent: 204 even if already revoked. */
+    revokeDevice(id: string): Promise<void> {
+      return request<void>('DELETE', `/kobo/devices/${encodeURIComponent(id)}`);
+    },
+
+    /** Enable Kobo Sync for a book (or update selected file). */
+    setBookSync(
+      bookId: string,
+      data: UpsertKoboSelectionRequest = { enabled: true }
+    ): Promise<KoboSyncStateResponse> {
+      return request<KoboSyncStateResponse>(
+        'PUT',
+        `/books/${encodeURIComponent(bookId)}/kobo-sync`,
+        data
+      );
+    },
+
+    /** Disable Kobo Sync for a book. */
+    deleteBookSync(bookId: string): Promise<void> {
+      return request<void>('DELETE', `/books/${encodeURIComponent(bookId)}/kobo-sync`);
+    }
+  },
+
   metadataRules: {
     /** List all metadata rules. */
     list(): Promise<MetadataRuleResponse[]> {
@@ -1092,6 +1137,9 @@ export type {
   IssueSelectionScopeRequest,
   IssueSelectionScopeResponse,
   IsbnScanResponse,
+  KoboDeviceResponse,
+  KoboStatusResponse,
+  KoboSyncStateResponse,
   LibraryFilterState,
   LoginRequest,
   LoginResponse,
@@ -1107,6 +1155,8 @@ export type {
   PaginatedPublishers,
   PaginatedSeries,
   PaginatedTags,
+  PairKoboDeviceRequest,
+  PairKoboDeviceResponse,
   PublisherResponse,
   QueryWarning,
   AmbiguousMatchEntry,
@@ -1154,6 +1204,7 @@ export type {
   UpdateSettingsResponse,
   UpdateUserRequest,
   UpdateWatchedDirectoryRequest,
+  UpsertKoboSelectionRequest,
   UploadResponse,
   User,
   UserRole,
